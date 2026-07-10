@@ -1,4 +1,3 @@
-import { makeTestDatabaseUrl } from '@tests/server/test-database-url';
 import { makeShortTestSecret } from '@tests/support/test-secrets';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -26,7 +25,7 @@ describe('server env parser', () => {
     const schema = baseEnvSchema.extend({
       DATABASE_URL: z.url(),
     });
-    const databaseUrl = makeTestDatabaseUrl();
+    const databaseUrl = 'https://config.example/resource';
 
     expect(
       parseEnv(schema, {

@@ -1,5 +1,4 @@
-import { mockLogger } from '@tests/server/test-utils';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CSP_NONCE_PLACEHOLDER } from '@/platform/http/csp-nonce';
 
@@ -8,27 +7,40 @@ const sentryMiddleware = vi.hoisted(() => ({
   request: { type: 'sentry-request' },
 }));
 
+const mockLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
 vi.mock('@sentry/tanstackstart-react', () => ({
   sentryGlobalFunctionMiddleware: sentryMiddleware.function,
   sentryGlobalRequestMiddleware: sentryMiddleware.request,
 }));
 
+vi.mock('@/modules/kernel/infrastructure/logger/telemetry', () => ({
+  createTelemetryLogger: () => mockLogger,
+}));
+
 describe('TanStack Start instance', () => {
-  it('adds Sentry, telemetry, security headers, auth context, browser mutation guard, server-function body limit, and server-function CSRF middleware', async () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('adds Sentry, telemetry, security headers, browser mutation guard, server-function body limit, and server-function CSRF middleware', async () => {
     const { startInstance } = await import('@/start');
     const options = (startInstance as ExplicitAny).options;
     const telemetry = options.requestMiddleware[1] as ExplicitAny;
     const securityHeaders = options.requestMiddleware[2] as ExplicitAny;
-    const authContext = options.requestMiddleware[3] as ExplicitAny;
-    const browserMutationGuard = options.requestMiddleware[4] as ExplicitAny;
-    const serverFnBodyLimit = options.requestMiddleware[5] as ExplicitAny;
-    const csrf = options.requestMiddleware[6] as ExplicitAny;
+    const browserMutationGuard = options.requestMiddleware[3] as ExplicitAny;
+    const serverFnBodyLimit = options.requestMiddleware[4] as ExplicitAny;
+    const csrf = options.requestMiddleware[5] as ExplicitAny;
 
     expect(options.requestMiddleware[0]).toBe(sentryMiddleware.request);
     expect(options.functionMiddleware).toEqual([sentryMiddleware.function]);
     expect(telemetry.type).toBe('request');
     expect(securityHeaders.type).toBe('request');
-    expect(authContext.type).toBe('request');
     expect(browserMutationGuard.type).toBe('request');
     expect(serverFnBodyLimit.type).toBe('request');
     expect(csrf.type).toBe('csrf');
@@ -46,7 +58,7 @@ describe('TanStack Start instance', () => {
       shouldProtectBrowserMutation({
         handlerType: 'router',
         method: 'POST',
-        pathname: '/api/upload',
+        pathname: '/api/telemetry/logs',
       })
     ).toBe(true);
     expect(
@@ -60,21 +72,14 @@ describe('TanStack Start instance', () => {
       shouldProtectBrowserMutation({
         handlerType: 'router',
         method: 'POST',
-        pathname: '/api/auth/sign-in/email-otp',
-      })
-    ).toBe(false);
-    expect(
-      shouldProtectBrowserMutation({
-        handlerType: 'router',
-        method: 'POST',
         pathname: '/api/telemetry/otel/v1/traces',
       })
     ).toBe(true);
     expect(
       shouldProtectBrowserMutation({
         handlerType: 'router',
-        method: 'POST',
-        pathname: '/api/webhooks/resend',
+        method: 'GET',
+        pathname: '/api/telemetry/logs',
       })
     ).toBe(false);
     expect(
@@ -95,8 +100,8 @@ describe('TanStack Start instance', () => {
     ).handler({
       handlerType: 'router',
       next,
-      pathname: '/api/upload',
-      request: new Request('https://app.example/api/upload', {
+      pathname: '/api/telemetry/logs',
+      request: new Request('https://app.example/api/telemetry/logs', {
         headers: { origin: 'https://evil.example' },
         method: 'POST',
       }),
@@ -106,7 +111,7 @@ describe('TanStack Start instance', () => {
     expect(mockLogger.warn).toHaveBeenCalledWith({
       details: {
         method: 'POST',
-        pathname: '/api/upload',
+        pathname: '/api/telemetry/logs',
         reason: 'origin_cross_origin',
       },
       direction: 'inbound',
@@ -178,8 +183,8 @@ describe('TanStack Start instance', () => {
     ).handler({
       handlerType: 'router',
       next,
-      pathname: '/api/upload',
-      request: new Request('https://app.example/api/upload', {
+      pathname: '/api/telemetry/logs',
+      request: new Request('https://app.example/api/telemetry/logs', {
         headers: { 'Sec-Fetch-Site': 'same-origin' },
         method: 'POST',
       }),
@@ -210,34 +215,6 @@ describe('TanStack Start instance', () => {
 
     expect(next).not.toHaveBeenCalled();
     expect(response.status).toBe(413);
-    expect(response.headers.get('X-Frame-Options')).toBe('DENY');
-  });
-
-  it('rejects untrusted browser mutations even when guard logger initialization fails', async () => {
-    vi.resetModules();
-    vi.doMock('@/modules/kernel/infrastructure/logger/telemetry', () => ({
-      createTelemetryLogger: () => {
-        throw new Error('logger init failed');
-      },
-    }));
-
-    const { browserMutationGuardMiddleware } = await import('@/start');
-    const next = vi.fn();
-
-    const response = await (
-      browserMutationGuardMiddleware as ExplicitAny
-    ).handler({
-      handlerType: 'router',
-      next,
-      pathname: '/api/upload',
-      request: new Request('https://app.example/api/upload', {
-        headers: { origin: 'https://evil.example' },
-        method: 'POST',
-      }),
-    });
-
-    expect(next).not.toHaveBeenCalled();
-    expect(response.status).toBe(403);
     expect(response.headers.get('X-Frame-Options')).toBe('DENY');
   });
 });

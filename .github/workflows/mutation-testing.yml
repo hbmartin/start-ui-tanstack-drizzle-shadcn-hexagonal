@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scope: [auth, kernel, user, book, shared]
+        scope: [kernel, runtime-config, shared]
     env:
       SKIP_ENV_VALIDATION: true
       VITE_BASE_URL: http://localhost:3000

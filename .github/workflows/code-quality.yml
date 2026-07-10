@@ -176,28 +176,6 @@ jobs:
       - name: Ensure audit did not mutate files
         run: git diff --exit-code -- .
 
-  migration-integrity:
-    name: Migration Integrity
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
-        with:
-          node-version: 24
-
-      - name: Check migration integrity
-        run: pnpm check:migrations
-
-      - name: Ensure migration check did not mutate files
-        run: git diff --exit-code -- .
-
   architecture:
     name: Architecture Checks
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -285,37 +263,6 @@ jobs:
           name: vitest
           fail_ci_if_error: true
           token: ${{ env.CODECOV_TOKEN }}
-
-  postgres-integration:
-    name: PostgreSQL Integration
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          persist-credentials: false
-
-      - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
-        with:
-          node-version: 24
-
-      - name: Pre-pull PostgreSQL test image
-        run: docker pull postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
-
-      - name: Run PostgreSQL integration tests
-        run: |
-          mkdir -p test-results/vitest-postgres
-          pnpm test:integration:postgres -- --reporter=default --reporter=junit --outputFile.junit=test-results/vitest-postgres/junit.xml
-
-      - name: Upload PostgreSQL integration test report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: postgres-integration-test-report
-          path: test-results/vitest-postgres/
-          retention-days: 30
 
   build:
     name: Build

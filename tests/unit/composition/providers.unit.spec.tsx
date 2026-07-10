@@ -19,10 +19,6 @@ vi.mock('@/platform/components/ui/sonner', () => ({
   Sonner: () => null,
 }));
 
-vi.mock('@/modules/auth/client', () => ({
-  useCurrentSessionQuery: () => ({ data: null }),
-}));
-
 vi.mock('@/platform/env/client', () => ({
   envClient: {},
 }));

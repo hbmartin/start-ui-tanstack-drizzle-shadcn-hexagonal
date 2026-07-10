@@ -1,14 +1,7 @@
-import { createFileRoute, redirect } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 
-import { observedBeforeLoad } from '@/platform/router/route-observability';
+import { PageHome } from '@/app/shell/presentation';
 
 export const Route = createFileRoute('/')({
-  component: RouteComponent,
-  beforeLoad: observedBeforeLoad('/', () => {
-    throw redirect({ to: '/login' });
-  }),
+  component: PageHome,
 });
-
-function RouteComponent() {
-  return null;
-}

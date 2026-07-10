@@ -1,4 +1,8 @@
 {
+  "home": {
+    "title": "start-ui-web",
+    "subtitle": "قالب بدء TanStack Start بسيط مع بنية معيارية سداسية."
+  },
   "languages": {
     "values": {
       "en": "الإنجليزية",

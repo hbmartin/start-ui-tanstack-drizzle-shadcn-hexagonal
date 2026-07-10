@@ -15,47 +15,8 @@ import type { TelemetryAdapter } from '@/platform/telemetry';
  */
 export type RouterContext = {
   queryClient: QueryClient;
-  /**
-   * Auth session accessor. Resolves the active session via Better Auth on
-   * SSR (using request cookies) and via fetch on client navigations. The
-   * `queryClient` is used to deduplicate concurrent `beforeLoad` calls within
-   * a single navigation.
-   */
-  auth: {
-    getSession: (options?: {
-      requireFresh?: boolean;
-    }) => Promise<CurrentSessionLike | null>;
-    getSessionSnapshot: () => CurrentSessionLike | null | undefined;
-  };
   /** Telemetry/error reporting (Sentry-backed in production). */
   telemetry: TelemetryAdapter;
   /** Feature flag adapter (no-op by default). */
   flags: FlagsAdapter;
 };
-
-/**
- * Minimum shape routes need from the sanitized browser current-session query.
- * Kept local to avoid a cross-module type import in the platform package.
- */
-export type CurrentSessionLike = {
-  user: {
-    id: string;
-    email: string;
-    name?: string | null;
-    image?: string | null;
-    emailVerified?: boolean;
-    role: string;
-    onboardedAt?: Date | string | null;
-  };
-  session: {
-    id: string;
-    expiresAt?: Date | string;
-  };
-  scope: {
-    userId: string;
-    role: string;
-  };
-  scopeKey: string;
-};
-
-export type AuthSessionLike = CurrentSessionLike;

@@ -14,7 +14,6 @@ const DEFAULT_PROTECTED_BROWSER_MUTATION_PATHNAMES = [
   '/api/telemetry/otel/v1/metrics',
   '/api/telemetry/otel/v1/traces',
   '/api/telemetry/sentry-tunnel',
-  '/api/upload',
   ...SIDE_EFFECT_ROUTE_PATHNAMES,
 ] as const;
 

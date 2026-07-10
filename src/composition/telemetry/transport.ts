@@ -1,6 +1,5 @@
 import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields';
 
-import { getAuthUseCases } from '@/composition/auth';
 import { getKernel } from '@/composition/kernel';
 import { getHttpConfig } from '@/modules/kernel/backend';
 import { getTelemetryConfig } from '@/modules/kernel/infrastructure/config/telemetry';
@@ -94,12 +93,6 @@ const tooManyRequests = (retryAfterSeconds: number) =>
     status: 429,
   });
 
-const unauthorized = () =>
-  new Response(JSON.stringify({ error: 'unauthorized' }), {
-    headers: { 'Content-Type': 'application/json' },
-    status: 401,
-  });
-
 const accepted = () => new Response(null, { status: 202 });
 const noContent = () => new Response(null, { status: 204 });
 
@@ -153,27 +146,6 @@ const enforceTelemetryRateLimit = (request: Request, scope: string) => {
   );
   if (result.allowed) return undefined;
   return withTelemetryVary(tooManyRequests(result.retryAfterSeconds));
-};
-
-const hasAuthenticatedSession = async (request: Request) => {
-  const result = await getAuthUseCases().getCurrentSession({
-    headers: request.headers,
-  });
-  if (result.isError()) return false;
-  return result.get().type === 'auth_session_found';
-};
-
-/**
- * Optional auth lock-down for the anonymous telemetry proxies. When
- * `TELEMETRY_REQUIRE_AUTH=true`, the OTLP and Sentry-tunnel proxies require an
- * authenticated session before forwarding (mirroring the always-on gate on
- * `/api/telemetry/logs`). Off by default so pre-login browser telemetry keeps
- * working.
- */
-const enforceTelemetryAuth = async (request: Request) => {
-  if (!getTelemetryConfig().requireAuth) return undefined;
-  if (await hasAuthenticatedSession(request)) return undefined;
-  return withTelemetryVary(unauthorized());
 };
 
 const readBoundedBody = async (request: Request) => {
@@ -314,9 +286,6 @@ export const handleOtlpProxyRequest = async (
   const rateLimited = enforceTelemetryRateLimit(request, signal);
   if (rateLimited) return rateLimited;
 
-  const unauthenticated = await enforceTelemetryAuth(request);
-  if (unauthenticated) return unauthenticated;
-
   const body = await readBoundedBody(request);
   if (!body.ok) return withTelemetryVary(body.response);
 
@@ -334,9 +303,6 @@ export const handleSentryTunnelRequest = async (request: Request) => {
 
   const rateLimited = enforceTelemetryRateLimit(request, 'sentry');
   if (rateLimited) return rateLimited;
-
-  const unauthenticated = await enforceTelemetryAuth(request);
-  if (unauthenticated) return unauthenticated;
 
   const body = await readBoundedBody(request);
   if (!body.ok) return withTelemetryVary(body.response);
@@ -502,13 +468,6 @@ export const handleFrontendLogsRequest = async (request: Request) => {
 
   const rateLimited = enforceTelemetryRateLimit(request, 'logs');
   if (rateLimited) return rateLimited;
-
-  // The frontend log sink writes into the trusted server log/telemetry stream,
-  // so require an authenticated session. Anonymous (pre-login) client logs are
-  // intentionally dropped to keep this endpoint from being an open log relay.
-  if (!(await hasAuthenticatedSession(request))) {
-    return withTelemetryVary(unauthorized());
-  }
 
   const batch = await toFrontendLogBatch(request);
   if (!batch.ok) return withTelemetryVary(batch.response);

@@ -49,7 +49,6 @@ const telemetryEnvSchema = baseEnvSchema.extend({
     .int()
     .positive()
     .optional(),
-  TELEMETRY_REQUIRE_AUTH: z.stringbool().default(false),
 });
 
 export type TelemetryConfig = {
@@ -71,7 +70,6 @@ export type TelemetryConfig = {
   proxyMaxBytes: number;
   logMaxEvents: number;
   rateLimitPerMinute: number;
-  requireAuth: boolean;
 };
 
 let cachedTelemetryConfig: TelemetryConfig | undefined;
@@ -130,7 +128,6 @@ export function getTelemetryConfig(): TelemetryConfig {
     proxyMaxBytes: env.TELEMETRY_PROXY_MAX_BYTES ?? 1_000_000,
     logMaxEvents: env.TELEMETRY_LOG_MAX_EVENTS ?? 50,
     rateLimitPerMinute: env.TELEMETRY_RATE_LIMIT_PER_MINUTE ?? 600,
-    requireAuth: env.TELEMETRY_REQUIRE_AUTH,
   };
   return cachedTelemetryConfig;
 }

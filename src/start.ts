@@ -9,7 +9,6 @@ import {
 } from '@tanstack/react-start';
 
 import { observeHttpRequest } from '@/composition/telemetry/request-observability';
-import type { AuthSession } from '@/modules/auth';
 import type { Logger } from '@/modules/kernel';
 import { isProdRuntimeEnvironment } from '@/modules/kernel/backend';
 import { envClient } from '@/platform/env/client';
@@ -27,9 +26,6 @@ import { createNoOpTelemetry } from '@/platform/telemetry';
 export type AppStartRequestContext = {
   requestId: string;
   cspNonce?: string;
-  auth?: {
-    getSession: () => Promise<AuthSession | null>;
-  };
 };
 
 declare module '@tanstack/react-router' {
@@ -115,39 +111,6 @@ const getBrowserMutationGuardLogger = async () => {
 
   return browserMutationGuardLoggerPromise;
 };
-
-const createTrustedAuthSessionAccessor = (request: Request) => {
-  let sessionPromise: Promise<AuthSession | null> | undefined;
-
-  return () => {
-    sessionPromise ??= import('@/composition/auth').then(
-      async ({ getAuthUseCases }) => {
-        const result = await getAuthUseCases().getCurrentSession({
-          headers: request.headers,
-        });
-
-        if (result.isError()) throw result.getError();
-
-        const outcome = result.get();
-        return outcome.type === 'auth_session_found' ? outcome.session : null;
-      }
-    );
-
-    return sessionPromise;
-  };
-};
-
-export const authRequestContextMiddleware = createMiddleware({
-  type: 'request',
-}).server(({ context, request, next }) =>
-  next({
-    context: mergeRequestContext(context, {
-      auth: {
-        getSession: createTrustedAuthSessionAccessor(request),
-      },
-    }),
-  })
-);
 
 export const securityHeadersMiddleware = createMiddleware({
   type: 'request',
@@ -246,7 +209,6 @@ export const startInstance = createStart(() => ({
     sentryGlobalRequestMiddleware,
     telemetryRequestMiddleware,
     securityHeadersMiddleware,
-    authRequestContextMiddleware,
     browserMutationGuardMiddleware,
     serverFnBodyLimitMiddleware,
     csrfMiddleware,

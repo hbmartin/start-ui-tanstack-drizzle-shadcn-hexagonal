@@ -18,43 +18,43 @@ describe('browser mutation protection', () => {
       shouldProtectBrowserMutation({
         handlerType: 'router',
         method: 'POST',
-        pathname: '/api/upload',
-      })
-    ).toBe(true);
-    expect(
-      shouldProtectBrowserMutation({
-        handlerType: 'router',
-        method: 'GET',
-        pathname: '/api/upload',
-      })
-    ).toBe(false);
-    expect(
-      shouldProtectBrowserMutation({
-        handlerType: 'router',
-        method: 'POST',
         pathname: '/api/telemetry/logs',
       })
     ).toBe(true);
     expect(
       shouldProtectBrowserMutation({
         handlerType: 'router',
+        method: 'GET',
+        pathname: '/api/telemetry/logs',
+      })
+    ).toBe(false);
+    expect(
+      shouldProtectBrowserMutation({
+        handlerType: 'router',
         method: 'POST',
-        pathname: '/api/auth/sign-in/email-otp',
+        pathname: '/api/telemetry/sentry-tunnel',
+      })
+    ).toBe(true);
+    expect(
+      shouldProtectBrowserMutation({
+        handlerType: 'router',
+        method: 'POST',
+        pathname: '/api/not-configured',
       })
     ).toBe(false);
     expect(
       shouldProtectBrowserMutation({
         handlerType: 'serverFn',
         method: 'POST',
-        pathname: '/api/upload',
+        pathname: '/api/telemetry/logs',
       })
     ).toBe(false);
   });
 
   it('protects trailing-slash variants of configured router mutations', () => {
     for (const pathname of [
-      '/api/upload/',
-      '/api/upload//',
+      '/api/telemetry/otel/v1/traces/',
+      '/api/telemetry/otel/v1/metrics//',
       '/logout/',
       '/api/telemetry/logs/',
     ]) {

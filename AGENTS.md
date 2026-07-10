@@ -5,6 +5,8 @@
 
 A TanStack Start application in TypeScript, organized as a strict modular monolith with hexagonal boundaries per capability. UI primitives and shared technical utilities live under `src/platform`; app-owned shell/support resources live under `src/app`; business capabilities live under `src/modules`; production wiring lives under `src/composition`.
 
+This is the **minimal boilerplate** fork: the sample business features (book, genre), authentication (Better Auth), persistence (Drizzle ORM/Postgres), and transactional email (Resend) have been removed. Only the `kernel` module remains under `src/modules`. The rules below describe the architecture pattern to follow when adding new capabilities — the auth/persistence/email specifics apply once you reintroduce those adapters.
+
 ## Canonical Commands
 
 Use these commands instead of invoking underlying tools directly.
@@ -25,7 +27,6 @@ Use these commands instead of invoking underlying tools directly.
 | `pnpm verify` | Full pre-merge gate: `check` + `test` + `build`. |
 | `pnpm verify:task` | Task-level verification runner with timestamped logs under `test-results/task-verification/`. |
 | `pnpm format:changed` | Format changed files only. |
-| `pnpm check:migrations` | Guard against invalid manual migration edits. |
 
 After code changes, run `pnpm format:changed && pnpm check && pnpm test:affected`. Before merge, run `pnpm verify`.
 

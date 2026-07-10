@@ -1,4 +1,8 @@
 {
+  "home": {
+    "title": "start-ui-web",
+    "subtitle": "Kiolezo cha msingi cha TanStack Start chenye usanifu wa kawaida wa hexagonal."
+  },
   "languages": {
     "values": {
       "en": "Kiingereza",

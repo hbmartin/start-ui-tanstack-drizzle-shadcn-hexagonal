@@ -40,10 +40,6 @@ export default defineConfig({
             '@base-ui/react/merge-props',
             '@base-ui/react/use-render',
             '@tanstack/react-router',
-            'better-auth/client/plugins',
-            'better-auth/plugins/access',
-            'better-auth/plugins/admin/access',
-            'better-auth/react',
           ],
         },
         test: {
@@ -76,23 +72,6 @@ export default defineConfig({
             'tests/architecture/**/*.{test,spec}.?(c|m)[jt]s?(x)',
             'tests/security/**/*.{test,spec}.?(c|m)[jt]s?(x)',
           ],
-          setupFiles: [
-            resolve('tests/setup.base.ts'),
-            resolve('tests/server/test-setup.ts'),
-          ],
-        },
-        resolve: {
-          alias: testAliases,
-        },
-      },
-      {
-        test: {
-          name: 'integration',
-          environment: 'node',
-          exclude: ['tests/integration/**/*.postgres.integration.test.ts'],
-          include: ['tests/integration/**/*.integration.test.?(c|m)[jt]s?(x)'],
-          fileParallelism: false,
-          globalSetup: resolve('tests/server/pglite-global-setup.ts'),
           setupFiles: [resolve('tests/setup.base.ts')],
         },
         resolve: {

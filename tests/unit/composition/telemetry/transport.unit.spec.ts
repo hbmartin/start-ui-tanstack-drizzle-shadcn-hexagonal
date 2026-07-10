@@ -1,4 +1,3 @@
-import { Result } from '@bloodyowl/boxed';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { defaultRateLimiter } from '@/platform/http/rate-limiter';
@@ -10,7 +9,6 @@ const configMock = vi.hoisted(() => ({
   logMaxEvents: 2,
   proxyMaxBytes: 1_000,
   rateLimitPerMinute: 1_000,
-  requireAuth: false,
 }));
 
 const loggerMock = vi.hoisted(() => ({
@@ -26,10 +24,6 @@ const telemetryMock = vi.hoisted(() => ({
 }));
 
 const localSummaryMock = vi.hoisted(() => vi.fn());
-
-const authUseCasesMock = vi.hoisted(() => ({
-  getCurrentSession: vi.fn(),
-}));
 
 vi.mock('@/modules/kernel/infrastructure/config/telemetry', () => ({
   getTelemetryConfig: () => configMock,
@@ -49,10 +43,6 @@ vi.mock('@/platform/telemetry', () => ({
 
 vi.mock('@/composition/telemetry/local-sqlite-sink', () => ({
   recordLocalTelemetrySummary: localSummaryMock,
-}));
-
-vi.mock('@/composition/auth', () => ({
-  getAuthUseCases: () => authUseCasesMock,
 }));
 
 const sameOriginHeaders = (contentType: string) => ({
@@ -77,11 +67,7 @@ describe('telemetry transport handlers', () => {
     configMock.logMaxEvents = 2;
     configMock.proxyMaxBytes = 1_000;
     configMock.rateLimitPerMinute = 1_000;
-    configMock.requireAuth = false;
     defaultRateLimiter.reset();
-    authUseCasesMock.getCurrentSession.mockResolvedValue(
-      Result.Ok({ type: 'auth_session_found', session: { user: { id: 'u1' } } })
-    );
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -308,87 +294,5 @@ describe('telemetry transport handlers', () => {
     expect(first.status).toBe(204);
     expect(second.status).toBe(429);
     expect(second.headers.get('Retry-After')).toBeTruthy();
-  });
-
-  it('rejects frontend logs without an authenticated session', async () => {
-    authUseCasesMock.getCurrentSession.mockResolvedValue(
-      Result.Ok({ type: 'auth_session_not_found' })
-    );
-    const { handleFrontendLogsRequest } =
-      await import('@/composition/telemetry/transport');
-
-    const response = await handleFrontendLogsRequest(
-      request(
-        '/api/telemetry/logs',
-        'application/json',
-        JSON.stringify({ records: [] })
-      )
-    );
-
-    expect(response.status).toBe(401);
-    expect(loggerMock.error).not.toHaveBeenCalled();
-  });
-
-  it('rejects OTLP proxy requests without a session when TELEMETRY_REQUIRE_AUTH is set', async () => {
-    configMock.requireAuth = true;
-    configMock.collectorUrl = 'https://collector.example/v1';
-    authUseCasesMock.getCurrentSession.mockResolvedValue(
-      Result.Ok({ type: 'auth_session_not_found' })
-    );
-    const { handleOtlpProxyRequest } =
-      await import('@/composition/telemetry/transport');
-
-    const response = await handleOtlpProxyRequest(
-      request(
-        '/api/telemetry/otel/v1/traces',
-        'application/x-protobuf',
-        new Uint8Array([1])
-      ),
-      'traces'
-    );
-
-    expect(response.status).toBe(401);
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it('rejects Sentry tunnel requests without a session when TELEMETRY_REQUIRE_AUTH is set', async () => {
-    configMock.requireAuth = true;
-    configMock.browserDsn = 'https://public@o123.ingest.sentry.io/456';
-    authUseCasesMock.getCurrentSession.mockResolvedValue(
-      Result.Ok({ type: 'auth_session_not_found' })
-    );
-    const { handleSentryTunnelRequest } =
-      await import('@/composition/telemetry/transport');
-
-    const response = await handleSentryTunnelRequest(
-      request(
-        '/api/telemetry/sentry-tunnel',
-        'application/x-sentry-envelope',
-        'envelope'
-      )
-    );
-
-    expect(response.status).toBe(401);
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it('forwards OTLP proxy requests for an authenticated session when TELEMETRY_REQUIRE_AUTH is set', async () => {
-    configMock.requireAuth = true;
-    configMock.collectorUrl = 'https://collector.example/v1';
-    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 200 }));
-    const { handleOtlpProxyRequest } =
-      await import('@/composition/telemetry/transport');
-
-    const response = await handleOtlpProxyRequest(
-      request(
-        '/api/telemetry/otel/v1/traces',
-        'application/x-protobuf',
-        new Uint8Array([1])
-      ),
-      'traces'
-    );
-
-    expect(response.status).toBe(202);
-    expect(fetch).toHaveBeenCalledOnce();
   });
 });

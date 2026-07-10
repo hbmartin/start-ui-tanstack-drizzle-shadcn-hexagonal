@@ -9,42 +9,7 @@ import { isProtectedNavigationPath } from '@/platform/router';
 
 const root = process.cwd();
 const sourceFileExtensions = new Set(['.ts', '.tsx']);
-const transactionApplicationErrorBoundaryFiles = new Set([
-  path.join(
-    'src',
-    'modules',
-    'book',
-    'application',
-    'use-cases',
-    'update-book.ts'
-  ),
-  path.join(
-    'src',
-    'modules',
-    'email',
-    'application',
-    'use-cases',
-    'process-email-status-event.ts'
-  ),
-]);
-const protectedRouteGuardSpecs = [
-  {
-    file: path.join(root, 'src', 'routes', 'app', 'route.tsx'),
-    guard: 'requireAuthenticatedRoute',
-  },
-  {
-    file: path.join(root, 'src', 'routes', 'manager', 'route.tsx'),
-    guard: 'requireAuthenticatedRouteOrForbidden',
-  },
-  {
-    file: path.join(root, 'src', 'routes', 'onboarding', 'route.tsx'),
-    guard: 'requireOnboardingRoute',
-  },
-  {
-    file: path.join(root, 'src', 'routes', 'login', 'route.tsx'),
-    guard: 'redirectAuthenticatedRoute',
-  },
-];
+const transactionApplicationErrorBoundaryFiles = new Set<string>();
 const portOutcomeOffenderOrder = ['nullable', 'optional', 'boolean'] as const;
 const declarativeLinkComponentNames = new Set([
   'BridgeLink',
@@ -297,32 +262,6 @@ function isPathInside(relativeFile: string, relativeDir: string) {
   );
 }
 
-function findProtectedRouteGuardViolations() {
-  const forbiddenAuthImports =
-    /from\s+['"](?:@\/composition\/auth|@\/modules\/auth\/(?:backend|client|infrastructure)(?:\/[^'"]*)?|better-auth(?:\/[^'"]*)?|@workos(?:-inc)?\/[^'"]+)['"]/;
-
-  return protectedRouteGuardSpecs.flatMap(({ file, guard }) => {
-    const source = readSource(file);
-    const relative = relativePath(file);
-    const checks = [
-      {
-        ok: source.includes('beforeLoad'),
-        violation: `${relative}:missing beforeLoad`,
-      },
-      {
-        ok: source.includes(guard),
-        violation: `${relative}:missing ${guard}`,
-      },
-      {
-        ok: !forbiddenAuthImports.test(source),
-        violation: `${relative}:provider import`,
-      },
-    ];
-
-    return checks.filter((check) => !check.ok).map((check) => check.violation);
-  });
-}
-
 function findPrivilegedServerFunctionRunnerViolations(
   serverFiles: string[],
   publicServerFunctions: ReadonlySet<string>
@@ -422,48 +361,10 @@ describe('strict modular monolith layout', () => {
     }
   });
 
-  it('requires module public split barrels where modules expose adapters', () => {
-    for (const moduleName of ['account', 'auth', 'book', 'genre', 'user']) {
-      const moduleRoot = path.join(root, 'src/modules', moduleName);
-      expect(fs.existsSync(path.join(moduleRoot, 'index.ts'))).toBe(true);
-      expect(fs.existsSync(path.join(moduleRoot, 'presentation.ts'))).toBe(
-        true
-      );
-      expect(fs.existsSync(path.join(moduleRoot, 'server.ts'))).toBe(true);
-      expect(fs.existsSync(path.join(moduleRoot, 'client.ts'))).toBe(true);
-      expect(fs.existsSync(path.join(moduleRoot, 'testing.ts'))).toBe(true);
-    }
-  });
-
-  it('keeps core business modules in vertical hexagonal slices', () => {
-    for (const moduleName of ['account', 'book', 'genre', 'user']) {
-      const moduleRoot = path.join(root, 'src/modules', moduleName);
-
-      for (const expectedPath of [
-        'domain',
-        path.join('application', 'use-cases'),
-        path.join('application', 'ports'),
-        path.join('transport', 'http'),
-        'factory.ts',
-        'index.ts',
-      ]) {
-        expect(fs.existsSync(path.join(moduleRoot, expectedPath))).toBe(true);
-      }
-    }
-
-    for (const moduleName of ['auth', 'book', 'email', 'genre']) {
-      expect(
-        fs.existsSync(
-          path.join(
-            root,
-            'src/modules',
-            moduleName,
-            'infrastructure',
-            'drizzle',
-            'schema.ts'
-          )
-        )
-      ).toBe(true);
+  it('keeps the kernel module public split barrels available', () => {
+    const kernelRoot = path.join(root, 'src/modules', 'kernel');
+    for (const barrel of ['index.ts', 'server.ts', 'client.ts', 'testing.ts']) {
+      expect(fs.existsSync(path.join(kernelRoot, barrel))).toBe(true);
     }
   });
 
@@ -583,10 +484,6 @@ describe('strict modular monolith layout', () => {
     expect(violations).toEqual([]);
   });
 
-  it('keeps protected route beforeLoad guards provider-neutral', () => {
-    expect(findProtectedRouteGuardViolations()).toEqual([]);
-  });
-
   it('keeps query factories injected instead of wired to concrete server facades', () => {
     const queryFactoryFiles = [
       ...listSourceFiles(path.join(root, 'src', 'modules')).filter((file) =>
@@ -608,46 +505,6 @@ describe('strict modular monolith layout', () => {
         /(?:from\s+['"](?:\.\.?\/server|@\/composition(?:\/[^'"]*)?)['"]|import\s*\(\s*['"]@\/composition(?:\/[^'"]*)?['"]\s*\))/g
       )
     ).toEqual([]);
-  });
-
-  it('keeps logout as a POST-only side effect', () => {
-    const logoutRoute = readSource(
-      path.join(root, 'src', 'routes', 'logout.tsx')
-    );
-    const logoutPage = readSource(
-      path.join(
-        root,
-        'src',
-        'modules',
-        'auth',
-        'presentation',
-        'page-logout.tsx'
-      )
-    );
-    const confirmSignOut = readSource(
-      path.join(
-        root,
-        'src',
-        'modules',
-        'auth',
-        'presentation',
-        'confirm-signout.tsx'
-      )
-    );
-
-    expect(logoutRoute).toContain('handleLogoutGetRequest');
-    expect(logoutRoute).toContain('handleLogoutPostRequest');
-    expect(logoutRoute).toMatch(
-      /\bGET:\s*\(\)\s*=>\s*handleLogoutGetRequest\(\)/
-    );
-    expect(logoutRoute).toMatch(
-      /\bPOST:\s*\(\{\s*request\s*\}\)\s*=>\s*handleLogoutPostRequest\(request\)/
-    );
-    expect(logoutPage).not.toContain('signOut(');
-    expect(logoutPage).not.toContain('useEffect');
-    expect(confirmSignOut).not.toContain("to: '/logout'");
-    expect(confirmSignOut).toContain('signOut()');
-    expect(confirmSignOut).toContain('clearAllQueryStateForAuthBoundary');
   });
 
   it('blocks direct declarative navigation to protected side-effect routes', () => {

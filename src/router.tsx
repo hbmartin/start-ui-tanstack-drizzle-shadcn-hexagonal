@@ -8,13 +8,9 @@ import {
 
 import { createClientQueryClient } from '@/composition/client-query';
 import { telemetryProxy } from '@/composition/telemetry';
-import { authQueries } from '@/modules/auth/client';
 import { createNoOpFlags } from '@/platform/flags';
 import { readCspNonceFromMeta } from '@/platform/http/csp-nonce';
-import type {
-  CurrentSessionLike,
-  RouterContext,
-} from '@/platform/router/context';
+import type { RouterContext } from '@/platform/router/context';
 import { attachRouterObservability } from '@/platform/router/observability';
 import { frontendLogger } from '@/platform/telemetry/frontend-logger';
 
@@ -84,26 +80,8 @@ const getRouterCspNonce = () =>
 export function getRouter() {
   const queryClient = createClientQueryClient();
   const cspNonce = getRouterCspNonce();
-  const currentSessionQuery = authQueries.currentSession();
-  const getSessionSnapshot = (): CurrentSessionLike | null | undefined =>
-    queryClient.getQueryData(currentSessionQuery.queryKey);
-  const getSession = (options?: { requireFresh?: boolean }) => {
-    if (!import.meta.env.SSR && !options?.requireFresh) {
-      const snapshot = getSessionSnapshot();
-      if (snapshot !== undefined) return Promise.resolve(snapshot);
-    }
-
-    return queryClient.fetchQuery(currentSessionQuery);
-  };
   const routerContext: RouterContext = {
     queryClient,
-    // Cached per router/query client so concurrent route guards within a
-    // navigation share the sanitized current-session fetch without sharing
-    // cache state across SSR requests or router instances.
-    auth: {
-      getSession,
-      getSessionSnapshot,
-    },
     telemetry: telemetryProxy,
     flags,
   };

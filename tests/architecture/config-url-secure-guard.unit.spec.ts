@@ -60,8 +60,6 @@ describe('kernel config URL fields are HTTPS-guarded (I2)', () => {
   it('still detects the known URL-bearing config modules', () => {
     // Fails loudly if the URL-field detector regex ever stops matching, which
     // would otherwise turn the guardrail above into a silent no-op.
-    expect(urlConfigFiles).toEqual(
-      expect.arrayContaining(['database.ts', 'redis.ts', 'telemetry.ts'])
-    );
+    expect(urlConfigFiles).toEqual(expect.arrayContaining(['telemetry.ts']));
   });
 });

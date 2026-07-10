@@ -1,4 +1,8 @@
 {
+  "home": {
+    "title": "start-ui-web",
+    "subtitle": "A minimal TanStack Start boilerplate with a modular, hexagonal architecture."
+  },
   "languages": {
     "label": "Language",
     "values": {
