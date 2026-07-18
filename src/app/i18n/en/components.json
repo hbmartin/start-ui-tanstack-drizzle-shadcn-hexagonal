@@ -39,6 +39,7 @@
   },
   "searchInput": {
     "clear": "Clear search",
+    "pending": "Searching...",
     "placeholder": "Search..."
   },
   "datalist": {
@@ -54,7 +55,8 @@
     "heading": "Are you sure?"
   },
   "searchButton": {
-    "label": "Search"
+    "label": "Search",
+    "pending": "Searching..."
   },
   "sidebar": {
     "title": "Sidebar",

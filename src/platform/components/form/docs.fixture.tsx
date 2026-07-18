@@ -10,7 +10,6 @@ import {
   useAppForm,
 } from '@/platform/components/form';
 import { onSubmit } from '@/platform/components/form/docs.utils';
-import { Button } from '@/platform/components/ui/button';
 
 const zFormSchema = () =>
   z.object({
@@ -42,7 +41,7 @@ const Default = () => {
           </form.AppField>
         </FormField>
         <div>
-          <Button type="submit">Submit</Button>
+          <form.SubmitButton>Submit</form.SubmitButton>
         </div>
       </div>
     </Form>

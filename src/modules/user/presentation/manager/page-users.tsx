@@ -45,7 +45,7 @@ export const PageUsers = (props: { search: { searchTerm?: string } }) => {
 
   const searchInputProps = {
     value: props.search.searchTerm ?? '',
-    onChange: (value: string) =>
+    changeAction: (value: string) =>
       router.navigate({
         to: '.',
         search: { searchTerm: value },
@@ -114,7 +114,7 @@ export const PageUsers = (props: { search: { searchTerm?: string } }) => {
           {ui
             .match('pending', () => <DataListLoadingState />)
             .match('error', () => (
-              <DataListErrorState retry={() => usersQuery.refetch()} />
+              <DataListErrorState retryAction={() => usersQuery.refetch()} />
             ))
             .match('empty', () => <DataListEmptyState />)
             .match('empty-search', ({ searchTerm }) => (

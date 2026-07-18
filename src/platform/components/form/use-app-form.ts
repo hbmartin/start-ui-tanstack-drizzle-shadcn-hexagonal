@@ -12,6 +12,7 @@ import { FieldSelect } from '@/platform/components/form/field-select';
 import { FieldText } from '@/platform/components/form/field-text';
 import { FieldTextarea } from '@/platform/components/form/field-textarea';
 import { FieldUploadInput } from '@/platform/components/form/field-upload-input';
+import { FormSubmitButton } from '@/platform/components/form/form-submit-button';
 import {
   fieldContext,
   formContext,
@@ -54,5 +55,7 @@ export const { useAppForm, useTypedAppFormContext, withForm } = createFormHook({
     FieldTextarea,
     FieldUploadInput,
   },
-  formComponents: {},
+  formComponents: {
+    SubmitButton: FormSubmitButton,
+  },
 });

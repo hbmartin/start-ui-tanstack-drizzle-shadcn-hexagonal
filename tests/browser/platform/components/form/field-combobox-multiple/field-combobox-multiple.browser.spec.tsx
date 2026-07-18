@@ -37,7 +37,8 @@ test('should select item on click', async () => {
   await user.click(input);
 
   const option = page.getByRole('option', { name: 'Buzz Pawdrin' });
-  await user.click(option);
+  await expect.element(option).toBeVisible();
+  await user.click(option, { force: true });
 
   await user.keyboard('{Escape}');
 
@@ -69,8 +70,12 @@ test('should allow selecting multiple items', async () => {
   const input = page.getByRole('combobox', { name: 'Bearstronaut' });
   await user.click(input);
 
-  await user.click(page.getByRole('option', { name: 'Bearstrong' }));
-  await user.click(page.getByRole('option', { name: 'Buzz Pawdrin' }));
+  const bearstrongOption = page.getByRole('option', { name: 'Bearstrong' });
+  const pawdrinOption = page.getByRole('option', { name: 'Buzz Pawdrin' });
+  await expect.element(bearstrongOption).toBeVisible();
+  await user.click(bearstrongOption, { force: true });
+  await expect.element(pawdrinOption).toBeVisible();
+  await user.click(pawdrinOption, { force: true });
 
   await user.keyboard('{Escape}');
 

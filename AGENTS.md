@@ -86,6 +86,18 @@ Keep files named by concrete concern. Avoid catch-all `utils.ts`, broad `service
 - Catch failures only at external, service, and persistence boundaries such as Drizzle, Better Auth, and Resend adapters. Keep `TransactionRunner.run` as the low-level promise primitive and map transaction failures at the DB-backed boundary or use case boundary that owns the transaction. Any application-layer `try/catch` must be limited to a use case that owns a transaction boundary and must convert the failure to `Result.Error(AppError)`.
 - Transport, composition, HTTP, and framework adapter boundaries may throw only when the underlying contract is exception-driven, such as TanStack `ServerFnError`, Better Upload `RejectUpload`, Better Auth callbacks, startup/config validation, or final HTTP error mapping.
 
+## Async UI and Route Data
+
+- Classify route data as critical, secondary, or user-initiated. Start all independent route queries before the first `await`; await critical layout and form data, prefetch secondary regions without blocking, and leave pagination, retries, and mutations user-initiated.
+- Route loaders seed or prefetch TanStack Query using the same public query options consumed by presentation components. Components must still create query observers instead of treating loader data as the server-state cache.
+- Co-locate a Suspense fallback with the secondary component it represents. The fallback must reserve the real component's layout, and the region must have a local retryable error boundary when its failure should not replace the route.
+- Async-aware design components expose callbacks with an `Action` suffix, such as `changeAction`, `confirmAction`, or `retryAction`, and own their transition and pending presentation. Keep synchronous event callbacks separate.
+- TanStack Form owns form-submission pending state. TanStack Query owns shared mutation, pagination, upload, and invalidation state; do not mirror those states in ad hoc component booleans.
+- Use `useOptimistic` only for reversible component-local projections. Use Query cache snapshots and rollback when optimistic state is shared across components. Do not optimistically project deletes, revocations, or mutations that immediately navigate away.
+- TanStack Router already runs navigation and invalidation through React transitions. Do not assign transition functions to the router or add redundant `startTransition` wrappers around router calls.
+- React Server Components remain an evidence-driven experimental opt-in. Do not enable RSC unless a measured static or dependency-heavy region justifies the additional build and runtime surface.
+- Prefer TanStack Router's native `viewTransition` option for route motion, scope it to navigation where motion carries information, and always provide a `prefers-reduced-motion` fallback. Do not introduce React canary solely for view transitions.
+
 ## Utility Library Guidance
 
 - Use `ts-pattern` when branching over discriminated unions, Boxed `Result` values, tuple-derived UI states, or non-trivial unknown-shape guards where `.exhaustive()` / `isMatching` improves safety. Keep simple one-condition guards as plain `if` checks.

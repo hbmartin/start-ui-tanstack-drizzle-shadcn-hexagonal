@@ -1,5 +1,5 @@
 import { CircleAlertIcon, LucideRefreshCw, XIcon } from 'lucide-react';
-import { ReactNode } from 'react';
+import { ReactNode, useRef, useTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/platform/lib/tailwind/utils';
@@ -126,15 +126,30 @@ export const DataListEmptyState = ({
 export const DataListErrorState = ({
   title,
   children,
-  retry,
+  retryAction,
   className,
 }: {
   title?: ReactNode;
   children?: ReactNode;
   className?: string;
-  retry?: () => void;
+  retryAction?: () => unknown | Promise<unknown>;
 }) => {
   const { t } = useTranslation(['components']);
+  const [isRetrying, startRetryTransition] = useTransition();
+  const isRetryingRef = useRef(false);
+  const retry = () => {
+    if (!retryAction || isRetryingRef.current) return;
+
+    isRetryingRef.current = true;
+    startRetryTransition(async () => {
+      try {
+        await retryAction();
+      } finally {
+        isRetryingRef.current = false;
+      }
+    });
+  };
+
   return (
     <DataListRow className={cn('flex-1', className)}>
       <DataListCell className="flex flex-col items-center justify-center py-4 text-center">
@@ -142,11 +157,16 @@ export const DataListErrorState = ({
           <CircleAlertIcon className="size-4 text-muted-foreground" />
           {title ?? t('components:datalist.errorTitle')}
         </div>
-        {(children || retry) && (
+        {(children || retryAction) && (
           <div className="flex w-full flex-col items-center gap-x-2 gap-y-1 text-muted-foreground">
             {!!children && <div className="text-sm">{children}</div>}
-            {!!retry && (
-              <Button variant="ghost" size="sm" onClick={retry}>
+            {!!retryAction && (
+              <Button
+                variant="ghost"
+                size="sm"
+                loading={isRetrying}
+                onClick={retry}
+              >
                 <LucideRefreshCw />
                 {t('components:datalist.retry')}
               </Button>

@@ -6,7 +6,8 @@
       "ar": "Kiarabu",
       "sw": "Kiswahili"
     },
-    "label": "Lugha"
+    "label": "Lugha",
+    "pending": "Inabadilisha lugha..."
   },
   "themes": {
     "values": {

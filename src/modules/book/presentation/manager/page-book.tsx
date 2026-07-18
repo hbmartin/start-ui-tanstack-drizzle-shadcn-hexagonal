@@ -88,7 +88,7 @@ export const PageBook = (props: { bookId: BookId }) => {
               ]}
             >
               <ConfirmResponsiveDrawer
-                onConfirm={() => deleteBook()}
+                confirmAction={() => deleteBook()}
                 title={t('book:manager.detail.confirmDeleteTitle', {
                   title: bookQuery.data?.title ?? '--',
                 })}

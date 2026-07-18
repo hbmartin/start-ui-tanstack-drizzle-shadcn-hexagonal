@@ -15,7 +15,6 @@ import {
   ManagerPageLayoutTopBarTitle as PageLayoutTopBarTitle,
 } from '@/platform/components/page-layout';
 import { PreventNavigation } from '@/platform/components/prevent-navigation';
-import { Button } from '@/platform/components/ui/button';
 import { Card, CardContent } from '@/platform/components/ui/card';
 import { useIsUploadingFiles } from '@/platform/components/upload/utils';
 
@@ -122,15 +121,13 @@ export const PageBookUpdate = (props: { bookId: BookId }) => {
           <PageLayoutTopBar
             startActions={<BackButton />}
             endActions={
-              <Button
+              <form.SubmitButton
                 size="sm"
-                type="submit"
                 className="min-w-20"
                 disabled={isUploadingFiles}
-                loading={bookUpdate.isPending}
               >
                 {t('book:manager.update.updateButton.label')}
-              </Button>
+              </form.SubmitButton>
             }
           >
             <PageLayoutTopBarTitle>

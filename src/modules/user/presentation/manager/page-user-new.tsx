@@ -14,7 +14,6 @@ import {
   ManagerPageLayoutTopBarTitle as PageLayoutTopBarTitle,
 } from '@/platform/components/page-layout';
 import { PreventNavigation } from '@/platform/components/prevent-navigation';
-import { Button } from '@/platform/components/ui/button';
 import { Card, CardContent } from '@/platform/components/ui/card';
 
 import { useCurrentScopeKey } from '@/modules/auth/client';
@@ -81,14 +80,9 @@ export const PageUserNew = () => {
           <PageLayoutTopBar
             startActions={<BackButton />}
             endActions={
-              <Button
-                size="sm"
-                type="submit"
-                className="min-w-20"
-                loading={userCreate.isPending}
-              >
+              <form.SubmitButton size="sm" className="min-w-20">
                 {t('user:manager.new.createButton.label')}
-              </Button>
+              </form.SubmitButton>
             }
           >
             <PageLayoutTopBarTitle>

@@ -1,6 +1,6 @@
 import { useRouter } from '@tanstack/react-router';
 import { RefreshCwIcon } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -48,7 +48,8 @@ type RouteErrorProps = {
 export const RouteError = ({ error, routeId }: RouteErrorProps) => {
   const router = useRouter();
   const queryClient = getRouteQueryClient(router.options.context);
-  const [retrying, setRetrying] = useState(false);
+  const [retrying, startRetryTransition] = useTransition();
+  const retryingRef = useRef(false);
   const { t } = useTranslation(['components']);
 
   useEffect(() => {
@@ -72,8 +73,10 @@ export const RouteError = ({ error, routeId }: RouteErrorProps) => {
   }, [error, routeId]);
 
   const handleRetry = () => {
-    setRetrying(true);
-    const runRetry = async () => {
+    if (retryingRef.current) return;
+
+    retryingRef.current = true;
+    startRetryTransition(async () => {
       try {
         await retryRouteError({ queryClient, router });
       } catch (error: unknown) {
@@ -83,11 +86,9 @@ export const RouteError = ({ error, routeId }: RouteErrorProps) => {
             error instanceof Error ? error.message : 'Route error retry failed',
         });
       } finally {
-        setRetrying(false);
+        retryingRef.current = false;
       }
-    };
-
-    void runRetry();
+    });
   };
 
   return (

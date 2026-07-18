@@ -4,6 +4,8 @@ import { Link } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { match, P } from 'ts-pattern';
 
+import { useHydrated } from '@/platform/hooks/use-hydrated';
+
 import { PageError } from '@/platform/components/errors/page-error';
 import {
   AppPageLayout as PageLayout,
@@ -17,9 +19,13 @@ import { useCurrentScopeKey } from '@/modules/auth/client';
 import { bookQueries } from '@/modules/book/client';
 
 import { BookCover } from '../book-cover';
+import { getBookCoverViewTransitionName } from '../book-cover-transition';
+
+const bookCoverViewTransition = { types: ['book-cover'] };
 
 export const PageBooks = () => {
   const { t } = useTranslation(['book']);
+  const hydrated = useHydrated();
   const scopeKey = useCurrentScopeKey();
   const booksQuery = useInfiniteQuery(bookQueries.getAllInfinite({ scopeKey }));
 
@@ -68,10 +74,15 @@ export const PageBooks = () => {
                     key={item.id}
                     to="/app/books/$id"
                     params={{ id: item.id }}
+                    viewTransition={bookCoverViewTransition}
+                    data-hydrated={hydrated}
                     className="group"
                   >
                     <BookCover
                       book={item}
+                      viewTransitionName={getBookCoverViewTransitionName(
+                        item.id
+                      )}
                       className="transition duration-500 group-hover:-translate-y-2 group-hover:rotate-1"
                     />
                   </Link>

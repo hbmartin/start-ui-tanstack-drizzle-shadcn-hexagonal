@@ -4,7 +4,7 @@ import { Button } from '@/platform/components/ui/button';
 import { ConfirmResponsiveDrawer } from '@/platform/components/ui/confirm-responsive-drawer';
 function Default() {
   return (
-    <ConfirmResponsiveDrawer onConfirm={() => alert('Custom Action')}>
+    <ConfirmResponsiveDrawer confirmAction={() => alert('Custom Action')}>
       <Button>Confirm</Button>
     </ConfirmResponsiveDrawer>
   );
@@ -15,7 +15,7 @@ function WithCustomProps() {
     <ConfirmResponsiveDrawer
       title="ConfirmModal Title"
       description="Custom message"
-      onConfirm={() => alert('Custom Action')}
+      confirmAction={() => alert('Custom Action')}
       confirmText="Custom Text"
       confirmVariant="destructive"
     >
@@ -37,7 +37,7 @@ function EnabledProps() {
         Enabled
       </label>
       <ConfirmResponsiveDrawer
-        onConfirm={() => alert('Custom Action')}
+        confirmAction={() => alert('Custom Action')}
         enabled={enabled}
       >
         <Button>{enabled ? 'Confirm' : 'Without confirm'}</Button>
@@ -49,7 +49,7 @@ function EnabledProps() {
 function WithPromise() {
   return (
     <ConfirmResponsiveDrawer
-      onConfirm={async () => new Promise((r) => setTimeout(r, 2000))}
+      confirmAction={async () => new Promise((r) => setTimeout(r, 2000))}
     >
       <Button>Confirm</Button>
     </ConfirmResponsiveDrawer>

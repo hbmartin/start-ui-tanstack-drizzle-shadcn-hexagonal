@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 import { Form, FormField, useAppForm } from '@/platform/components/form';
 import { onSubmit } from '@/platform/components/form/docs.utils';
-import { Button } from '@/platform/components/ui/button';
 
 const Default = () => {
   const form = useAppForm({
@@ -18,7 +17,7 @@ const Default = () => {
           {(field) => <field.FieldCheckbox>I love bears</field.FieldCheckbox>}
         </form.AppField>
       </FormField>
-      <Button type="submit">Submit</Button>
+      <form.SubmitButton>Submit</form.SubmitButton>
     </Form>
   );
 };

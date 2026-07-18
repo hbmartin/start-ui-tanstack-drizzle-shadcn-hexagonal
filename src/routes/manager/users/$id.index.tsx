@@ -9,13 +9,23 @@ import { parseRouteScopeKey, parseRouteUserId } from '@/routes/-route-params';
 export const Route = createFileRoute('/manager/users/$id/')({
   loader: observedLoader('/manager/users/$id/', ({ context, params }) => {
     if (isForbiddenRouteContext(context)) return undefined;
+    const scopeKey = parseRouteScopeKey(context.scopeKey);
+    const userId = parseRouteUserId(params.id);
 
-    return context.queryClient.ensureQueryData(
-      userQueries.getById({
-        id: parseRouteUserId(params.id),
-        scopeKey: parseRouteScopeKey(context.scopeKey),
+    const userPromise = context.queryClient.ensureQueryData(
+      userQueries.getById({ id: userId, scopeKey })
+    );
+
+    // eslint-disable-next-line sonarjs/void-use -- Secondary data must not block the critical route query.
+    void context.queryClient.prefetchInfiniteQuery(
+      userQueries.getUserSessionsInfinite({
+        limit: 5,
+        scopeKey,
+        userId,
       })
     );
+
+    return userPromise;
   }),
   component: RouteComponent,
 });

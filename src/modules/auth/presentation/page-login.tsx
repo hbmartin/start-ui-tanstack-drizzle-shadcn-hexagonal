@@ -124,7 +124,6 @@ export default function PageLogin({
     },
   });
 
-  const isSubmitting = useStore(form.store, (s) => s.isSubmitting);
   const isInvalidAfterSubmit = useStore(
     form.store,
     (s) => s.isSubmitted && !s.isValid
@@ -162,14 +161,9 @@ export default function PageLogin({
               )}
             </form.AppField>
           </FormField>
-          <Button
-            loading={isSubmitting}
-            type="submit"
-            size="lg"
-            className="w-full"
-          >
+          <form.SubmitButton size="lg" className="w-full">
             {t(`${I18N_KEY_PAGE_PREFIX}.loginWithEmail`)}
-          </Button>
+          </form.SubmitButton>
           {emailHint}
         </div>
         <div className="relative text-center text-sm after:absolute after:inset-0 after:top-1/2 after:z-0 after:flex after:items-center after:border-t after:border-border">

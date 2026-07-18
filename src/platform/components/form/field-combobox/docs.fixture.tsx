@@ -7,7 +7,6 @@ import {
   useAppForm,
 } from '@/platform/components/form';
 import { onSubmit } from '@/platform/components/form/docs.utils';
-import { Button } from '@/platform/components/ui/button';
 
 const options = [
   { value: 'bearstrong', label: 'Bearstrong' },
@@ -30,7 +29,7 @@ const Default = () => {
           {(field) => <field.FieldCombobox items={options} />}
         </form.AppField>
       </FormField>
-      <Button type="submit">Submit</Button>
+      <form.SubmitButton>Submit</form.SubmitButton>
     </Form>
   );
 };

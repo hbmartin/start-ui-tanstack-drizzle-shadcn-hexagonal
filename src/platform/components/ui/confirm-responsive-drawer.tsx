@@ -4,7 +4,7 @@ import {
   KeyboardEvent,
   ReactElement,
   ReactNode,
-  useState,
+  useTransition,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDisclosure } from 'react-use-disclosure';
@@ -25,14 +25,23 @@ export const ConfirmResponsiveDrawer = (props: {
   children: ReactElement<{ onClick: () => void }>;
   title?: ReactNode;
   description?: ReactNode;
-  onConfirm: () => unknown | Promise<unknown>;
+  confirmAction: () => unknown | Promise<unknown>;
   confirmText?: ReactNode;
   confirmVariant?: ComponentProps<typeof Button>['variant'];
   cancelText?: ReactNode;
 }) => {
   const { t } = useTranslation(['common', 'components']);
-  const [isPending, setIsPending] = useState(false);
+  const [isPending, startTransition] = useTransition();
   const { close, open, isOpen } = useDisclosure();
+
+  const runConfirmAction = (closeAfterFulfillment: boolean) => {
+    if (isPending) return;
+
+    startTransition(async () => {
+      await props.confirmAction();
+      if (closeAfterFulfillment) close();
+    });
+  };
 
   const displayHeading =
     !props.title && !props.description
@@ -42,9 +51,7 @@ export const ConfirmResponsiveDrawer = (props: {
   if (props.enabled === false) {
     // eslint-disable-next-line @eslint-react/no-clone-element
     const childrenWithOnConfirm = cloneElement(props.children, {
-      onClick: () => {
-        void props.onConfirm();
-      },
+      onClick: () => runConfirmAction(false),
     });
     return <>{childrenWithOnConfirm}</>;
   }
@@ -57,15 +64,12 @@ export const ConfirmResponsiveDrawer = (props: {
   });
 
   const handleCancel = () => {
-    setIsPending(false);
+    if (isPending) return;
     close();
   };
 
-  const handleConfirm = async () => {
-    setIsPending(true);
-    await props.onConfirm();
-    setIsPending(false);
-    close();
+  const handleConfirm = () => {
+    runConfirmAction(true);
   };
 
   return (
@@ -85,9 +89,9 @@ export const ConfirmResponsiveDrawer = (props: {
           hideCloseButton
           className="sm:max-w-xs"
           onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !isPending) {
               e.preventDefault();
-              void handleConfirm();
+              handleConfirm();
             }
           }}
         >
@@ -99,7 +103,13 @@ export const ConfirmResponsiveDrawer = (props: {
           </ResponsiveDrawerHeader>
           <ResponsiveDrawerFooter>
             <ResponsiveDrawerClose
-              render={<Button variant="secondary" className="max-sm:w-full" />}
+              render={
+                <Button
+                  variant="secondary"
+                  className="max-sm:w-full"
+                  disabled={isPending}
+                />
+              }
             >
               {props.cancelText ??
                 t('components:confirmResponsiveDrawer.cancelText')}

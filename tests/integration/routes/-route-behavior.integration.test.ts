@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   bookGetById: vi.fn(),
   bookUpdateById: vi.fn(),
   currentSession: vi.fn(),
+  genreGetAll: vi.fn(),
   refetchSession: vi.fn(),
   startSignIn: vi.fn(),
   verifyEmailOtp: vi.fn(),
@@ -65,6 +66,10 @@ vi.mock('@/modules/book/server', () => ({
   bookUpdateById: mocks.bookUpdateById,
 }));
 
+vi.mock('@/modules/genre/server', () => ({
+  genreGetAll: mocks.genreGetAll,
+}));
+
 vi.mock('@/modules/user/server', () => ({
   userCreate: mocks.userCreate,
   userDeleteById: mocks.userDeleteById,
@@ -91,9 +96,11 @@ import {
   isForbiddenRouteContext,
 } from '@/modules/auth/presentation';
 import { bookQueries } from '@/modules/book/client';
+import { genreQueries } from '@/modules/genre/client';
 import {
   toBookId,
   toScopeKey,
+  toUserId,
   unwrapParseResult,
 } from '@/modules/kernel/testing';
 import { userQueries } from '@/modules/user/client';
@@ -101,7 +108,9 @@ import { Route as AppBooksIndexRoute } from '@/routes/app/books/index';
 import { Route as LoginRoute } from '@/routes/login/route';
 import { Route as LoginVerifyRoute } from '@/routes/login/verify.index';
 import { Route as ManagerBooksIdRoute } from '@/routes/manager/books/$id.index';
+import { Route as ManagerBooksUpdateRoute } from '@/routes/manager/books/$id.update.index';
 import { Route as ManagerBooksIndexRoute } from '@/routes/manager/books/index';
+import { Route as ManagerBooksNewRoute } from '@/routes/manager/books/new.index';
 import { Route as ManagerRoute } from '@/routes/manager/route';
 import { Route as ManagerUsersIdRoute } from '@/routes/manager/users/$id.index';
 import { Route as ManagerUsersUpdateRoute } from '@/routes/manager/users/$id.update.index';
@@ -135,6 +144,21 @@ const user = {
   name: 'Admin User',
   onboardedAt: new Date('2024-01-01T00:00:00.000Z'),
   role: 'admin',
+};
+
+const genrePage = {
+  items: [book.genre],
+  nextCursor: undefined,
+  total: 1,
+};
+
+const createDeferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+
+  return { promise, resolve };
 };
 
 const makeSession = (role: 'admin' | 'user' = 'admin') => ({
@@ -300,6 +324,89 @@ describe('route integration behavior', () => {
     ).toEqual(book);
   });
 
+  it('starts book form dependencies together and blocks on critical data', async () => {
+    const queryClient = createTestQueryClient();
+    const context = makeRouteContext({ queryClient });
+    const pendingBook = createDeferred<typeof book>();
+    const pendingGenres = createDeferred<typeof genrePage>();
+
+    mocks.bookGetById.mockReturnValueOnce(pendingBook.promise);
+    mocks.genreGetAll.mockReturnValueOnce(pendingGenres.promise);
+
+    const updateLoaderPromise = routeOptions(ManagerBooksUpdateRoute).loader({
+      context,
+      params: { id: 'book-1' },
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.bookGetById).toHaveBeenCalledOnce();
+      expect(mocks.genreGetAll).toHaveBeenCalledOnce();
+    });
+
+    pendingBook.resolve(book);
+    pendingGenres.resolve(genrePage);
+    await expect(updateLoaderPromise).resolves.toEqual(book);
+
+    expect(
+      queryClient.getQueryData(genreQueries.getAllList({ scopeKey }).queryKey)
+    ).toEqual(genrePage);
+
+    const newQueryClient = createTestQueryClient();
+    const newContext = makeRouteContext({ queryClient: newQueryClient });
+    mocks.genreGetAll.mockResolvedValueOnce(genrePage);
+    await routeOptions(ManagerBooksNewRoute).loader({ context: newContext });
+    expect(mocks.genreGetAll).toHaveBeenCalledTimes(2);
+    expect(
+      newQueryClient.getQueryData(
+        genreQueries.getAllList({ scopeKey }).queryKey
+      )
+    ).toEqual(genrePage);
+  });
+
+  it('starts secondary user sessions without blocking user detail', async () => {
+    const queryClient = createTestQueryClient();
+    const context = makeRouteContext({ queryClient });
+    const pendingUser = createDeferred<typeof user>();
+    const sessionPage = { items: [], nextCursor: undefined, total: 0 };
+    const pendingSessions = createDeferred<typeof sessionPage>();
+
+    mocks.userGetById.mockReturnValueOnce(pendingUser.promise);
+    mocks.userGetUserSessions.mockReturnValueOnce(pendingSessions.promise);
+
+    const loaderPromise = routeOptions(ManagerUsersIdRoute).loader({
+      context,
+      params: { id: 'admin-1' },
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.userGetById).toHaveBeenCalledOnce();
+      expect(mocks.userGetUserSessions).toHaveBeenCalledOnce();
+    });
+
+    const sessionsQuery = userQueries.getUserSessionsInfinite({
+      limit: 5,
+      scopeKey,
+      userId: unwrapParseResult(toUserId('admin-1')),
+    });
+    expect(queryClient.getQueryState(sessionsQuery.queryKey)?.status).toBe(
+      'pending'
+    );
+
+    pendingUser.resolve(user);
+    await expect(loaderPromise).resolves.toEqual(user);
+    expect(queryClient.getQueryState(sessionsQuery.queryKey)?.status).toBe(
+      'pending'
+    );
+
+    pendingSessions.resolve(sessionPage);
+    await vi.waitFor(() => {
+      expect(queryClient.getQueryData(sessionsQuery.queryKey)).toEqual({
+        pageParams: [undefined],
+        pages: [sessionPage],
+      });
+    });
+  });
+
   it('uses route guards for auth redirects through route beforeLoad hooks', async () => {
     const location = {
       hash: '#book-results',
@@ -406,6 +513,34 @@ describe('route integration behavior', () => {
     ).toBeUndefined();
     expect(mocks.userGetAll).not.toHaveBeenCalled();
     expect(mocks.userGetById).not.toHaveBeenCalled();
+    expect(mocks.userGetUserSessions).not.toHaveBeenCalled();
+  });
+
+  it('does not run manager book form loaders for forbidden route context', async () => {
+    const routeContext = makeRouteContext({ session: makeSession('user') });
+    const forbiddenContext = await routeOptions(ManagerRoute).beforeLoad({
+      context: routeContext,
+      location: {
+        hash: '',
+        href: '/manager/books/new',
+        pathname: '/manager/books/new',
+        searchStr: '',
+      },
+    });
+
+    expect(
+      await routeOptions(ManagerBooksNewRoute).loader({
+        context: forbiddenContext,
+      })
+    ).toBeUndefined();
+    expect(
+      await routeOptions(ManagerBooksUpdateRoute).loader({
+        context: forbiddenContext,
+        params: { id: 'book-1' },
+      })
+    ).toBeUndefined();
+    expect(mocks.bookGetById).not.toHaveBeenCalled();
+    expect(mocks.genreGetAll).not.toHaveBeenCalled();
   });
 
   it('seeds the app book loader cache without manager search params', async () => {

@@ -38,12 +38,14 @@ export default defineConfig({
         optimizeDeps: {
           include: [
             '@base-ui/react/merge-props',
+            '@base-ui/react/menu',
             '@base-ui/react/use-render',
             '@tanstack/react-router',
             'better-auth/client/plugins',
             'better-auth/plugins/access',
             'better-auth/plugins/admin/access',
             'better-auth/react',
+            'react-error-boundary',
           ],
         },
         test: {

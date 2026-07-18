@@ -22,6 +22,12 @@ vi.mock('react', async (importOriginal) => {
     useEffect: (effect: () => void) => {
       effect();
     },
+    useTransition: () => [
+      false,
+      (action: () => unknown | Promise<unknown>) => {
+        void action();
+      },
+    ],
   };
 });
 

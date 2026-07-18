@@ -39,6 +39,7 @@
   },
   "searchInput": {
     "clear": "Effacer la recherche",
+    "pending": "Recherche en cours...",
     "placeholder": "Rechercher..."
   },
   "datalist": {
@@ -54,7 +55,8 @@
     "heading": "Êtes-vous sûr ?"
   },
   "searchButton": {
-    "label": "Rechercher"
+    "label": "Rechercher",
+    "pending": "Recherche en cours..."
   },
   "sidebar": {
     "title": "Barre de navigation",

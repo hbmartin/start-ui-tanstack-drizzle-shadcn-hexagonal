@@ -8,7 +8,7 @@ function Default() {
     <div className="flex flex-col gap-4">
       <SearchInput
         value={searchTerm}
-        onChange={(value) => setSearchTerm(value ?? '')}
+        changeAction={(value) => setSearchTerm(value)}
       />
       <p className="text-sm text-muted-foreground">
         {searchTerm ? `Search term is ${searchTerm}` : 'No search term'}
@@ -106,7 +106,7 @@ function DebounceDelay() {
       </div>
       <SearchInput
         value={searchTerm}
-        onChange={(value) => setSearchTerm(value ?? '')}
+        changeAction={(value) => setSearchTerm(value)}
         delay={delay}
       />
       <p className="text-sm text-muted-foreground">
