@@ -1,4 +1,5 @@
 import { CheckIcon, ChevronsUpDownIcon, LanguagesIcon } from 'lucide-react';
+import { useTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -17,6 +18,15 @@ import {
 
 export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
   const { i18n, t } = useTranslation(['common']);
+  const [isPending, startLanguageTransition] = useTransition();
+
+  const changeLanguage = (language: LanguageKey) => {
+    if (language === i18n.language || isPending) return;
+
+    startLanguageTransition(async () => {
+      await i18n.changeLanguage(language);
+    });
+  };
 
   return (
     <DropdownMenu>
@@ -25,10 +35,16 @@ export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
           <Button
             variant={props.iconOnly ? 'ghost' : 'link'}
             size={props.iconOnly ? 'icon' : 'default'}
+            loading={isPending}
           />
         }
       >
         <LanguagesIcon className="opacity-50" />
+        {isPending && (
+          <span className="sr-only" role="status">
+            {t('common:languages.pending')}
+          </span>
+        )}
         <span className={cn(props.iconOnly && 'sr-only')}>
           {t(`common:languages.values.${i18n.language as LanguageKey}`)}
         </span>
@@ -38,9 +54,8 @@ export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
         {AVAILABLE_LANGUAGES.map((language) => (
           <DropdownMenuItem
             key={language.key}
-            onClick={() => {
-              void i18n.changeLanguage(language.key);
-            }}
+            disabled={isPending}
+            onClick={() => changeLanguage(language.key)}
           >
             <CheckIcon
               className={cn(

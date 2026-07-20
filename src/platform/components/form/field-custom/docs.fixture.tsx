@@ -10,7 +10,6 @@ import {
 } from '@/platform/components/form';
 import { onSubmit } from '@/platform/components/form/docs.utils';
 import { useFieldContext } from '@/platform/components/form/use-app-form-contexts';
-import { Button } from '@/platform/components/ui/button';
 import {
   InputGroup,
   InputGroupAddon,
@@ -37,7 +36,7 @@ const Default = () => {
         <form.AppField name="url">{() => <CustomUrlInput />}</form.AppField>
         <FormFieldHelper>Enter your website URL</FormFieldHelper>
       </FormField>
-      <Button type="submit">Submit</Button>
+      <form.SubmitButton>Submit</form.SubmitButton>
     </Form>
   );
 };

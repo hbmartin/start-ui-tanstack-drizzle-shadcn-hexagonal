@@ -1,5 +1,5 @@
 import { page, render, setupUser } from '@tests/utils';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 
 import { Form } from '@/platform/components/form/form';
 import { FormField } from '@/platform/components/form/form-field';
@@ -52,6 +52,19 @@ const FormWithSafeAction = () => {
   );
 };
 
+const FormWithAsyncSubmit = (props: { submitAction: () => Promise<void> }) => {
+  const form = useAppForm({
+    defaultValues: { email: '' },
+    onSubmit: props.submitAction,
+  });
+
+  return (
+    <Form form={form}>
+      <form.SubmitButton>Submit profile</form.SubmitButton>
+    </Form>
+  );
+};
+
 test('provides the typed form context to child components', async () => {
   const user = setupUser();
 
@@ -75,4 +88,28 @@ test('removes inert after hydration', async () => {
   render(<FormWithSafeAction />);
 
   await expect.element(page.getByTestId('form')).not.toHaveAttribute('inert');
+});
+
+test('owns pending state and prevents duplicate form submissions', async () => {
+  const user = setupUser();
+  let resolveSubmit!: () => void;
+  const submitAction = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveSubmit = resolve;
+      })
+  );
+
+  render(<FormWithAsyncSubmit submitAction={submitAction} />);
+
+  const submitButton = page.getByRole('button', { name: 'Submit profile' });
+  await user.click(submitButton);
+
+  await expect.element(submitButton).toBeDisabled();
+  await expect.element(submitButton).toHaveAttribute('aria-busy', 'true');
+  expect(submitAction).toHaveBeenCalledOnce();
+
+  resolveSubmit();
+  await expect.element(submitButton).not.toBeDisabled();
+  await expect.element(submitButton).not.toHaveAttribute('aria-busy');
 });

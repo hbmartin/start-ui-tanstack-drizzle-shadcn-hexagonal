@@ -210,12 +210,12 @@ const ErrorState = () => {
         <DataListErrorState />
       </DataList>
       <DataList>
-        <DataListErrorState retry={() => alert('Retry')} />
+        <DataListErrorState retryAction={() => alert('Retry')} />
       </DataList>
       <DataList>
         <DataListErrorState
           title="Failed to load the users"
-          retry={() => alert('Retry')}
+          retryAction={() => alert('Retry')}
         >
           Retry or contact the administator
         </DataListErrorState>

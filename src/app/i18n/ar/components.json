@@ -39,6 +39,7 @@
   },
   "searchInput": {
     "clear": "مسح البحث",
+    "pending": "جارٍ البحث...",
     "placeholder": "بحث..."
   },
   "datalist": {
@@ -54,7 +55,8 @@
     "heading": "هل أنت متأكد؟"
   },
   "searchButton": {
-    "label": "بحث"
+    "label": "بحث",
+    "pending": "جارٍ البحث..."
   },
   "sidebar": {
     "title": "الشريط الجانبي",

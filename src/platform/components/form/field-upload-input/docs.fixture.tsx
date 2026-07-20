@@ -8,7 +8,6 @@ import {
   useAppForm,
 } from '@/platform/components/form';
 import { onSubmit } from '@/platform/components/form/docs.utils';
-import { Button } from '@/platform/components/ui/button';
 
 const formSchema = z.object({ file: z.string().nullable() });
 const formDefaultValues: z.infer<typeof formSchema> = { file: null };
@@ -33,7 +32,7 @@ const Default = () => {
           )}
         </form.AppField>
       </FormField>
-      <Button type="submit">Submit</Button>
+      <form.SubmitButton>Submit</form.SubmitButton>
     </Form>
   );
 };

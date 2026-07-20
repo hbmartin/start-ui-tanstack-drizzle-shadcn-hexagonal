@@ -18,7 +18,7 @@ export const ConfirmSignOut = (props: {
   const queryClient = useQueryClient();
   return (
     <ConfirmResponsiveDrawer
-      onConfirm={async () => {
+      confirmAction={async () => {
         const response = await signOut();
         if (!response.ok) {
           toast.error(response.message ?? response.code);

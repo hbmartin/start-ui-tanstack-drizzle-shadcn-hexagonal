@@ -25,6 +25,7 @@ type MaildevMessage = {
 };
 
 const OTP_PATTERN = /\b(\d{6})\b/;
+const MAILDEV_TIMESTAMP_PRECISION_MS = 1_000;
 
 export type MaildevOtpPollEvent = {
   type:
@@ -171,6 +172,9 @@ export const readLatestOtp = async (
 ): Promise<string> => {
   const hasAfterGate = options.afterMs !== undefined;
   const afterMs = options.afterMs ?? 0;
+  const eligibleAfterMs =
+    Math.floor(afterMs / MAILDEV_TIMESTAMP_PRECISION_MS) *
+    MAILDEV_TIMESTAMP_PRECISION_MS;
   const timeoutMs = options.timeoutMs ?? 15_000;
   const intervalMs = options.intervalMs ?? 500;
   const deadline = Date.now() + timeoutMs;
@@ -203,7 +207,7 @@ export const readLatestOtp = async (
     try {
       const { messages, status } = await fetchMessages();
       const summary = summarizeMessages(messages, {
-        afterMs,
+        afterMs: eligibleAfterMs,
         email,
         hasAfterGate,
       });
@@ -217,7 +221,8 @@ export const readLatestOtp = async (
           const timestamp = messageTimestamp(message);
           return (
             isAddressedTo(message, email) &&
-            (!hasAfterGate || (timestamp !== undefined && timestamp >= afterMs))
+            (!hasAfterGate ||
+              (timestamp !== undefined && timestamp >= eligibleAfterMs))
           );
         })
         .sort((a, b) => (messageTimestamp(b) ?? 0) - (messageTimestamp(a) ?? 0))

@@ -1,4 +1,4 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ReactElement, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -9,7 +9,6 @@ import {
   FormFieldLabel,
   useAppForm,
 } from '@/platform/components/form';
-import { Button } from '@/platform/components/ui/button';
 import {
   ResponsiveDrawer,
   ResponsiveDrawerBody,
@@ -22,25 +21,51 @@ import {
 } from '@/platform/components/ui/responsive-drawer';
 
 import { accountQueries } from '@/modules/account/client';
-import { useAuthSession } from '@/modules/auth/client';
+import { authQueries, useAuthSession } from '@/modules/auth/client';
 
+import {
+  beginOptimisticCurrentSessionNameUpdate,
+  reconcileOptimisticCurrentSessionNameUpdate,
+  rollbackOptimisticCurrentSessionNameUpdate,
+} from './optimistic-current-session';
 import { zFormFieldsAccountUpdateName } from './schema';
 
 export const ChangeNameDrawer = (props: { children: ReactElement }) => {
   const { t } = useTranslation(['account']);
   const [open, setOpen] = useState(false);
   const session = useAuthSession();
+  const queryClient = useQueryClient();
   const sessionName = session.data?.user.name ?? '';
+  const currentSessionQuery = authQueries.currentSession();
 
   const updateUser = useMutation({
     ...accountQueries.updateInfo(),
-    onSuccess: async (_data, variables) => {
-      await session.refetch();
+    onMutate: ({ name }) =>
+      beginOptimisticCurrentSessionNameUpdate({
+        queryClient,
+        queryKey: currentSessionQuery.queryKey,
+        name,
+      }),
+    onError: (_error, _variables, mutationResult) => {
+      rollbackOptimisticCurrentSessionNameUpdate({
+        queryClient,
+        queryKey: currentSessionQuery.queryKey,
+        context: mutationResult,
+      });
+      toast.error(t('account:changeNameDrawer.errorMessage'));
+    },
+    onSettled: async (_data, error, variables) => {
+      await reconcileOptimisticCurrentSessionNameUpdate({
+        queryClient,
+        queryKey: currentSessionQuery.queryKey,
+      });
+
+      if (error) return;
+
       toast.success(t('account:changeNameDrawer.successMessage'));
       form.reset({ name: variables.name });
       setOpen(false);
     },
-    onError: () => toast.error(t('account:changeNameDrawer.errorMessage')),
   });
 
   const form = useAppForm({
@@ -90,14 +115,9 @@ export const ChangeNameDrawer = (props: { children: ReactElement }) => {
             </FormField>
           </ResponsiveDrawerBody>
           <ResponsiveDrawerFooter>
-            <Button
-              type="submit"
-              className="w-full"
-              size="lg"
-              loading={updateUser.isPending}
-            >
+            <form.SubmitButton className="w-full" size="lg">
               {t('account:changeNameDrawer.submitButton')}
-            </Button>
+            </form.SubmitButton>
           </ResponsiveDrawerFooter>
         </Form>
       </ResponsiveDrawerContent>

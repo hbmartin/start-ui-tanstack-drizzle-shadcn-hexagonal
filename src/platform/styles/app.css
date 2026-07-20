@@ -339,6 +339,21 @@
   }
 }
 
+@supports (view-transition-name: none) {
+  html:active-view-transition-type(book-cover)::view-transition-old(root),
+  html:active-view-transition-type(book-cover)::view-transition-new(root) {
+    animation: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+      animation: none !important;
+    }
+  }
+}
+
 @layer components {
   @keyframes float-in-space {
     0%,

@@ -14,6 +14,7 @@ export const BookCover = (props: {
   };
   variant?: 'default' | 'tiny';
   className?: string;
+  viewTransitionName?: string;
 }) => {
   const { t } = useTranslation(['book']);
 
@@ -24,14 +25,17 @@ export const BookCover = (props: {
         props.variant === 'tiny' && 'w-8 rounded-xs',
         props.className
       )}
-      style={
-        props.book.coverId
-          ? undefined
-          : {
+      style={{
+        ...(!props.book.coverId
+          ? {
               backgroundColor:
                 props.book.genre?.color ?? 'var(--book-cover-fallback)',
             }
-      }
+          : {}),
+        ...(props.viewTransitionName
+          ? { viewTransitionName: props.viewTransitionName }
+          : {}),
+      }}
     >
       <div className="absolute inset-y-0 left-0 z-10 w-[5%] bg-gradient-to-r from-book-cover-shadow-transparent to-book-cover-shadow-subtle bg-blend-screen" />
       <div className="absolute inset-y-0 left-[5%] z-10 w-[2%] bg-gradient-to-r from-book-cover-glare-transparent to-book-cover-glare-subtle bg-blend-screen" />

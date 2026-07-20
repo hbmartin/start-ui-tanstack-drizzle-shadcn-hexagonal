@@ -23,6 +23,7 @@ import { isServerFnError } from '@/modules/kernel/client';
 import type { BookId } from '@/modules/kernel/domain/ids';
 
 import { BookCover } from '../book-cover';
+import { getBookCoverViewTransitionName } from '../book-cover-transition';
 
 const isNotFoundError = (error: unknown) =>
   isServerFnError(error) && error.code === 'NOT_FOUND';
@@ -112,7 +113,10 @@ export const PageBook = (props: { bookId: BookId }) => {
                 aria-hidden
                 className="mx-auto w-full max-w-64 min-w-48 flex-1"
               >
-                <BookCover book={book} />
+                <BookCover
+                  book={book}
+                  viewTransitionName={getBookCoverViewTransitionName(book.id)}
+                />
               </div>
             </div>
           ))

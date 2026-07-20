@@ -8,7 +8,7 @@ function Default() {
     <div className="flex flex-col gap-4">
       <SearchButton
         value={searchTerm}
-        onChange={(value) => setSearchTerm(value ?? '')}
+        changeAction={(value) => setSearchTerm(value)}
       />
       <p className="text-sm text-muted-foreground">
         {searchTerm ? `Search term is ${searchTerm}` : 'No search term'}

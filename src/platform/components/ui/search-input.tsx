@@ -5,12 +5,13 @@ import React, {
   useEffectEvent,
   useRef,
   useState,
+  useTransition,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { mergeRefs } from 'react-merge-refs';
 
 import { cn } from '@/platform/lib/tailwind/utils';
-import { useValueHasChanged } from '@/platform/hooks/use-value-has-changed';
+import { useHydrated } from '@/platform/hooks/use-hydrated';
 
 import { Input } from '@/platform/components/ui/input';
 import {
@@ -24,20 +25,23 @@ import { Spinner } from '@/platform/components/ui/spinner';
 type CustomProps = {
   value?: string;
   defaultValue?: string;
-  onChange?(value?: string): void;
+  onValueChange?(value: string): void;
+  changeAction?(value: string): unknown | Promise<unknown>;
   delay?: number;
   clearLabel?: string;
   loading?: boolean;
 };
 
-type SearchInputProps = Overwrite<ComponentProps<typeof Input>, CustomProps>;
+type SearchInputProps = CustomProps &
+  Omit<ComponentProps<typeof Input>, 'defaultValue' | 'onChange' | 'value'>;
 
 export const SearchInput = ({
   ref,
   value,
   defaultValue,
   className,
-  onChange,
+  onValueChange,
+  changeAction,
   delay = 500,
   placeholder,
   clearLabel,
@@ -47,34 +51,67 @@ export const SearchInput = ({
   ...rest
 }: SearchInputProps & { ref?: React.RefObject<HTMLInputElement | null> }) => {
   const { t } = useTranslation(['components']);
+  const hydrated = useHydrated();
   const internalRef = useRef<HTMLInputElement>(null);
   const inputRef = mergeRefs([ref, internalRef]);
 
   const [search, setSearch] = useState<string>(value ?? defaultValue ?? '');
+  const [isActionPending, startActionTransition] = useTransition();
+  const userChangedValueRef = useRef(false);
+  const actionSequenceRef = useRef(0);
+  const lastObservedExternalValueRef = useRef(value ?? '');
+  const hasChangeAction = changeAction !== undefined;
 
-  const onChangeEvent = useEffectEvent((s: string) => {
-    onChange?.(s);
-  });
+  const runChangeAction = useEffectEvent(
+    async (nextValue: string, actionSequence: number) => {
+      await changeAction?.(nextValue);
+
+      if (actionSequence !== actionSequenceRef.current) return;
+
+      userChangedValueRef.current = false;
+    }
+  );
 
   useEffect(() => {
+    const nextValue = value ?? '';
+    if (nextValue === lastObservedExternalValueRef.current) return;
+
+    lastObservedExternalValueRef.current = nextValue;
+    if (userChangedValueRef.current && nextValue !== search) return;
+
+    userChangedValueRef.current = false;
+    setSearch(nextValue);
+  }, [search, value]);
+
+  useEffect(() => {
+    if (!userChangedValueRef.current || !hasChangeAction) return;
+    if (search === (value ?? '')) {
+      userChangedValueRef.current = false;
+      return;
+    }
+
+    const actionSequence = ++actionSequenceRef.current;
     const timeoutId = setTimeout(() => {
-      onChangeEvent(search);
+      startActionTransition(async () => {
+        await runChangeAction(search, actionSequence);
+      });
     }, delay);
 
     return () => clearTimeout(timeoutId);
-  }, [search, delay]);
+  }, [delay, hasChangeAction, search, value]);
 
-  const externalValueHasChanged = useValueHasChanged(value);
-  if (externalValueHasChanged && value !== search) {
-    setSearch(value ?? '');
-  }
+  const updateSearch = (nextValue: string) => {
+    userChangedValueRef.current = true;
+    setSearch(nextValue);
+    onValueChange?.(nextValue);
+  };
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setSearch(event.target.value);
+    updateSearch(event.target.value);
   };
 
   const handleClear = () => {
-    setSearch('');
+    updateSearch('');
     internalRef.current?.focus();
   };
 
@@ -86,7 +123,7 @@ export const SearchInput = ({
   };
 
   const getEndElement = () => {
-    if (loading) return <Spinner />;
+    if (loading || isActionPending) return <Spinner />;
     if (!disabled && search)
       return (
         <InputGroupButton
@@ -105,7 +142,18 @@ export const SearchInput = ({
   };
 
   return (
-    <InputGroup size={size} className={className}>
+    <InputGroup
+      size={size}
+      className={className}
+      aria-busy={loading || isActionPending || undefined}
+      data-hydrated={hydrated}
+      inert={!hydrated}
+    >
+      {isActionPending && (
+        <span className="sr-only" role="status">
+          {t('components:searchInput.pending')}
+        </span>
+      )}
       <InputGroupInput
         {...rest}
         ref={inputRef}

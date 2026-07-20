@@ -39,6 +39,7 @@
   },
   "searchInput": {
     "clear": "Futa utaftaji",
+    "pending": "Inatafuta...",
     "placeholder": "Tafuta..."
   },
   "datalist": {
@@ -54,7 +55,8 @@
     "heading": "Una uhakika?"
   },
   "searchButton": {
-    "label": "Tafuta"
+    "label": "Tafuta",
+    "pending": "Inatafuta..."
   },
   "sidebar": {
     "title": "Pembeni",

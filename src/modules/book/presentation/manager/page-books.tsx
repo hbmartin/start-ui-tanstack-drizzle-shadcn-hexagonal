@@ -38,7 +38,7 @@ export const PageBooks = (props: { search: { searchTerm?: string } }) => {
 
   const searchInputProps = {
     value: props.search.searchTerm ?? '',
-    onChange: (value: string) =>
+    changeAction: (value: string) =>
       router.navigate({
         to: '.',
         search: { searchTerm: value },
@@ -107,7 +107,7 @@ export const PageBooks = (props: { search: { searchTerm?: string } }) => {
           {ui
             .match('pending', () => <DataListLoadingState />)
             .match('error', () => (
-              <DataListErrorState retry={() => booksQuery.refetch()} />
+              <DataListErrorState retryAction={() => booksQuery.refetch()} />
             ))
             .match('empty', () => <DataListEmptyState />)
             .match('empty-search', ({ searchTerm }) => (

@@ -11,7 +11,6 @@ import {
 } from '@/platform/components/form';
 import { onSubmit } from '@/platform/components/form/docs.utils';
 import { useFieldContext } from '@/platform/components/form/use-app-form-contexts';
-import { Button } from '@/platform/components/ui/button';
 import {
   InputGroup,
   InputGroupAddon,
@@ -42,7 +41,7 @@ const CustomField = () => {
           {() => <CustomWebsiteInput />}
         </form.AppField>
       </FormField>
-      <Button type="submit">Submit</Button>
+      <form.SubmitButton>Submit</form.SubmitButton>
     </Form>
   );
 };

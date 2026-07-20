@@ -15,7 +15,6 @@ import {
   FormFieldLabel,
   useAppForm,
 } from '@/platform/components/form';
-import { Button } from '@/platform/components/ui/button';
 import { ButtonLink } from '@/platform/components/ui/button-link';
 
 import {
@@ -106,7 +105,6 @@ export default function PageLoginVerify({
     },
   });
 
-  const isSubmitting = useStore(form.store, (s) => s.isSubmitting);
   const isInvalidAfterSubmit = useStore(
     form.store,
     (s) => s.isSubmitted && !s.isValid
@@ -161,9 +159,9 @@ export default function PageLoginVerify({
             })}
           </FormFieldHelper>
         </FormField>
-        <Button loading={isSubmitting} type="submit" size="lg">
+        <form.SubmitButton size="lg">
           {t(`${I18N_KEY_PAGE_PREFIX}.confirm`)}
-        </Button>
+        </form.SubmitButton>
         {emailOtpHint}
       </div>
     </Form>

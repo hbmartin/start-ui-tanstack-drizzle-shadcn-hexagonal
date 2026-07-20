@@ -99,13 +99,9 @@ export const PageOnboarding = () => {
             {(field) => <field.FieldText type="text" size="lg" />}
           </form.AppField>
         </FormField>
-        <Button
-          type="submit"
-          size="lg"
-          loading={submitOnboarding.isPending || submitOnboarding.isSuccess}
-        >
+        <form.SubmitButton size="lg" loading={submitOnboarding.isSuccess}>
           {t('auth:pageOnboarding.submit')}
-        </Button>
+        </form.SubmitButton>
       </Form>
     </LayoutLogin>
   );

@@ -18,7 +18,6 @@ import {
   ManagerPageLayoutTopBarTitle as PageLayoutTopBarTitle,
 } from '@/platform/components/page-layout';
 import { PreventNavigation } from '@/platform/components/prevent-navigation';
-import { Button } from '@/platform/components/ui/button';
 import { Card, CardContent } from '@/platform/components/ui/card';
 import { Skeleton } from '@/platform/components/ui/skeleton';
 
@@ -136,14 +135,9 @@ export const PageUserUpdate = (props: { userId: UserId }) => {
           <PageLayoutTopBar
             startActions={<BackButton />}
             endActions={
-              <Button
-                size="sm"
-                type="submit"
-                className="min-w-20"
-                loading={userUpdate.isPending}
-              >
+              <form.SubmitButton size="sm" className="min-w-20">
                 {t('user:manager.update.updateButton.label')}
-              </Button>
+              </form.SubmitButton>
             }
           >
             <PageLayoutTopBarTitle>

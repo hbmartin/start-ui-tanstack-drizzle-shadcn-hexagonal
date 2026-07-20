@@ -7,7 +7,6 @@ import {
   useAppForm,
 } from '@/platform/components/form';
 import { onSubmit } from '@/platform/components/form/docs.utils';
-import { Button } from '@/platform/components/ui/button';
 
 const Default = () => {
   const form = useAppForm({
@@ -26,7 +25,7 @@ const Default = () => {
           {(field) => <field.FieldNumber />}
         </form.AppField>
       </FormField>
-      <Button type="submit">Submit</Button>
+      <form.SubmitButton>Submit</form.SubmitButton>
     </Form>
   );
 };

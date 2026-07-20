@@ -1,6 +1,7 @@
 {
   "languages": {
     "label": "Langue",
+    "pending": "Changement de langue...",
     "values": {
       "en": "Anglais",
       "fr": "Français",
