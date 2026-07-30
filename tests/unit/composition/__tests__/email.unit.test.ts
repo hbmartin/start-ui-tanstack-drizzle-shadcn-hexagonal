@@ -30,6 +30,7 @@ vi.mock('@/modules/kernel/backend', () => ({
     info: vi.fn(),
     warn: vi.fn(),
   }),
+  getDeployTargetConfig: () => ({ deployTarget: 'test-target' }),
   getEmailConfig: () => testState.emailConfig,
 }));
 

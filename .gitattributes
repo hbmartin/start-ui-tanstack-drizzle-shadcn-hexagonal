@@ -1,0 +1,14 @@
+# Adopter-owned paths: product identity that template upgrades must never
+# clobber. The `ours` merge driver keeps YOUR side of these files when
+# `pnpm upgrade:template` merges an upstream release (the script enables the
+# driver via `git config merge.ours.driver true`). Keep this list tight —
+# everything else stays upstream-owned so it keeps receiving fixes.
+# See docs/upgrading.md.
+src/app/adopter/** merge=ours
+public/favicon.ico merge=ours
+public/favicon.svg merge=ours
+public/favicon-96x96.png merge=ours
+public/apple-touch-icon.png merge=ours
+public/web-app-manifest-192x192.png merge=ours
+public/web-app-manifest-512x512.png merge=ours
+public/site.webmanifest merge=ours

@@ -28,6 +28,19 @@ pnpm create start-ui -t web myApp
 
 That will scaffold a new folder with the latest version of 🚀 Start UI <small>[web]</small> 🎉
 
+## Branding & staying upgradeable
+
+Product identity lives in one place: the **adopter zone** (`src/app/adopter/adopter.config.ts` plus the brand assets in `public/`). Change the app name, logo, theme tokens, and default feature flags there — no platform file needs to change.
+
+Those paths are protected with `merge=ours` in `.gitattributes`, so your fork can keep pulling upstream template releases (security patches, dependency bumps, architecture fixes) without losing its identity:
+
+```bash
+pnpm upgrade:template -- --list          # see upstream releases
+pnpm upgrade:template -- --tag <tag>     # merge one in
+```
+
+See [docs/upgrading.md](docs/upgrading.md) for the full model.
+
 ## Setup your IDE
 
 - VS Code

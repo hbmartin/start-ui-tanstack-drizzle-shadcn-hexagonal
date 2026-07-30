@@ -14,12 +14,16 @@ import {
 } from '@/modules/email';
 import {
   AppError,
+  DEPLOY_TARGET_TAG_NAME,
   type EmailRecipientList,
   toEmailProviderMessageId,
   toEmailRecipientList,
   type TransactionRunner,
 } from '@/modules/kernel';
-import { getEmailConfig } from '@/modules/kernel/backend';
+import {
+  getDeployTargetConfig,
+  getEmailConfig,
+} from '@/modules/kernel/backend';
 
 import { getDefaultResendClient } from './resend-client';
 
@@ -194,6 +198,19 @@ export class EmailGatewayResend implements EmailGateway {
       );
     }
 
+    // Every outbound email carries the running environment's deploy target so
+    // inbound status webhooks from a shared Resend account can be attributed
+    // (and foreign-environment events dropped) — see `checkDeployTarget`.
+    const tags = [
+      ...(input.tags ?? []).filter(
+        (tag) => tag.name !== DEPLOY_TARGET_TAG_NAME
+      ),
+      {
+        name: DEPLOY_TARGET_TAG_NAME,
+        value: getDeployTargetConfig().deployTarget,
+      },
+    ];
+
     const payload: CreateEmailOptions = {
       from: emailConfig.from,
       to: input.to,
@@ -209,7 +226,7 @@ export class EmailGatewayResend implements EmailGateway {
             attachments: input.attachments as CreateEmailOptions['attachments'],
           }
         : {}),
-      ...(input.tags ? { tags: input.tags } : {}),
+      tags,
     };
 
     const resend = this.resend ?? getDefaultResendClient();

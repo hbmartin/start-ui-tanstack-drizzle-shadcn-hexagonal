@@ -2,6 +2,7 @@ import type {
   ApplicationResult,
   IdGenerator,
   Logger,
+  OutboxRepository,
   PermissionChecker,
   TransactionRunner,
 } from '@/modules/kernel';
@@ -19,6 +20,8 @@ import type {
 
 export type BookTransactionContext = {
   bookRepository: BookRepository;
+  /** Lifecycle events are appended in the same transaction as the write. */
+  outboxRepository: OutboxRepository;
 };
 
 export type BookUseCaseDeps = {

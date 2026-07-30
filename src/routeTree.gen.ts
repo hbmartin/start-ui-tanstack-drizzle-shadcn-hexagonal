@@ -37,6 +37,7 @@ import { Route as ManagerUsersIdIndexRouteImport } from './routes/manager/users/
 import { Route as ManagerBooksNewIndexRouteImport } from './routes/manager/books/new.index'
 import { Route as ManagerBooksIdIndexRouteImport } from './routes/manager/books/$id.index'
 import { Route as AppBooksIdIndexRouteImport } from './routes/app/books/$id.index'
+import { Route as ApiTasksOutboxDrainRouteImport } from './routes/api/tasks.outbox.drain'
 import { Route as ApiDevEmailTemplateRouteImport } from './routes/api/dev.email.$template'
 import { Route as ManagerUsersIdUpdateIndexRouteImport } from './routes/manager/users/$id.update.index'
 import { Route as ManagerBooksIdUpdateIndexRouteImport } from './routes/manager/books/$id.update.index'
@@ -184,6 +185,11 @@ const AppBooksIdIndexRoute = AppBooksIdIndexRouteImport.update({
   path: '/books/$id/',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const ApiTasksOutboxDrainRoute = ApiTasksOutboxDrainRouteImport.update({
+  id: '/api/tasks/outbox/drain',
+  path: '/api/tasks/outbox/drain',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiDevEmailTemplateRoute = ApiDevEmailTemplateRouteImport.update({
   id: '/api/dev/email/$template',
   path: '/api/dev/email/$template',
@@ -239,6 +245,7 @@ export interface FileRoutesByFullPath {
   '/manager/dashboard/': typeof ManagerDashboardIndexRoute
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
+  '/api/tasks/outbox/drain': typeof ApiTasksOutboxDrainRoute
   '/app/books/$id/': typeof AppBooksIdIndexRoute
   '/manager/books/$id/': typeof ManagerBooksIdIndexRoute
   '/manager/books/new/': typeof ManagerBooksNewIndexRoute
@@ -270,6 +277,7 @@ export interface FileRoutesByTo {
   '/manager/dashboard': typeof ManagerDashboardIndexRoute
   '/manager/users': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
+  '/api/tasks/outbox/drain': typeof ApiTasksOutboxDrainRoute
   '/app/books/$id': typeof AppBooksIdIndexRoute
   '/manager/books/$id': typeof ManagerBooksIdIndexRoute
   '/manager/books/new': typeof ManagerBooksNewIndexRoute
@@ -306,6 +314,7 @@ export interface FileRoutesById {
   '/manager/dashboard/': typeof ManagerDashboardIndexRoute
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
+  '/api/tasks/outbox/drain': typeof ApiTasksOutboxDrainRoute
   '/app/books/$id/': typeof AppBooksIdIndexRoute
   '/manager/books/$id/': typeof ManagerBooksIdIndexRoute
   '/manager/books/new/': typeof ManagerBooksNewIndexRoute
@@ -343,6 +352,7 @@ export interface FileRouteTypes {
     | '/manager/dashboard/'
     | '/manager/users/'
     | '/api/dev/email/$template'
+    | '/api/tasks/outbox/drain'
     | '/app/books/$id/'
     | '/manager/books/$id/'
     | '/manager/books/new/'
@@ -374,6 +384,7 @@ export interface FileRouteTypes {
     | '/manager/dashboard'
     | '/manager/users'
     | '/api/dev/email/$template'
+    | '/api/tasks/outbox/drain'
     | '/app/books/$id'
     | '/manager/books/$id'
     | '/manager/books/new'
@@ -409,6 +420,7 @@ export interface FileRouteTypes {
     | '/manager/dashboard/'
     | '/manager/users/'
     | '/api/dev/email/$template'
+    | '/api/tasks/outbox/drain'
     | '/app/books/$id/'
     | '/manager/books/$id/'
     | '/manager/books/new/'
@@ -433,6 +445,7 @@ export interface RootRouteChildren {
   ApiTelemetrySentryTunnelRoute: typeof ApiTelemetrySentryTunnelRoute
   ApiWebhooksResendRoute: typeof ApiWebhooksResendRoute
   ApiDevEmailTemplateRoute: typeof ApiDevEmailTemplateRoute
+  ApiTasksOutboxDrainRoute: typeof ApiTasksOutboxDrainRoute
   ApiTelemetryOtelV1MetricsRoute: typeof ApiTelemetryOtelV1MetricsRoute
   ApiTelemetryOtelV1TracesRoute: typeof ApiTelemetryOtelV1TracesRoute
 }
@@ -635,6 +648,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppBooksIdIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/api/tasks/outbox/drain': {
+      id: '/api/tasks/outbox/drain'
+      path: '/api/tasks/outbox/drain'
+      fullPath: '/api/tasks/outbox/drain'
+      preLoaderRoute: typeof ApiTasksOutboxDrainRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/dev/email/$template': {
       id: '/api/dev/email/$template'
       path: '/api/dev/email/$template'
@@ -764,6 +784,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiTelemetrySentryTunnelRoute: ApiTelemetrySentryTunnelRoute,
   ApiWebhooksResendRoute: ApiWebhooksResendRoute,
   ApiDevEmailTemplateRoute: ApiDevEmailTemplateRoute,
+  ApiTasksOutboxDrainRoute: ApiTasksOutboxDrainRoute,
   ApiTelemetryOtelV1MetricsRoute: ApiTelemetryOtelV1MetricsRoute,
   ApiTelemetryOtelV1TracesRoute: ApiTelemetryOtelV1TracesRoute,
 }

@@ -16,6 +16,14 @@ const transactionApplicationErrorBoundaryFiles = new Set([
     'book',
     'application',
     'use-cases',
+    'create-book.ts'
+  ),
+  path.join(
+    'src',
+    'modules',
+    'book',
+    'application',
+    'use-cases',
     'update-book.ts'
   ),
   path.join(
@@ -25,6 +33,38 @@ const transactionApplicationErrorBoundaryFiles = new Set([
     'application',
     'use-cases',
     'process-email-status-event.ts'
+  ),
+  path.join(
+    'src',
+    'modules',
+    'lifecycle-events',
+    'application',
+    'use-cases',
+    'drain-outbox.ts'
+  ),
+]);
+/**
+ * Use cases that own a transaction boundary may throw INSIDE the
+ * `transactionRunner.run` callback to abort the transaction (e.g. roll a
+ * write back when its outbox append fails), provided they catch at the
+ * boundary and convert to Result.Error — see the Result policy in AGENTS.md.
+ */
+const transactionAbortThrowFiles = new Set([
+  path.join(
+    'src',
+    'modules',
+    'book',
+    'application',
+    'use-cases',
+    'create-book.ts'
+  ),
+  path.join(
+    'src',
+    'modules',
+    'lifecycle-events',
+    'application',
+    'use-cases',
+    'drain-outbox.ts'
   ),
 ]);
 const protectedRouteGuardSpecs = [
@@ -871,7 +911,16 @@ describe('strict modular monolith layout', () => {
         )
       );
 
-    expect(findImportViolations(applicationFiles, /\bthrow\b/g)).toEqual([]);
+    const throwFiles = findImportViolations(applicationFiles, /\bthrow\b/g);
+    const unexpectedThrowFiles = throwFiles.filter(
+      (file) => !transactionAbortThrowFiles.has(file)
+    );
+
+    expect(unexpectedThrowFiles).toEqual([]);
+    // Every transaction-abort thrower must also be a catching boundary.
+    for (const file of transactionAbortThrowFiles) {
+      expect(transactionApplicationErrorBoundaryFiles.has(file)).toBe(true);
+    }
 
     const tryCatchFiles = findImportViolations(
       applicationFiles,

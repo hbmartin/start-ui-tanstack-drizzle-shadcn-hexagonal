@@ -14,9 +14,11 @@ import { getPageTitle } from '@/platform/lib/get-page-title';
 import i18n from '@/platform/lib/i18n';
 import { AVAILABLE_LANGUAGES } from '@/platform/lib/i18n/constants';
 
+import { BrandContext } from '@/platform/components/brand/brand-context';
 import { PageError } from '@/platform/components/errors/page-error';
 import { RouteError } from '@/platform/components/errors/route-error';
 
+import { adopterConfig } from '@/app/adopter';
 import {
   EnvHint,
   getEnvHintTitlePrefix,
@@ -127,6 +129,9 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         fontSize: languageConfig?.fontScale
           ? `${languageConfig.fontScale * 100}%`
           : undefined,
+        // Adopter theme-token overrides layer over the platform theme
+        // (custom properties cascade from the root element).
+        ...adopterConfig.themeTokens,
       }}
     >
       <head>
@@ -134,7 +139,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         <HeadContent />
       </head>
       <body className="flex min-h-dvh flex-col">
-        {children}
+        <BrandContext value={adopterConfig.brand}>{children}</BrandContext>
         <EnvHint />
         <Scripts />
       </body>

@@ -8,6 +8,10 @@ import {
   type EmailUseCases,
 } from '@/modules/email';
 import type { Logger } from '@/modules/kernel';
+import {
+  checkDeployTarget,
+  DEPLOY_TARGET_TAG_NAME,
+} from '@/modules/kernel/domain/deploy-target';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
   toEmailProviderMessageId,
@@ -38,6 +42,12 @@ type ResendWebhookHandlerDeps = {
   logger?: Pick<Logger, 'warn'>;
   maxBodyBytes?: number;
   verifier: ResendWebhookVerifier;
+  /**
+   * This environment's deploy target. Events stamped with a different
+   * `deploy_target` tag (another environment sharing the Resend account) are
+   * acknowledged but ignored. Untagged events are still processed.
+   */
+  deployTarget?: string;
   /** Trusted reverse-proxy hops in front of the app (see `getClientIp`). */
   trustedProxyDepth?: number;
   /** Per-IP webhook hits allowed per minute before returning HTTP 429. */
@@ -222,6 +232,30 @@ const readBoundedTextBody = async (request: Request, maxBodyBytes: number) => {
 const recipientFromEvent = (event: TrackedResendEmailEvent) =>
   toEmailRecipientList(event.data.to.join(', '));
 
+/**
+ * Resend has echoed tags both as a name/value list and as a key/value record
+ * across payload versions; unknown shapes degrade to "no tag" rather than
+ * rejecting an otherwise-valid signed event.
+ */
+const resendWebhookTagsSchema = z.union([
+  z.array(z.object({ name: z.string(), value: z.string() }).passthrough()),
+  z.record(z.string(), z.string()),
+]);
+
+const deployTargetFromEventTags = (
+  data: Record<string, unknown>
+): string | undefined => {
+  const parsed = resendWebhookTagsSchema.safeParse(data.tags);
+  if (!parsed.success) return undefined;
+
+  if (Array.isArray(parsed.data)) {
+    return parsed.data.find((tag) => tag.name === DEPLOY_TARGET_TAG_NAME)
+      ?.value;
+  }
+
+  return parsed.data[DEPLOY_TARGET_TAG_NAME];
+};
+
 const parseVerifiedEvent = (
   event: unknown
 ): BoxedResult<ResendWebhookEvent, AppError> => {
@@ -252,6 +286,7 @@ export const createResendWebhookHandlers = ({
   logger,
   maxBodyBytes,
   verifier,
+  deployTarget,
   trustedProxyDepth,
   rateLimitPerMinute,
   rateLimiter = defaultRateLimiter,
@@ -340,6 +375,24 @@ export const createResendWebhookHandlers = ({
 
     const trackedEvent = parseTrackedEvent(event.get());
     if (trackedEvent.isError()) throw trackedEvent.getError();
+
+    if (deployTarget !== undefined) {
+      const deployTargetCheck = checkDeployTarget(
+        deployTarget,
+        deployTargetFromEventTags(trackedEvent.get().data)
+      );
+      if (deployTargetCheck.type === 'deploy_target_foreign') {
+        logger?.warn({
+          details: {
+            provider: EMAIL_PROVIDER_RESEND,
+            expected: deployTarget,
+            incoming: deployTargetCheck.incoming,
+          },
+          event: 'security.webhook_foreign_deploy_target',
+        });
+        return Response.json({ ok: true, ignored: true });
+      }
+    }
 
     const externalId = toEmailProviderMessageId(
       trackedEvent.get().data.email_id

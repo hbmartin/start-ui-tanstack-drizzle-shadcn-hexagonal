@@ -403,4 +403,112 @@ describe('Resend webhook HTTP handlers', () => {
       duplicate: true,
     });
   });
+
+  describe('deploy-target isolation', () => {
+    const makeTaggedEmailEvent = (tags: unknown) => {
+      const event = makeEmailEvent();
+      event.data.tags = tags;
+      return event as ExplicitAny;
+    };
+
+    it('ignores events stamped with a foreign deploy_target tag and logs a security event', async () => {
+      const processStatusEvent = vi.fn();
+      const logger = { warn: vi.fn() };
+      const handlers = createResendWebhookHandlers({
+        getUseCases: () => ({ processStatusEvent }),
+        logger,
+        deployTarget: 'staging',
+        verifier: {
+          verify: vi.fn(() =>
+            makeTaggedEmailEvent([
+              { name: 'deploy_target', value: 'production' },
+            ])
+          ),
+        },
+      });
+
+      const response = await handlers.receive(makeRequest());
+
+      await expect(response.json()).resolves.toEqual({
+        ok: true,
+        ignored: true,
+      });
+      expect(processStatusEvent).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'security.webhook_foreign_deploy_target',
+          details: expect.objectContaining({
+            expected: 'staging',
+            incoming: 'production',
+          }),
+        })
+      );
+    });
+
+    it('processes events whose deploy_target tag matches this environment', async () => {
+      const processStatusEvent = vi.fn(async () =>
+        Result.Ok({
+          type: 'email_status_event_processed' as const,
+          record: {} as ExplicitAny,
+        })
+      );
+      const handlers = createResendWebhookHandlers({
+        getUseCases: () => ({ processStatusEvent }),
+        deployTarget: 'staging',
+        verifier: {
+          verify: vi.fn(() =>
+            makeTaggedEmailEvent([{ name: 'deploy_target', value: 'Staging' }])
+          ),
+        },
+      });
+
+      const response = await handlers.receive(makeRequest());
+
+      expect(response.status).toBe(200);
+      expect(processStatusEvent).toHaveBeenCalledOnce();
+    });
+
+    it('reads the deploy_target tag from record-shaped tags', async () => {
+      const processStatusEvent = vi.fn();
+      const handlers = createResendWebhookHandlers({
+        getUseCases: () => ({ processStatusEvent }),
+        deployTarget: 'staging',
+        verifier: {
+          verify: vi.fn(() =>
+            makeTaggedEmailEvent({ deploy_target: 'production' })
+          ),
+        },
+      });
+
+      const response = await handlers.receive(makeRequest());
+
+      await expect(response.json()).resolves.toEqual({
+        ok: true,
+        ignored: true,
+      });
+      expect(processStatusEvent).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, 'not-a-tag-shape', { deploy_target: 42 }])(
+      'still processes events without an attributable deploy_target tag (%j)',
+      async (tags) => {
+        const processStatusEvent = vi.fn(async () =>
+          Result.Ok({
+            type: 'email_status_event_processed' as const,
+            record: {} as ExplicitAny,
+          })
+        );
+        const handlers = createResendWebhookHandlers({
+          getUseCases: () => ({ processStatusEvent }),
+          deployTarget: 'staging',
+          verifier: { verify: vi.fn(() => makeTaggedEmailEvent(tags)) },
+        });
+
+        const response = await handlers.receive(makeRequest());
+
+        expect(response.status).toBe(200);
+        expect(processStatusEvent).toHaveBeenCalledOnce();
+      }
+    );
+  });
 });

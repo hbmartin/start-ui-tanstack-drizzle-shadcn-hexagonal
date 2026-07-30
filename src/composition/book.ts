@@ -9,10 +9,12 @@ import {
 import { createBookRepository as createBookRepositoryDrizzle } from '@/modules/book/infrastructure/drizzle/book-repository-drizzle';
 import type {
   BookCoverObjectKey,
+  OutboxRepository,
   TransactionRunner,
   UserId,
 } from '@/modules/kernel';
 import { BetterUploadObjectStorage } from '@/modules/kernel/backend';
+import { createOutboxRepository } from '@/modules/kernel/infrastructure/db/outbox-repository-drizzle';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 
 import { getSecondaryStore } from './auth';
@@ -23,6 +25,7 @@ export type BookOverrides = {
   kernel?: Kernel;
   bookRepository?: BookRepository;
   coverStorage?: BookCoverStorage;
+  outboxRepository?: OutboxRepository;
 };
 
 const createBookRepository = (db: DbLike): BookRepository =>
@@ -71,18 +74,32 @@ const createBookCoverStorage = (): BookCoverStorage => {
 
 const createBookTransactionRunner = (
   kernel: Kernel,
-  bookRepositoryOverride?: BookRepository
+  overrides?: Pick<BookOverrides, 'bookRepository' | 'outboxRepository'>
 ): TransactionRunner<BookTransactionContext> => {
+  const bookRepositoryOverride = overrides?.bookRepository;
+  const outboxRepositoryOverride = overrides?.outboxRepository;
+  const createBoundOutboxRepository = (db: DbLike) =>
+    outboxRepositoryOverride ??
+    createOutboxRepository({ db, deployTarget: kernel.deployTarget });
+
   if (bookRepositoryOverride) {
     return {
-      run: (work) => work({ bookRepository: bookRepositoryOverride }),
+      run: (work) =>
+        work({
+          bookRepository: bookRepositoryOverride,
+          outboxRepository: createBoundOutboxRepository(kernel.db),
+        }),
     };
   }
 
   return {
     run: (work, options) =>
       kernel.transactionRunner.run(
-        (db) => work({ bookRepository: createBookRepository(db) }),
+        (db) =>
+          work({
+            bookRepository: createBookRepository(db),
+            outboxRepository: createBoundOutboxRepository(db),
+          }),
         options
       ),
   };
@@ -94,10 +111,10 @@ const buildBookUseCases = (overrides?: BookOverrides) => {
     overrides?.bookRepository ?? createBookRepository(kernel.db);
   return createBookUseCases({
     bookRepository,
-    transactionRunner: createBookTransactionRunner(
-      kernel,
-      overrides?.bookRepository
-    ),
+    transactionRunner: createBookTransactionRunner(kernel, {
+      bookRepository: overrides?.bookRepository,
+      outboxRepository: overrides?.outboxRepository,
+    }),
     idGenerator: kernel.idGenerator,
     permissionChecker: kernel.permissionChecker,
     coverStorage: overrides?.coverStorage ?? createBookCoverStorage(),

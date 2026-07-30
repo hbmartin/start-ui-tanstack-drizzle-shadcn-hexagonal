@@ -36,6 +36,7 @@ const testState = vi.hoisted(() => {
 });
 
 vi.mock('@/modules/kernel/backend', () => ({
+  getDeployTargetConfig: () => ({ deployTarget: 'test-target' }),
   getEmailConfig: () => testState.emailConfig,
 }));
 
@@ -201,6 +202,7 @@ describe('EmailGatewayResend', () => {
         subject: 'Login code',
         react: template,
         text: 'Plain text login code',
+        tags: [{ name: 'deploy_target', value: 'test-target' }],
       },
       { idempotencyKey: 'key-1' }
     );
@@ -214,6 +216,44 @@ describe('EmailGatewayResend', () => {
       metadata: { source: 'test' },
     });
     expect(transactionRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps caller tags but owns the deploy_target tag', async () => {
+    const statusRepository = makeStatusRepository();
+    const resend = {
+      emails: {
+        send: vi.fn(async () => ({
+          data: { id: 'email_123' },
+          error: null,
+          headers: null,
+        })),
+      },
+    } as unknown as Resend;
+    const { EmailGatewayResend } = await loadGateway();
+
+    await new EmailGatewayResend({
+      statusTransactionRunner: makeStatusTransactionRunner(statusRepository),
+      resend,
+    }).sendEmail({
+      to: recipient,
+      subject: 'Login code',
+      template: createElement('div', null, '123456'),
+      idempotencyKey,
+      tags: [
+        { name: 'category', value: 'login_code' },
+        { name: 'deploy_target', value: 'spoofed' },
+      ],
+    });
+
+    expect(resend.emails.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tags: [
+          { name: 'category', value: 'login_code' },
+          { name: 'deploy_target', value: 'test-target' },
+        ],
+      }),
+      { idempotencyKey: 'key-1' }
+    );
   });
 
   it('short-circuits duplicate sends when the idempotency key already has an external ID', async () => {

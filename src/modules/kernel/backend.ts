@@ -2,6 +2,7 @@ export {
   getAuthProviderConfig,
   getBetterAuthConfig,
 } from './infrastructure/config/auth';
+export { getDeployTargetConfig } from './infrastructure/config/deploy-target';
 export { getEmailConfig } from './infrastructure/config/email';
 export {
   getSeedAccountEmails,
@@ -9,6 +10,7 @@ export {
   isProductionSeedAllowed,
 } from './infrastructure/config/env-schema';
 export { getHttpConfig } from './infrastructure/config/http';
+export { getOutboxConfig } from './infrastructure/config/outbox';
 export { getRedisConfig } from './infrastructure/config/redis';
 export { validateServerConfig } from './infrastructure/config/server';
 export {

@@ -6,10 +6,10 @@ import {
   getGlobalStartContext,
 } from '@tanstack/react-start';
 
+import { configureAdopter, createAdopterFlags } from '@/app/adopter';
 import { createClientQueryClient } from '@/composition/client-query';
 import { telemetryProxy } from '@/composition/telemetry';
 import { authQueries } from '@/modules/auth/client';
-import { createNoOpFlags } from '@/platform/flags';
 import { readCspNonceFromMeta } from '@/platform/http/csp-nonce';
 import type {
   CurrentSessionLike,
@@ -63,7 +63,10 @@ if (import.meta.env.SSR && shouldAutoInitTelemetry) {
   );
 }
 
-const flags = createNoOpFlags();
+// Apply the adopter zone's identity (app name, flags) at boot — the seam that
+// lets forks rebrand without touching platform code (see docs/upgrading.md).
+configureAdopter();
+const flags = createAdopterFlags();
 
 type RequestContextWithCspNonce = {
   cspNonce?: unknown;

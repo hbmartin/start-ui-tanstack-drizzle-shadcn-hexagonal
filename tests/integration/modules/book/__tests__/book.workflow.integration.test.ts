@@ -18,6 +18,7 @@ import {
   type ApplicationResult,
   type BookId,
   type Logger,
+  type OutboxRepository,
   type PermissionChecker,
   toBookCoverObjectKey,
   toBookId,
@@ -173,10 +174,23 @@ function getOk<TOutcome extends { type: string }>(
 describe('book public workflow integration', () => {
   it('creates, lists, updates, rejects duplicates, and deletes through the public use-case API', async () => {
     const bookRepository = new InMemoryBookRepository();
+    const recordedEnvelopes: unknown[] = [];
+    const outboxRepository: OutboxRepository = {
+      record: async (envelope) => {
+        recordedEnvelopes.push(envelope);
+        return Result.Ok({ type: 'outbox_event_deduplicated' as const });
+      },
+      claimBatch: async () =>
+        Result.Ok({ type: 'outbox_batch_claimed' as const, records: [] }),
+      markPublished: async () =>
+        Result.Ok({ type: 'outbox_event_published' as const }),
+      markFailed: async () =>
+        Result.Ok({ type: 'outbox_event_failure_recorded' as const }),
+    };
     const useCases = createBookUseCases({
       bookRepository,
       transactionRunner: {
-        run: (work) => work({ bookRepository }),
+        run: (work) => work({ bookRepository, outboxRepository }),
       },
       idGenerator: { createId: () => toGeneratedId('cover-id') },
       logger,
@@ -206,6 +220,19 @@ describe('book public workflow integration', () => {
     });
 
     const createdId = expectBookId(created);
+
+    expect(recordedEnvelopes).toEqual([
+      {
+        type: 'book.created',
+        aggregateType: 'book',
+        aggregateId: createdId,
+        payload: {
+          bookId: createdId,
+          title: 'Dune',
+          author: 'Frank Herbert',
+        },
+      },
+    ]);
 
     const listed = await useCases.list({
       currentUserId,

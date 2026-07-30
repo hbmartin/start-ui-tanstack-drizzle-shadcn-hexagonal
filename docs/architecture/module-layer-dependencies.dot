@@ -73,6 +73,16 @@ digraph ModuleLayerDependencies {
     "kernel/transport" [label="transport", fillcolor="#ede9fe"];
   }
 
+  subgraph cluster_lifecycle_events {
+    label="lifecycle-events";
+    color="#d1d5db";
+    style="rounded";
+    "lifecycle-events/public" [label="public", fillcolor="#f3f4f6"];
+    "lifecycle-events/application" [label="application", fillcolor="#dbeafe"];
+    "lifecycle-events/domain" [label="domain", fillcolor="#dcfce7"];
+    "lifecycle-events/transport" [label="transport", fillcolor="#ede9fe"];
+  }
+
   subgraph cluster_user {
     label="user";
     color="#d1d5db";
@@ -185,6 +195,12 @@ digraph ModuleLayerDependencies {
   "kernel/public" -> "kernel/infrastructure" [style="solid"];
   "kernel/public" -> "kernel/transport" [style="dashed"];
   "kernel/transport" -> "kernel/domain" [style="solid"];
+  "lifecycle-events/application" -> "kernel/domain" [style="solid"];
+  "lifecycle-events/public" -> "kernel/infrastructure" [style="solid"];
+  "lifecycle-events/public" -> "kernel/public" [style="solid"];
+  "lifecycle-events/public" -> "lifecycle-events/application" [style="solid"];
+  "lifecycle-events/public" -> "lifecycle-events/domain" [style="dotted"];
+  "lifecycle-events/public" -> "lifecycle-events/transport" [style="solid"];
   "user/application" -> "user/domain" [style="solid"];
   "user/domain" -> "kernel/domain" [style="solid"];
   "user/presentation" -> "auth/public" [style="solid"];

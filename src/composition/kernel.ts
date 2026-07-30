@@ -9,6 +9,7 @@ import type { PermissionChecker } from '@/modules/kernel/application/ports/permi
 import type { TransactionRunner } from '@/modules/kernel/application/ports/transaction-runner';
 import type { UserId } from '@/modules/kernel/domain/ids';
 import { systemClock } from '@/modules/kernel/infrastructure/clock/system-clock';
+import { getDeployTargetConfig } from '@/modules/kernel/infrastructure/config/deploy-target';
 import {
   createTransactionRunner,
   type Database,
@@ -86,6 +87,7 @@ const createProductionPermissionChecker = (): PermissionChecker => ({
 
 export type Kernel = {
   db: Database;
+  deployTarget: string;
   logger: Logger;
   telemetry: TelemetryAdapter;
   clock: Clock;
@@ -102,6 +104,7 @@ const buildDefaultKernel = (): Kernel => {
   const clock = systemClock;
   return {
     db,
+    deployTarget: getDeployTargetConfig().deployTarget,
     logger: createProductionLogger(),
     telemetry: telemetryProxy,
     clock,
@@ -124,6 +127,7 @@ export const getKernel = (overrides?: KernelOverrides): Kernel => {
   const clock = overrides.clock ?? base.clock;
   return {
     db,
+    deployTarget: overrides.deployTarget ?? base.deployTarget,
     logger: overrides.logger ?? base.logger,
     telemetry: overrides.telemetry ?? base.telemetry,
     clock,

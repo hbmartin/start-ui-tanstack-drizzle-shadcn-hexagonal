@@ -55,6 +55,7 @@ describe('browser mutation route coverage', () => {
 
     expect(postRoutes).toEqual([
       '/api/auth/$',
+      '/api/tasks/outbox/drain',
       '/api/telemetry/logs',
       '/api/telemetry/otel/v1/metrics',
       '/api/telemetry/otel/v1/traces',
@@ -71,8 +72,12 @@ describe('browser mutation route coverage', () => {
       '/api/upload',
       ...SIDE_EFFECT_ROUTE_PATHNAMES,
     ]);
+    // /api/auth/$ is CSRF-protected by Better Auth, /api/webhooks/resend by
+    // Svix signature verification, and /api/tasks/outbox/drain by the
+    // OUTBOX_DRAIN_SECRET bearer token (server-to-server cron, no session).
     expect(externallyProtectedRoutes).toEqual([
       '/api/auth/$',
+      '/api/tasks/outbox/drain',
       '/api/webhooks/resend',
     ]);
 

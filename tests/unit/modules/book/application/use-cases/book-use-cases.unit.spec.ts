@@ -6,7 +6,11 @@ import type { BookCoverStorage, BookRepository } from '@/modules/book';
 import type { BookUseCaseDeps } from '@/modules/book/application/use-cases/types';
 import type { Book } from '@/modules/book/domain/book';
 import { createBookUseCases } from '@/modules/book/factory';
-import { AppError, type PermissionChecker } from '@/modules/kernel';
+import {
+  AppError,
+  type OutboxRepository,
+  type PermissionChecker,
+} from '@/modules/kernel';
 import {
   toBookCoverObjectKey,
   toBookId,
@@ -72,6 +76,20 @@ function makeRepo(overrides: Partial<BookRepository> = {}): BookRepository {
   };
 }
 
+function makeOutboxRepository(
+  overrides: Partial<OutboxRepository> = {}
+): OutboxRepository {
+  return {
+    record: vi.fn(async () =>
+      Result.Ok({ type: 'outbox_event_deduplicated' as const })
+    ),
+    claimBatch: vi.fn(),
+    markPublished: vi.fn(),
+    markFailed: vi.fn(),
+    ...overrides,
+  } as OutboxRepository;
+}
+
 function makeCoverStorage(
   overrides: Partial<BookCoverStorage> = {}
 ): BookCoverStorage {
@@ -91,17 +109,19 @@ function makeDeps(
     bookRepository?: BookRepository;
     permissionChecker?: PermissionChecker;
     coverStorage?: BookCoverStorage;
+    outboxRepository?: OutboxRepository;
     onTransactionRun?: () => void;
   } = {}
 ): BookUseCaseDeps {
   const bookRepository = input.bookRepository ?? makeRepo();
+  const outboxRepository = input.outboxRepository ?? makeOutboxRepository();
 
   return {
     bookRepository,
     transactionRunner: {
       run: (work) => {
         input.onTransactionRun?.();
-        return work({ bookRepository });
+        return work({ bookRepository, outboxRepository });
       },
     },
     idGenerator,
@@ -276,7 +296,11 @@ describe('book use cases', () => {
     const useCases = createBookUseCases({
       ...makeDeps({ bookRepository: outsideRepository }),
       transactionRunner: {
-        run: (work) => work({ bookRepository: transactionRepository }),
+        run: (work) =>
+          work({
+            bookRepository: transactionRepository,
+            outboxRepository: makeOutboxRepository(),
+          }),
       },
     });
 
@@ -726,6 +750,103 @@ describe('book use cases', () => {
         deletedCoverId: coverKey,
       });
       expect(deleteObject).toHaveBeenCalled();
+    });
+  });
+
+  describe('book.created lifecycle event', () => {
+    it('records a book.created envelope in the same transaction as the insert', async () => {
+      const outboxRepository = makeOutboxRepository();
+      const created = await createBookUseCases(
+        makeDeps({ outboxRepository })
+      ).create({
+        currentUserId: scope.userId,
+        book,
+      });
+
+      expect(getOk(created)).toMatchObject({ type: 'book_created' });
+      expect(outboxRepository.record).toHaveBeenCalledExactlyOnceWith({
+        type: 'book.created',
+        aggregateType: 'book',
+        aggregateId: book.id,
+        payload: {
+          bookId: book.id,
+          title: book.title,
+          author: book.author,
+        },
+      });
+    });
+
+    it('fails the create when the outbox append fails so the write rolls back', async () => {
+      const error = new AppError({
+        code: 'OUTBOX_REPOSITORY_ERROR',
+        category: 'system',
+        status: 500,
+        message: 'Outbox repository error',
+      });
+      const outboxRepository = makeOutboxRepository({
+        record: async () => Result.Error(error),
+      });
+
+      const created = await createBookUseCases(
+        makeDeps({ outboxRepository })
+      ).create({
+        currentUserId: scope.userId,
+        book,
+      });
+
+      expect(getError(created)).toBe(error);
+    });
+
+    it('reclaims a consumed cover when the outbox append fails', async () => {
+      const deleteObject = vi.fn(async () =>
+        Result.Ok({ type: 'cover_object_deleted' as const })
+      );
+      const coverKey = unwrapParseResult(
+        toBookCoverObjectKey('books/cover.webp')
+      );
+      const outboxRepository = makeOutboxRepository({
+        record: async () =>
+          Result.Error(
+            new AppError({
+              code: 'OUTBOX_REPOSITORY_ERROR',
+              category: 'system',
+              status: 500,
+              message: 'Outbox repository error',
+            })
+          ),
+      });
+
+      const created = await createBookUseCases(
+        makeDeps({
+          outboxRepository,
+          coverStorage: makeCoverStorage({ deleteObject }),
+        })
+      ).create({
+        currentUserId: scope.userId,
+        book: { ...book, coverId: coverKey },
+      });
+
+      expect(created.isError()).toBe(true);
+      expect(deleteObject).toHaveBeenCalledWith(coverKey);
+    });
+
+    it('does not record an envelope for duplicate outcomes', async () => {
+      const outboxRepository = makeOutboxRepository();
+
+      const created = await createBookUseCases(
+        makeDeps({
+          outboxRepository,
+          bookRepository: makeRepo({
+            create: async () => Result.Ok({ type: 'book_duplicate' }),
+          }),
+        })
+      ).create({
+        currentUserId: scope.userId,
+        book,
+      });
+
+      expect(getOk(created)).toEqual({ type: 'book_duplicate' });
+      expect(outboxRepository.record).not.toHaveBeenCalled();
     });
   });
 });

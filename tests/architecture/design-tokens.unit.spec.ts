@@ -14,6 +14,8 @@ const emailThemeFile = path.join(
 const allowedHardcodedColorFiles = new Set([
   emailThemeFile,
   path.join('src', 'platform', 'styles', 'app.css'),
+  // The adopter zone is the sanctioned home for brand color overrides.
+  path.join('src', 'app', 'adopter', 'adopter.config.ts'),
 ]);
 
 const rawTailwindColorUtilityPattern =

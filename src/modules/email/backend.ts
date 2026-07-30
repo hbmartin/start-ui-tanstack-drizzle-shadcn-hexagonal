@@ -3,6 +3,7 @@ import {
   appErrorToResponse,
   createTransactionRunner,
   getDefaultDbClient,
+  getDeployTargetConfig,
   getEmailConfig,
   getHttpConfig,
 } from '@/modules/kernel/backend';
@@ -72,6 +73,7 @@ const getDeps = (deps: ResendWebhookRequestDeps): EmailServerRuntimeDeps => ({
     getUseCases: createDefaultEmailUseCases,
     logger: deps.logger,
     maxBodyBytes: getEmailConfig().resendWebhookMaxBytes,
+    deployTarget: getDeployTargetConfig().deployTarget,
     trustedProxyDepth: getHttpConfig().trustedProxyDepth,
     verifier: new ResendWebhookVerifier(),
   }),

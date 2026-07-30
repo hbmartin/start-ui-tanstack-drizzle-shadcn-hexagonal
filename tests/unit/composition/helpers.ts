@@ -10,6 +10,7 @@ export function makeTestKernel(overrides: Partial<Kernel> = {}): Kernel {
   const cache = new Map<string, unknown>();
   return {
     db: {} as Kernel['db'],
+    deployTarget: 'test-target',
     logger: {
       debug: () => {},
       info: () => {},

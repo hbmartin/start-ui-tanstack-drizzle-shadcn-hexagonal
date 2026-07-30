@@ -1,5 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
+import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import type { UserId } from '@/modules/kernel/domain/ids';
 
 import type { BookCreateOutcome, BookResult, BookUseCaseDeps } from './types';
@@ -58,24 +59,9 @@ export async function createBook(
     consumedCoverId = null;
   }
 
-  deps.logger.info({ event: 'book.create' });
-  const result = await deps.bookRepository.create(book);
-  if (result.isError()) {
-    if (consumedCoverId) {
-      const removed = await deps.coverStorage.deleteObject(consumedCoverId);
-      if (removed.isError()) {
-        deps.logger.warn({
-          event: 'book.cover_object.delete_failed',
-          details: { objectKey: consumedCoverId },
-        });
-      }
-    }
+  const reclaimConsumedCover = async () => {
+    if (!consumedCoverId) return;
 
-    return Result.Error(result.getError());
-  }
-  const created = result.get();
-
-  if (created.type !== 'book_created' && consumedCoverId) {
     const removed = await deps.coverStorage.deleteObject(consumedCoverId);
     if (removed.isError()) {
       deps.logger.warn({
@@ -83,6 +69,62 @@ export async function createBook(
         details: { objectKey: consumedCoverId },
       });
     }
+  };
+
+  deps.logger.info({ event: 'book.create' });
+
+  let result: Awaited<ReturnType<typeof deps.bookRepository.create>>;
+  try {
+    result = await deps.transactionRunner.run(
+      async ({ bookRepository, outboxRepository }) => {
+        const created = await bookRepository.create(book);
+        if (created.isError()) return created;
+
+        const outcome = created.get();
+        if (outcome.type !== 'book_created') return created;
+
+        const recorded = await outboxRepository.record({
+          type: 'book.created',
+          aggregateType: 'book',
+          aggregateId: outcome.book.id,
+          payload: {
+            bookId: outcome.book.id,
+            title: outcome.book.title,
+            author: outcome.book.author,
+          },
+        });
+        // The write and its lifecycle event are one atomic unit: throwing
+        // rolls the insert back with the failed outbox append.
+        if (recorded.isError()) throw recorded.getError();
+
+        return created;
+      }
+    );
+  } catch (error) {
+    await reclaimConsumedCover();
+
+    return Result.Error(
+      error instanceof AppError
+        ? error
+        : new AppError({
+            code: 'BOOK_TRANSACTION_ERROR',
+            category: 'system',
+            status: 500,
+            message: 'Book transaction error',
+            cause: error,
+          })
+    );
+  }
+
+  if (result.isError()) {
+    await reclaimConsumedCover();
+
+    return Result.Error(result.getError());
+  }
+  const created = result.get();
+
+  if (created.type !== 'book_created') {
+    await reclaimConsumedCover();
   }
 
   return Result.Ok(created);

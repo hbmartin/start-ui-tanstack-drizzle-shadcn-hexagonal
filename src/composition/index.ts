@@ -31,6 +31,11 @@ export {
   type KernelOverrides,
 } from './kernel';
 export {
+  __resetLifecycleEventsComposition,
+  getLifecycleEventsUseCases,
+  type LifecycleEventsOverrides,
+} from './lifecycle-events';
+export {
   __resetUserComposition,
   getUserUseCases,
   type UserOverrides,
@@ -41,6 +46,10 @@ import { type BookOverrides, getBookUseCases } from './book';
 import { type EmailOverrides, getEmailServices } from './email';
 import { type GenreOverrides, getGenreUseCases } from './genre';
 import { getKernel, type KernelOverrides } from './kernel';
+import {
+  getLifecycleEventsUseCases,
+  type LifecycleEventsOverrides,
+} from './lifecycle-events';
 import { getUserUseCases, type UserOverrides } from './user';
 
 export type ServicesOverrides = {
@@ -50,6 +59,7 @@ export type ServicesOverrides = {
   genre?: Omit<GenreOverrides, 'kernel'>;
   account?: Omit<AccountOverrides, 'kernel'>;
   email?: Omit<EmailOverrides, 'kernel' | 'db'>;
+  lifecycleEvents?: Omit<LifecycleEventsOverrides, 'kernel'>;
 };
 
 export function getServices(overrides?: ServicesOverrides) {
@@ -61,6 +71,7 @@ export function getServices(overrides?: ServicesOverrides) {
       genre: getGenreUseCases(),
       account: getAccountUseCases(),
       email: getEmailServices(),
+      lifecycleEvents: getLifecycleEventsUseCases(),
     } as const;
   }
 
@@ -72,5 +83,9 @@ export function getServices(overrides?: ServicesOverrides) {
     genre: getGenreUseCases({ ...overrides.genre, kernel }),
     account: getAccountUseCases({ ...overrides.account, kernel }),
     email: getEmailServices({ ...overrides.email, kernel }),
+    lifecycleEvents: getLifecycleEventsUseCases({
+      ...overrides.lifecycleEvents,
+      kernel,
+    }),
   } as const;
 }

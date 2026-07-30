@@ -1,4 +1,5 @@
 export * from './common';
+export * from './outbox';
 export * from './relations';
 export * from '@/modules/auth/infrastructure/drizzle/schema';
 export * from '@/modules/book/infrastructure/drizzle/schema';
@@ -20,6 +21,8 @@ import {
 import { emailStatus } from '@/modules/email/infrastructure/drizzle/schema';
 import { genre } from '@/modules/genre/infrastructure/drizzle/schema';
 
+import { outbox } from './outbox';
+
 export type User = typeof user.$inferSelect;
 export type NewUser = typeof user.$inferInsert;
 export type Session = typeof session.$inferSelect;
@@ -40,3 +43,5 @@ export type Author = typeof author.$inferSelect;
 export type NewAuthor = typeof author.$inferInsert;
 export type Publisher = typeof publisher.$inferSelect;
 export type NewPublisher = typeof publisher.$inferInsert;
+export type OutboxEvent = typeof outbox.$inferSelect;
+export type NewOutboxEvent = typeof outbox.$inferInsert;
