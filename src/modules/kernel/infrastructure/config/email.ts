@@ -27,26 +27,42 @@ const isSupportedEmailServer = (value: string) => {
   }
 };
 
+const emptyStringAsUndefined = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+
 const emailEnvSchema = baseEnvSchema
   .extend({
-    RESEND_API_KEY: z.string().trim().min(1).optional(),
-    RESEND_WEBHOOK_SECRET: z.string().trim().optional(),
+    RESEND_API_KEY: z.preprocess(
+      emptyStringAsUndefined,
+      z.string().trim().min(1).optional()
+    ),
+    RESEND_WEBHOOK_SECRET: z.preprocess(
+      emptyStringAsUndefined,
+      z.string().trim().optional()
+    ),
     RESEND_WEBHOOK_MAX_BYTES: z.coerce.number().int().positive().optional(),
-    EMAIL_SERVER: z
-      .string()
-      .trim()
-      .min(1)
-      .refine(isSupportedEmailServer, {
-        message: 'EMAIL_SERVER must use the smtp:// protocol',
-      })
-      .optional(),
+    EMAIL_SERVER: z.preprocess(
+      emptyStringAsUndefined,
+      z
+        .string()
+        .trim()
+        .min(1)
+        .refine(isSupportedEmailServer, {
+          message: 'EMAIL_SERVER must use the smtp:// protocol',
+        })
+        .optional()
+    ),
     EMAIL_FROM: zNonEmptyEnvString(),
     EMAIL_DELIVERY_DISABLED: z.stringbool().default(false),
   })
   .superRefine((env, ctx) => {
     const usesResendDelivery = !env.EMAIL_SERVER;
 
-    if (usesResendDelivery && !env.RESEND_API_KEY) {
+    if (
+      !env.EMAIL_DELIVERY_DISABLED &&
+      usesResendDelivery &&
+      !env.RESEND_API_KEY
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['RESEND_API_KEY'],

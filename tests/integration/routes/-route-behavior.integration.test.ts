@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/platform/env/client', () => ({
   envClient: mocks.envClient,
+  getEnvClient: () => mocks.envClient,
 }));
 
 vi.mock('@/platform/env/config', () => ({

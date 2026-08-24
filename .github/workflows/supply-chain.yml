@@ -31,10 +31,10 @@ jobs:
         with:
           node-version: 24
 
-      - name: Run dependency audit
+      - name: Refresh dependency evidence
         id: dependency-audit
         continue-on-error: true
-        run: pnpm audit --audit-level=high --json > pnpm-audit.json
+        run: pnpm security:refresh
 
       - name: Run TanStack lockfile policy
         run: pnpm security:tanstack
@@ -61,7 +61,7 @@ jobs:
         with:
           name: supply-chain-artifacts
           path: |
-            pnpm-audit.json
+            docs/security-audit.snapshot.json
             sbom.spdx.json
             sbom.cdx.json
           retention-days: 90
@@ -70,12 +70,12 @@ jobs:
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: |
-            pnpm-audit.json
+            docs/security-audit.snapshot.json
             sbom.spdx.json
             sbom.cdx.json
 
       - name: Fail on dependency audit findings
         if: steps.dependency-audit.outcome == 'failure'
         run: |
-          echo "pnpm audit reported high-severity vulnerabilities; see pnpm-audit.json in the uploaded artifact."
+          echo "The dependency evidence refresh failed; inspect security-audit.snapshot.json and the job log."
           exit 1

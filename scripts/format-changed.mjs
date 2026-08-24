@@ -12,7 +12,6 @@ const FORMAT_EXTENSIONS = new Set([
   '.cjs',
   '.mjs',
   '.json',
-  '.md',
   '.css',
 ]);
 

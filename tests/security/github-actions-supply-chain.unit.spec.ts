@@ -12,8 +12,6 @@ const digestPattern = /@sha256:[a-f0-9]{64}$/i;
 const pinnedActionPattern = /^[^@\s]+@[a-f0-9]{40}$/i;
 const allowedWritePermissions = new Set([
   '.github/workflows/codeql.yml:security-events',
-  '.github/workflows/cosmos-pages.yml:id-token',
-  '.github/workflows/cosmos-pages.yml:pages',
   '.github/workflows/osv-scanner.yml:security-events',
   '.github/workflows/osv-scanner-full.yml:security-events',
   '.github/workflows/supply-chain.yml:attestations',

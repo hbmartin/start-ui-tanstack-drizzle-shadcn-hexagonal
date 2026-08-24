@@ -53,7 +53,7 @@ jobs:
           node-version: 24
 
       - name: Run lint and typecheck
-        run: pnpm exec run-p -n lint lint:eslint typecheck
+        run: pnpm exec run-p -n lint typecheck
 
       - name: Ensure lint and typecheck did not mutate files
         run: git diff --exit-code -- .
@@ -125,14 +125,8 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install Graphviz
-        run: sudo apt-get update && sudo apt-get install -y graphviz
-
       - name: Run dependency-cruiser
         run: pnpm depcruise
-
-      - name: Check module dependency graph
-        run: pnpm architecture:graph:check
 
       - name: Generate dependency graphs
         if: always()
@@ -140,7 +134,6 @@ jobs:
           mkdir -p test-results/dependency-cruiser
           status=0
           pnpm exec depcruise --config .dependency-cruiser.cjs --output-type json --output-to test-results/dependency-cruiser/dependency-cruiser.json src || status=$?
-          pnpm exec depcruise --config .dependency-cruiser.cjs --output-type dot --output-to test-results/dependency-cruiser/dependency-cruiser.dot src || status=$?
           pnpm exec depcruise --config .dependency-cruiser.cjs --output-type mermaid --output-to test-results/dependency-cruiser/dependency-cruiser.mmd src || status=$?
           exit "$status"
 

@@ -25,6 +25,7 @@ vi.mock('@/modules/auth/client', () => ({
 
 vi.mock('@/platform/env/client', () => ({
   envClient: {},
+  getEnvClient: () => ({}),
 }));
 
 describe('Providers', () => {

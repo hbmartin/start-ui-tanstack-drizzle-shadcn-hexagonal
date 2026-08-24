@@ -33,6 +33,16 @@ describe('getEnvClient URL security', () => {
     expect(getEnvClient().VITE_BASE_URL).toBe('https://app.example.com');
   });
 
+  it('prefers deploy-time process values over Vite build values', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VERCEL_URL', 'runtime.example.com');
+    vi.stubEnv('VITE_BASE_URL', 'https://build.example.com');
+    vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', 'https://cdn.example.com/bucket');
+    const { getEnvClient } = await import('@/platform/env/config');
+
+    expect(getEnvClient().VITE_BASE_URL).toBe('https://runtime.example.com');
+  });
+
   it('accepts cleartext localhost URLs in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITE_BASE_URL', 'http://localhost:3000');

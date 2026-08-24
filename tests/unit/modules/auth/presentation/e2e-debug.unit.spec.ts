@@ -6,6 +6,7 @@ const envClientMock = vi.hoisted(() => ({
 
 vi.mock('@/platform/env/client', () => ({
   envClient: envClientMock,
+  getEnvClient: () => envClientMock,
 }));
 
 function getFirstConsoleInfoPayload() {

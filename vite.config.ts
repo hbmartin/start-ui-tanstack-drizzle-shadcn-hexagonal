@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 
-import { CSP_NONCE_PLACEHOLDER } from './src/platform/http/csp-nonce';
+import { CSP_NONCE_PLACEHOLDER } from './src/platform/http/csp-nonce.js';
 
 function srcJsonImportPlugin(): Plugin {
   return {

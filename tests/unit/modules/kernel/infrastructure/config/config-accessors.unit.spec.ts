@@ -584,6 +584,21 @@ describe('server config accessors', () => {
     expect(() => getEmailConfig()).toThrow('RESEND_API_KEY');
   });
 
+  it('allows email adapters to remain unconfigured when delivery is disabled', async () => {
+    vi.stubEnv('RESEND_API_KEY', '');
+    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_SERVER', '');
+    vi.stubEnv('EMAIL_DELIVERY_DISABLED', 'true');
+    const { getEmailConfig } =
+      await import('@/modules/kernel/infrastructure/config/email');
+
+    expect(getEmailConfig()).toMatchObject({
+      deliveryDisabled: true,
+      resendApiKey: undefined,
+      server: undefined,
+    });
+  });
+
   it('rejects unsupported email server protocols', async () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
     vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');

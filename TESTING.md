@@ -14,7 +14,7 @@ This project uses a layered test system. The default rule is to verify behavior 
 | E2E UI tests | `tests/e2e/*.spec.ts` | `pnpm test:e2e` or `pnpm test:e2e:chromium` | User-facing journeys from UI to rendered outcome. Assert durable side effects when the workflow writes data. |
 | Visual regression | `tests/e2e/visual/*.visual.spec.ts` | `pnpm test:e2e:visual` | Stable critical screens with local Playwright snapshots. Baseline updates use `pnpm test:e2e:visual:update` and require review. |
 | Coverage | All Vitest projects | `pnpm test:coverage` | Floor metric for touched code and trend signal in CI. Do not treat line coverage as proof of assertion quality. |
-| Mutation testing | Stryker scoped configs | `pnpm test:mutation:critical` or scoped scripts | Test sensitivity for critical domain/application logic. Run periodically and for risky auth, authorization, and data-loss changes. |
+| Mutation testing | Data-driven Stryker runner | `pnpm test:mutation:critical` or `node scripts/run-mutation.mjs --scope=<scope>` | Test sensitivity for critical domain/application logic. Run periodically and for risky auth, authorization, and data-loss changes. |
 
 `pnpm test` still runs all Vitest projects. Use the layer commands when you need a faster or more diagnostic signal.
 
@@ -75,7 +75,7 @@ Escalate based on touched surface:
 | Framework config, env loading, production runtime, dependencies | `pnpm build` |
 | Merge-level confidence | `pnpm verify` |
 
-Mutation testing is intentionally slower. Use scoped commands during deep work, for example `pnpm test:mutation:auth:fast`, and run `pnpm test:mutation:critical` before high-risk merges or from the scheduled CI workflow.
+Mutation testing is intentionally slower. Use the data-driven runner during deep work, for example `node scripts/run-mutation.mjs --scope=auth --fast`, and run `pnpm test:mutation:critical` before high-risk releases or from the scheduled CI workflow.
 
 ## Review Checklist
 

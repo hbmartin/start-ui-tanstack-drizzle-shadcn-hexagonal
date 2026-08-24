@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { parseSync, Visitor } from 'oxc-parser';
 
 const root = process.cwd();
 const sourceRoot = path.join(root, 'src');
@@ -28,14 +28,48 @@ function toProjectPath(filePath) {
   return path.relative(root, filePath).split(path.sep).join('/');
 }
 
-function readImportSpecifiers(source) {
-  return [
-    ...new Set(
-      ts
-        .preProcessFile(source, true, true)
-        .importedFiles.map((file) => file.fileName)
-    ),
-  ];
+function readImportSpecifiers(filePath, source) {
+  const parsed = parseSync(filePath, source);
+  if (parsed.errors.length > 0) {
+    throw new Error(
+      `Unable to parse ${toProjectPath(filePath)}: ${parsed.errors[0]?.message}`
+    );
+  }
+
+  const specifiers = new Set();
+  const addLiteral = (node) => {
+    if (node?.type === 'Literal' && typeof node.value === 'string') {
+      specifiers.add(node.value);
+    }
+  };
+  new Visitor({
+    CallExpression(node) {
+      if (node.callee.type === 'Identifier' && node.callee.name === 'require') {
+        addLiteral(node.arguments[0]);
+      }
+    },
+    ExportAllDeclaration(node) {
+      addLiteral(node.source);
+    },
+    ExportNamedDeclaration(node) {
+      addLiteral(node.source);
+    },
+    ImportDeclaration(node) {
+      addLiteral(node.source);
+    },
+    ImportExpression(node) {
+      addLiteral(node.source);
+    },
+    TSImportEqualsDeclaration(node) {
+      if (node.moduleReference.type === 'TSExternalModuleReference') {
+        addLiteral(node.moduleReference.expression);
+      }
+    },
+    TSImportType(node) {
+      addLiteral(node.source);
+    },
+  }).visit(parsed.program);
+  return [...specifiers];
 }
 
 function resolveLocalImport(importer, specifier) {
@@ -84,7 +118,7 @@ const sourceFiles = [...listFiles(sourceRoot), ...listFiles(testRoot)].filter(
 for (const filePath of sourceFiles) {
   const projectPath = toProjectPath(filePath);
   const source = readFileSync(filePath, 'utf8');
-  const importSpecifiers = readImportSpecifiers(source);
+  const importSpecifiers = readImportSpecifiers(filePath, source);
 
   if (
     projectPath !== 'tests/support/property-testing.ts' &&

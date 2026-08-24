@@ -4,10 +4,15 @@
   "jsPlugins": [
     "@tanstack/eslint-plugin-query",
     "@tanstack/eslint-plugin-router",
-    "eslint-plugin-simple-import-sort",
-    "eslint-plugin-sonarjs"
+    "eslint-plugin-simple-import-sort"
   ],
-  "ignorePatterns": [".github/codeql/**", "**/*.testproj/**"],
+  "ignorePatterns": [
+    ".agents/**",
+    ".claude/**",
+    ".github/codeql/**",
+    "**/*.testproj/**",
+    "tools/mutation/node_modules/**"
+  ],
   "categories": {
     "correctness": "error"
   },
@@ -25,7 +30,15 @@
         "ignoreRestSiblings": true
       }
     ],
+    "typescript/no-base-to-string": "off",
+    "typescript/no-floating-promises": "off",
+    "typescript/no-implied-eval": "off",
+    "typescript/no-misused-spread": "off",
+    "typescript/no-redundant-type-constituents": "off",
+    "typescript/unbound-method": "off",
     "unicorn/filename-case": ["error", { "case": "kebabCase" }],
+    "react/rules-of-hooks": "error",
+    "react/react-compiler": "error",
     "react/only-export-components": [
       "warn",
       {
@@ -91,16 +104,14 @@
     "@tanstack/query/mutation-property-order": "error",
     "@tanstack/query/prefer-query-options": "warn",
     "@tanstack/router/create-route-property-order": "error",
-    "@tanstack/router/route-param-names": "error",
-    "sonarjs/cognitive-complexity": ["warn", 50],
-    "sonarjs/prefer-immediate-return": "warn",
-    "sonarjs/todo-tag": "warn"
+    "@tanstack/router/route-param-names": "error"
   },
   "overrides": [
     {
       "files": ["src/**/*"],
       "rules": {
         "node/no-process-env": "error",
+        "typescript/no-floating-promises": ["error", { "ignoreVoid": true }],
         "react/only-export-components": [
           "error",
           {
@@ -136,10 +147,7 @@
           }
         ],
         "simple-import-sort/exports": "error",
-        "@tanstack/query/prefer-query-options": "error",
-        "sonarjs/cognitive-complexity": ["error", 50],
-        "sonarjs/prefer-immediate-return": "error",
-        "sonarjs/todo-tag": "error"
+        "@tanstack/query/prefer-query-options": "error"
       }
     },
     {

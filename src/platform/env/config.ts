@@ -2,37 +2,33 @@
 import { z } from 'zod';
 
 import {
+  isDevRuntimeEnvironment,
+  isProdRuntimeEnvironment,
+  readRuntimeEnv,
+  type RuntimeEnv,
+} from './runtime';
+import {
   httpsInProductionMessage,
   isSecureUrlForProduction,
 } from './url-security';
 
-type RuntimeEnv = Record<string, unknown>;
-
-const runtimeEnv = (): RuntimeEnv => ({
-  ...(typeof process === 'undefined' ? {} : process.env),
-  ...import.meta.env,
-});
-
 const isTruthy = (value: unknown) => value === true || value === 'true';
 
-const isProd = () => {
-  const env = runtimeEnv();
-  return env.NODE_ENV ? env.NODE_ENV === 'production' : isTruthy(env.PROD);
-};
+const isProd = () => isProdRuntimeEnvironment();
+const isDev = () => isDevRuntimeEnvironment();
 
-const isDev = () => {
-  const env = runtimeEnv();
-  return env.NODE_ENV ? env.NODE_ENV === 'development' : isTruthy(env.DEV);
-};
-
-export const isDevEnvironment = isDev;
+export const isDevEnvironment = isDevRuntimeEnvironment;
 
 const getBaseUrl = (env: RuntimeEnv) => {
-  const vercelUrlPreviewUrl =
-    env.VITE_VERCEL_ENV === 'preview' ? env.VITE_VERCEL_BRANCH_URL : null;
+  const vercelUrl =
+    env.VERCEL_PROJECT_PRODUCTION_URL ?? env.VERCEL_URL ?? undefined;
+  if (typeof vercelUrl === 'string' && vercelUrl.trim()) {
+    return `https://${vercelUrl.trim().replace(/^https?:\/\//u, '')}`;
+  }
 
-  if (typeof vercelUrlPreviewUrl === 'string' && vercelUrlPreviewUrl) {
-    return `https://${vercelUrlPreviewUrl}`;
+  if (typeof env.APP_DOMAIN === 'string' && env.APP_DOMAIN.trim()) {
+    const appDomain = env.APP_DOMAIN.trim();
+    return /^https?:\/\//u.test(appDomain) ? appDomain : `https://${appDomain}`;
   }
 
   return env.VITE_BASE_URL;
@@ -115,7 +111,7 @@ let cachedClientEnv: EnvClient | undefined;
 
 export function getEnvClient(): EnvClient {
   if (cachedClientEnv) return cachedClientEnv;
-  const raw = runtimeEnv();
+  const raw = readRuntimeEnv();
   cachedClientEnv = clientSchema().parse({
     ...raw,
     VITE_BASE_URL: getBaseUrl(raw),

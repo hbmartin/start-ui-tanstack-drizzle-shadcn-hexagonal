@@ -46,12 +46,6 @@ export const LICENSE_EXCEPTIONS = [
       'Build-time CSS transformer pulled via Tailwind/Vite. MPL-2.0 is file-level weak copyleft; the package is used unmodified, so no source-disclosure obligation is triggered.',
   },
   {
-    name: 'eslint-plugin-sonarjs',
-    license: 'LGPL-3.0-only',
-    reason:
-      'Dev-only ESLint plugin. Not distributed with or linked into the application; LGPL obligations do not attach to our shipped code.',
-  },
-  {
     name: 'caniuse-lite',
     license: 'CC-BY-4.0',
     reason:

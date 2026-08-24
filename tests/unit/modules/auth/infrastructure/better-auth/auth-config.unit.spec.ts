@@ -54,13 +54,14 @@ vi.mock('@/modules/kernel/infrastructure/config/auth', () => ({
   }),
 }));
 
-vi.mock('@/platform/env/client', () => ({
-  envClient: {
+vi.mock('@/platform/env/client', () => {
+  const envClient = {
     DEV: false,
     VITE_AUTH_SIGNUP_ENABLED: true,
     VITE_BASE_URL: 'https://app.example',
-  },
-}));
+  };
+  return { envClient, getEnvClient: () => envClient };
+});
 
 describe('Better Auth security configuration', () => {
   it('does not disable Better Auth CSRF or origin checks', async () => {

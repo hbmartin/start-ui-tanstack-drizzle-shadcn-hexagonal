@@ -23,6 +23,7 @@ vi.mock('@sentry/tanstackstart-react', () => ({
 
 vi.mock('@/platform/env/client', () => ({
   envClient: envClientMock,
+  getEnvClient: () => envClientMock,
 }));
 
 describe('Sentry telemetry composition', () => {

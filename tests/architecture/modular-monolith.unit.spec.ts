@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import * as ts from 'typescript';
+import { parseSync, Visitor } from 'oxc-parser';
 import { describe, expect, it } from 'vitest';
 
 import { isProtectedNavigationPath } from '@/platform/router';
@@ -46,12 +46,6 @@ const protectedRouteGuardSpecs = [
   },
 ];
 const portOutcomeOffenderOrder = ['nullable', 'optional', 'boolean'] as const;
-const declarativeLinkComponentNames = new Set([
-  'BridgeLink',
-  'ButtonLink',
-  'Link',
-  'ResponsiveIconButtonLink',
-]);
 const directProtectedNavigationAllowlist = new Set([
   path.join(root, 'src', 'platform', 'router', 'navigation-safety.ts'),
   path.join(root, 'src', 'routes', 'logout.tsx'),
@@ -108,153 +102,121 @@ function relativePath(file: string) {
   return path.relative(root, file);
 }
 
-function getPropertyNameText(name: ts.PropertyName) {
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
-  return undefined;
-}
+type NavigationAstNode = {
+  expression?: unknown;
+  expressions?: unknown[];
+  name?: unknown;
+  quasis?: Array<{ value?: { cooked?: unknown; raw?: unknown } }>;
+  start?: number;
+  type?: unknown;
+  value?: unknown;
+};
 
-function getStaticStringExpression(expression: ts.Expression | undefined) {
-  if (!expression) return undefined;
+function getStaticString(node: unknown): string | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  const candidate = node as NavigationAstNode;
+  if (candidate.type === 'Literal' && typeof candidate.value === 'string') {
+    return candidate.value;
+  }
+  if (candidate.type === 'JSXExpressionContainer') {
+    return getStaticString(candidate.expression);
+  }
   if (
-    ts.isStringLiteral(expression) ||
-    ts.isNoSubstitutionTemplateLiteral(expression)
+    candidate.type === 'TemplateLiteral' &&
+    candidate.expressions?.length === 0 &&
+    candidate.quasis?.length === 1
   ) {
-    return expression.text;
+    const value = candidate.quasis[0]?.value;
+    return typeof value?.cooked === 'string'
+      ? value.cooked
+      : typeof value?.raw === 'string'
+        ? value.raw
+        : undefined;
   }
   return undefined;
 }
 
-function getJsxTagNameText(tagName: ts.JsxTagNameExpression) {
-  if (ts.isIdentifier(tagName)) return tagName.text;
-  if (ts.isPropertyAccessExpression(tagName)) return tagName.name.text;
-  return undefined;
-}
-
-function getJsxAttributeStringValue(attribute: ts.JsxAttribute) {
-  const initializer = attribute.initializer;
-  if (!initializer) return undefined;
-  if (ts.isStringLiteral(initializer)) return initializer.text;
-  if (ts.isJsxExpression(initializer)) {
-    return getStaticStringExpression(initializer.expression);
+function getStaticPropertyName(node: unknown) {
+  if (!node || typeof node !== 'object') return undefined;
+  const candidate = node as NavigationAstNode;
+  if (
+    (candidate.type === 'Identifier' || candidate.type === 'JSXIdentifier') &&
+    typeof candidate.name === 'string'
+  ) {
+    return candidate.name;
   }
-  return undefined;
+  return getStaticString(candidate);
 }
 
-function formatNodeLocation(sourceFile: ts.SourceFile, node: ts.Node) {
-  const location = sourceFile.getLineAndCharacterOfPosition(
-    node.getStart(sourceFile)
-  );
-  return `${relativePath(sourceFile.fileName)}:${location.line + 1}`;
+function findStaticProtectedNavigationLocations(file: string, source: string) {
+  const parsed = parseSync(file, source);
+  if (parsed.errors.length > 0) {
+    throw new Error(`Unable to parse ${file}: ${parsed.errors[0]?.message}`);
+  }
+
+  const locations: string[] = [];
+  const addTarget = (node: unknown, start: number) => {
+    const target = getStaticString(node);
+    if (!target || !isProtectedNavigationPath(target)) return;
+    const line = source.slice(0, start).split('\n').length;
+    locations.push(`${path.relative(root, file)}:${line}`);
+  };
+
+  new Visitor({
+    JSXAttribute(node) {
+      if (getStaticPropertyName(node.name) === 'to') {
+        addTarget(node.value, node.start);
+      }
+    },
+    Property(node) {
+      if (!node.computed && getStaticPropertyName(node.key) === 'to') {
+        addTarget(node.value, node.start);
+      }
+    },
+  }).visit(parsed.program);
+
+  return locations;
 }
 
 function findDirectProtectedNavigationViolations() {
   return listSourceFiles(path.join(root, 'src'))
     .filter((file) => !directProtectedNavigationAllowlist.has(file))
-    .flatMap((file) => {
-      const sourceFile = ts.createSourceFile(
-        file,
-        readSource(file),
-        ts.ScriptTarget.Latest,
-        true,
-        file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-      );
-      const violations: string[] = [];
-
-      const inspectNode = (node: ts.Node): void => {
-        if (
-          (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
-          declarativeLinkComponentNames.has(
-            getJsxTagNameText(node.tagName) ?? ''
-          )
-        ) {
-          for (const property of node.attributes.properties) {
-            if (
-              !ts.isJsxAttribute(property) ||
-              !ts.isIdentifier(property.name) ||
-              property.name.text !== 'to'
-            ) {
-              continue;
-            }
-
-            const target = getJsxAttributeStringValue(property);
-            if (target && isProtectedNavigationPath(target)) {
-              violations.push(formatNodeLocation(sourceFile, property));
-            }
-          }
-        }
-
-        if (
-          ts.isPropertyAssignment(node) &&
-          getPropertyNameText(node.name) === 'to'
-        ) {
-          const target = getStaticStringExpression(node.initializer);
-          if (target && isProtectedNavigationPath(target)) {
-            violations.push(formatNodeLocation(sourceFile, node));
-          }
-        }
-
-        ts.forEachChild(node, inspectNode);
-      };
-
-      inspectNode(sourceFile);
-      return violations;
-    });
+    .flatMap((file) =>
+      findStaticProtectedNavigationLocations(file, readSource(file))
+    );
 }
 
-function findPortPromiseOutcomeOffenders(source: string, fileName = 'port.ts') {
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  );
+function findPromisePayloads(source: string) {
+  const payloads: string[] = [];
+  const promiseStartPattern = /\bPromise\s*</gu;
+
+  for (const match of source.matchAll(promiseStartPattern)) {
+    const payloadStart = (match.index ?? 0) + match[0].length;
+    let depth = 1;
+    let cursor = payloadStart;
+
+    for (; cursor < source.length && depth > 0; cursor += 1) {
+      if (source[cursor] === '<') depth += 1;
+      if (source[cursor] === '>') depth -= 1;
+    }
+
+    if (depth === 0) payloads.push(source.slice(payloadStart, cursor - 1));
+  }
+
+  return payloads;
+}
+
+function findPortPromiseOutcomeOffenders(
+  source: string,
+  _fileName = 'port.ts'
+) {
   const offenders = new Set<PortOutcomeOffender>();
 
-  const inspectPayload = (node: ts.TypeNode): void => {
-    if (node.kind === ts.SyntaxKind.BooleanKeyword) {
-      offenders.add('boolean');
-      return;
-    }
-    if (node.kind === ts.SyntaxKind.UndefinedKeyword) {
-      offenders.add('optional');
-      return;
-    }
-    if (ts.isLiteralTypeNode(node)) {
-      if (node.literal.kind === ts.SyntaxKind.NullKeyword) {
-        offenders.add('nullable');
-      }
-      return;
-    }
-    if (ts.isUnionTypeNode(node)) {
-      node.types.forEach(inspectPayload);
-      return;
-    }
-    if (ts.isArrayTypeNode(node)) {
-      inspectPayload(node.elementType);
-      return;
-    }
-    if (ts.isParenthesizedTypeNode(node)) {
-      inspectPayload(node.type);
-      return;
-    }
-    if (ts.isTypeReferenceNode(node)) {
-      node.typeArguments?.forEach(inspectPayload);
-    }
-  };
-
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isTypeReferenceNode(node) &&
-      node.typeName.getText(sourceFile) === 'Promise'
-    ) {
-      const [payload] = node.typeArguments ?? [];
-      if (payload !== undefined) inspectPayload(payload);
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sourceFile);
+  for (const payload of findPromisePayloads(source)) {
+    if (/\bnull\b/u.test(payload)) offenders.add('nullable');
+    if (/\bundefined\b/u.test(payload)) offenders.add('optional');
+    if (/\bboolean\b/u.test(payload)) offenders.add('boolean');
+  }
 
   return portOutcomeOffenderOrder.filter((offender) => offenders.has(offender));
 }
@@ -652,6 +614,20 @@ describe('strict modular monolith layout', () => {
 
   it('blocks direct declarative navigation to protected side-effect routes', () => {
     expect(findDirectProtectedNavigationViolations()).toEqual([]);
+  });
+
+  it('parses static protected targets without matching comments or strings', () => {
+    const source = [
+      'const jsx = <Link to="/logout" />;',
+      'const options = { "to": "/logout" };',
+      'const expression = <Link to={"/logout"} />;',
+      '// const ignored = { to: "/logout" };',
+      'const ignoredText = "to: /logout";',
+    ].join('\n');
+
+    expect(
+      findStaticProtectedNavigationLocations('fixture.tsx', source)
+    ).toEqual(['fixture.tsx:1', 'fixture.tsx:2', 'fixture.tsx:3']);
   });
 
   it('routes platform button links through BridgeLink', () => {

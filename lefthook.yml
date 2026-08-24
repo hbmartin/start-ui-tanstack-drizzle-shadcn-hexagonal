@@ -3,7 +3,7 @@ pre-commit:
     format:
       run: pnpm format:changed -- {staged_files}
       stage_fixed: true
-      glob: '*.{js,ts,cjs,mjs,jsx,tsx,json,md,css}'
+      glob: '*.{js,ts,cjs,mjs,jsx,tsx,json,css}'
     lint:
       glob: '*.{js,ts,cjs,mjs,jsx,tsx}'
       run: pnpm oxlint {staged_files}

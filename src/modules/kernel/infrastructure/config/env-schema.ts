@@ -2,14 +2,14 @@
 import { join, map, pipe, unique } from 'remeda';
 import { z } from 'zod';
 
+import {
+  isDevRuntimeEnvironment,
+  isProdRuntimeEnvironment,
+  readRuntimeEnv,
+  type RuntimeEnv,
+} from '@/platform/env/runtime';
+
 import { ConfigurationError } from '../../domain/errors/configuration-error';
-
-type RuntimeEnv = Record<string, unknown>;
-
-const runtimeEnv = (): RuntimeEnv => ({
-  ...(typeof process === 'undefined' ? {} : process.env),
-  ...(import.meta as ImportMeta & { env?: RuntimeEnv }).env,
-});
 
 const isTruthy = (value: unknown) => value === true || value === 'true';
 
@@ -46,24 +46,10 @@ const DEFAULT_SEED_ACCOUNT_EMAILS = {
  * being treated as non-prod. This prevents the split-brain where a prod build
  * run with `NODE_ENV=staging` kept HSTS on but dropped DB-TLS verification.
  */
-export const isProdRuntimeEnvironment = (source?: RuntimeEnv) => {
-  const env = source ?? runtimeEnv();
-  const nodeEnv =
-    typeof env.NODE_ENV === 'string'
-      ? env.NODE_ENV.trim().toLowerCase()
-      : undefined;
-  if (nodeEnv === 'development' || nodeEnv === 'test') return false;
-  if (nodeEnv === 'production') return true;
-  return isTruthy(env.PROD);
-};
-
-export const isDevRuntimeEnvironment = (source?: RuntimeEnv) => {
-  const env = source ?? runtimeEnv();
-  return env.NODE_ENV ? env.NODE_ENV === 'development' : isTruthy(env.DEV);
-};
+export { isDevRuntimeEnvironment, isProdRuntimeEnvironment };
 
 export const shouldSkipEnvValidation = (source?: RuntimeEnv) => {
-  const env = source ?? runtimeEnv();
+  const env = readRuntimeEnv(source);
   return isTruthy(env.SKIP_ENV_VALIDATION) && !isProdRuntimeEnvironment(env);
 };
 
@@ -73,7 +59,7 @@ export const shouldSkipEnvValidation = (source?: RuntimeEnv) => {
  * planting demo accounts in production.
  */
 export const isProductionSeedAllowed = (source?: RuntimeEnv) =>
-  isTruthy((source ?? runtimeEnv()).ALLOW_PROD_SEED);
+  isTruthy(readRuntimeEnv(source).ALLOW_PROD_SEED);
 
 /**
  * Optional explicit seed-account emails (SEED_ADMIN_EMAIL / SEED_USER_EMAIL).
@@ -82,7 +68,7 @@ export const isProductionSeedAllowed = (source?: RuntimeEnv) =>
  * access.
  */
 export const getSeedAccountEmails = (source?: RuntimeEnv) => {
-  const env = source ?? runtimeEnv();
+  const env = readRuntimeEnv(source);
   const parsed = parseEnv(seedAccountEmailEnvSchema, env);
 
   return {
@@ -108,7 +94,7 @@ export function parseEnv<TSchema extends z.ZodType>(
   schema: TSchema,
   source?: Record<string, unknown>
 ): z.infer<TSchema> {
-  const result = schema.safeParse(source ?? runtimeEnv());
+  const result = schema.safeParse(readRuntimeEnv(source));
   if (result.success) return result.data;
 
   const issues = pipe(
