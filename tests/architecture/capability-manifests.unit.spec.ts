@@ -25,6 +25,7 @@ import {
   permissionStatements,
   rolePermissions,
 } from '@/modules/auth';
+import * as auditPersistence from '@/modules/audit/persistence';
 import * as authClient from '@/modules/auth/client';
 import * as authPersistence from '@/modules/auth/persistence';
 import * as bookPersistence from '@/modules/book/persistence';
@@ -39,6 +40,7 @@ const localeRegistries = { ar, en, fr, sw } as const;
 const publicExports: Readonly<
   Record<string, Readonly<Record<string, unknown>>>
 > = {
+  '@/modules/audit/persistence': auditPersistence,
   '@/modules/auth/client': authClient,
   '@/modules/auth/persistence': authPersistence,
   '@/modules/book/persistence': bookPersistence,
@@ -87,7 +89,7 @@ describe('capability manifest registry', () => {
     );
   });
 
-  it('matches declared routes, owned files, and public exports', () => {
+  it('matches declared routes and owned files', () => {
     for (const manifest of capabilityRegistry) {
       for (const ownedPath of manifest.ownedPaths) {
         expect(fs.existsSync(path.join(root, ownedPath))).toBe(true);
@@ -95,12 +97,24 @@ describe('capability manifest registry', () => {
       for (const route of manifest.publicRoutes) {
         expect(getRouteId(route.file)).toBe(route.routeId);
       }
-      for (const owned of manifest.schema.owns) {
-        expect(publicExports[owned.gate]?.[owned.exportName]).toBeDefined();
-      }
-      for (const form of manifest.forms) {
-        expect(publicExports[form.gate]?.[form.exportName]).toBeDefined();
-      }
+    }
+  });
+
+  it('matches declared public exports', () => {
+    const contributions = capabilityRegistry.flatMap((manifest) => [
+      ...manifest.schema.owns,
+      ...manifest.forms,
+      ...manifest.backgroundJobs,
+    ]);
+    for (const contribution of contributions) {
+      expect(
+        publicExports[contribution.gate]?.[contribution.exportName]
+      ).toBeDefined();
+    }
+  });
+
+  it('matches declared seed exports', () => {
+    for (const manifest of capabilityRegistry) {
       for (const seed of manifest.seeds) {
         const source = readProjectFile(seed.sourceFile);
         expect(source).toMatch(
@@ -134,7 +148,7 @@ describe('capability manifest registry', () => {
       expect(externalImports).toEqual(['@/modules/kernel/manifest']);
     }
 
-    for (const moduleId of ['auth', 'book', 'email', 'genre']) {
+    for (const moduleId of ['audit', 'auth', 'book', 'email', 'genre']) {
       const persistenceSource = readProjectFile(
         `src/modules/${moduleId}/persistence.ts`
       );
@@ -209,12 +223,14 @@ describe('capability manifest registry', () => {
     const core = getDeclaredCapabilitiesForPreset('core');
     const demo = getDeclaredCapabilitiesForPreset('demo');
     expect(core.map(({ id }) => id)).toEqual([
+      'audit',
       'email',
       'auth',
       'profile',
       'user',
     ]);
     expect(demo.map(({ id }) => id)).toEqual([
+      'audit',
       'email',
       'auth',
       'profile',

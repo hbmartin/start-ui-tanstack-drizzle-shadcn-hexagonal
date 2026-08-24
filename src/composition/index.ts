@@ -1,3 +1,4 @@
+export { createAuditRecorder, type AuditRecorderDependencies } from './audit';
 export {
   __resetProfileComposition,
   type ProfileOverrides,
@@ -36,12 +37,12 @@ export {
   type UserOverrides,
 } from './user';
 
-import { type ProfileOverrides, getProfileUseCases } from './profile';
 import { type BookOverrides, getBookUseCases } from './book';
 import { type EmailOverrides, getEmailServices } from './email';
 import { type GenreOverrides, getGenreUseCases } from './genre';
 import { getKernel, type KernelOverrides } from './kernel';
 import { getUserUseCases, type UserOverrides } from './user';
+import { type ProfileOverrides, getProfileUseCases } from './profile';
 
 export type ServicesOverrides = {
   kernel?: KernelOverrides;

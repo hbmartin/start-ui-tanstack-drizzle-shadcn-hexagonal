@@ -1,10 +1,12 @@
 export * from './common';
 export * from './relations';
+export * from '@/modules/audit/persistence';
 export * from '@/modules/auth/persistence';
 export * from '@/modules/book/persistence';
 export * from '@/modules/email/persistence';
 export * from '@/modules/genre/persistence';
 
+import { auditEvent } from '@/modules/audit/persistence';
 import {
   account,
   authIdentity,
@@ -36,3 +38,5 @@ export type Author = typeof author.$inferSelect;
 export type NewAuthor = typeof author.$inferInsert;
 export type Publisher = typeof publisher.$inferSelect;
 export type NewPublisher = typeof publisher.$inferInsert;
+export type AuditEvent = typeof auditEvent.$inferSelect;
+export type NewAuditEvent = typeof auditEvent.$inferInsert;

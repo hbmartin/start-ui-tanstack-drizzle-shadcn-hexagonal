@@ -1,3 +1,4 @@
+import { auditCapabilityManifest } from '@/modules/audit/manifest';
 import { authCapabilityManifest } from '@/modules/auth/manifest';
 import { bookCapabilityManifest } from '@/modules/book/manifest';
 import { emailCapabilityManifest } from '@/modules/email/manifest';
@@ -11,6 +12,7 @@ import { profileCapabilityManifest } from '@/modules/profile/manifest';
 import { userCapabilityManifest } from '@/modules/user/manifest';
 
 export const capabilityRegistry = defineCapabilityRegistry([
+  auditCapabilityManifest,
   emailCapabilityManifest,
   authCapabilityManifest,
   profileCapabilityManifest,

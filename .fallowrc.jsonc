@@ -44,7 +44,7 @@
       "exports": ["*"],
     },
     {
-      "file": "src/composition/{index,auth,email,email-preview}.{ts,tsx}",
+      "file": "src/composition/{index,audit,auth,email,email-preview}.{ts,tsx}",
       "exports": ["*"],
     },
     {
@@ -199,6 +199,14 @@
         "patterns": ["src/modules/*/testing.{ts,tsx}"],
       },
       {
+        "name": "audit-contract",
+        "patterns": ["src/modules/audit/index.ts"],
+      },
+      {
+        "name": "audit-backend",
+        "patterns": ["src/modules/audit/backend.ts"],
+      },
+      {
         "name": "profile-gates",
         "patterns": [
           "src/modules/profile/index.ts",
@@ -268,6 +276,14 @@
         ],
       },
       {
+        "name": "audit-db-schema",
+        "patterns": ["src/modules/audit/infrastructure/drizzle/schema.ts"],
+      },
+      {
+        "name": "audit-infrastructure",
+        "patterns": ["src/modules/audit/infrastructure/**"],
+      },
+      {
         "name": "module-db-schema",
         "patterns": ["src/modules/*/infrastructure/drizzle/schema.ts"],
       },
@@ -301,11 +317,12 @@
       },
       {
         "from": "persistence-gates",
-        "allow": ["module-db-schema"],
+        "allow": ["audit-db-schema", "module-db-schema"],
       },
       {
         "from": "modules",
         "allow": [
+          "audit-contract",
           "profile-gates",
           "auth-gates",
           "book-gates",
@@ -328,6 +345,21 @@
           "kernel-db-schema",
           "platform",
           "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "audit-contract",
+        "allow": ["modules/audit", "kernel-gates", "platform", "types"],
+      },
+      {
+        "from": "audit-backend",
+        "allow": [
+          "modules/audit",
+          "audit-infrastructure",
+          "audit-db-schema",
+          "kernel-gates",
+          "platform",
           "types",
         ],
       },
@@ -412,6 +444,7 @@
         "from": "server-functions",
         "allow": [
           "modules",
+          "audit-contract",
           "profile-gates",
           "auth-gates",
           "book-gates",
@@ -422,6 +455,29 @@
           "composition",
           "platform",
           "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "audit-db-schema",
+        "allow": [
+          "modules/audit",
+          "modules/kernel",
+          "kernel-db-schema",
+          "kernel-gates",
+          "platform",
+          "types",
+        ],
+      },
+      {
+        "from": "audit-infrastructure",
+        "allow": [
+          "modules/audit",
+          "audit-db-schema",
+          "modules/kernel",
+          "kernel-db-schema",
+          "kernel-gates",
+          "platform",
           "types",
         ],
       },
@@ -453,6 +509,7 @@
       {
         "from": "app",
         "allow": [
+          "audit-contract",
           "profile-gates",
           "auth-gates",
           "book-gates",
@@ -469,6 +526,7 @@
         "from": "routes",
         "allow": [
           "app",
+          "audit-contract",
           "profile-gates",
           "auth-gates",
           "book-gates",
@@ -487,6 +545,8 @@
         "allow": [
           "manifest-gates",
           "modules",
+          "audit-backend",
+          "audit-contract",
           "profile-gates",
           "auth-gates",
           "book-gates",

@@ -215,7 +215,18 @@ describe('Fallow guardrails', () => {
     const report = JSON.parse(result.stdout) as BoundaryReport;
     expect(report.kind).toBe('list-boundaries');
     expect(report.boundaries.configured).toBe(true);
-    expect(report.boundaries.zones).toHaveLength(29);
+    expect(report.boundaries.zones).toHaveLength(34);
+    expect(
+      report.boundaries.zones
+        .map(({ name }) => name)
+        .filter((name) => name.startsWith('audit-'))
+        .toSorted()
+    ).toEqual([
+      'audit-backend',
+      'audit-contract',
+      'audit-db-schema',
+      'audit-infrastructure',
+    ]);
     expect(
       report.boundaries.zones
         .filter((zone) => zone.name !== 'router')
@@ -226,7 +237,7 @@ describe('Fallow guardrails', () => {
       (group) => group.name === 'modules'
     );
     expect(modules).toMatchObject({ status: 'ok' });
-    expect(modules?.children).toHaveLength(7);
+    expect(modules?.children).toHaveLength(8);
   }, 15_000);
 
   it('detects boundary, provider-policy, duplication, and health regressions', () => {
