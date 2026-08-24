@@ -6,16 +6,21 @@ import {
   type BookTransactionContext,
   createBookUseCases,
 } from '@/modules/book';
-import { createBookRepository as createBookRepositoryDrizzle } from '@/modules/book/infrastructure/drizzle/book-repository-drizzle';
-import type {
-  BookCoverObjectKey,
-  TransactionRunner,
-  UserId,
+import { createBookRepository as createBookRepositoryDrizzle } from '@/modules/book/backend';
+import {
+  ConfigurationError,
+  type BookCoverObjectKey,
+  type ResultTransactionRunner,
+  type UserId,
 } from '@/modules/kernel';
-import { BetterUploadObjectStorage } from '@/modules/kernel/backend';
+import {
+  BetterUploadObjectStorage,
+  createResultTransactionRunner,
+} from '@/modules/kernel/backend';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 
 import { getSecondaryStore } from './auth';
+import { createTransactionAuditRecorder } from './audit';
 import { getKernel, type Kernel } from './kernel';
 import { createCachedFactory } from './shared/singleton';
 
@@ -23,6 +28,7 @@ export type BookOverrides = {
   kernel?: Kernel;
   bookRepository?: BookRepository;
   coverStorage?: BookCoverStorage;
+  transactionRunner?: ResultTransactionRunner<BookTransactionContext>;
 };
 
 const createBookRepository = (db: DbLike): BookRepository =>
@@ -70,22 +76,37 @@ const createBookCoverStorage = (): BookCoverStorage => {
 };
 
 const createBookTransactionRunner = (
-  kernel: Kernel,
-  bookRepositoryOverride?: BookRepository
-): TransactionRunner<BookTransactionContext> => {
-  if (bookRepositoryOverride) {
-    return {
-      run: (work) => work({ bookRepository: bookRepositoryOverride }),
-    };
-  }
+  kernel: Kernel
+): ResultTransactionRunner<BookTransactionContext> =>
+  createResultTransactionRunner({
+    transactionRunner: kernel.transactionRunner,
+    bindContext: (db) => ({
+      audit: createTransactionAuditRecorder({
+        kernel,
+        transaction: db,
+      }),
+      bookRepository: createBookRepository(db),
+    }),
+  });
 
-  return {
-    run: (work, options) =>
-      kernel.transactionRunner.run(
-        (db) => work({ bookRepository: createBookRepository(db) }),
-        options
-      ),
-  };
+const unavailableBookTransactionRunner =
+  (): ResultTransactionRunner<BookTransactionContext> => ({
+    async run() {
+      return Result.Error(
+        new ConfigurationError(
+          'A transaction runner is required with a book repository override.'
+        )
+      );
+    },
+  });
+
+const resolveBookTransactionRunner = (
+  kernel: Kernel,
+  overrides?: BookOverrides
+) => {
+  if (overrides?.transactionRunner) return overrides.transactionRunner;
+  if (overrides?.bookRepository) return unavailableBookTransactionRunner();
+  return createBookTransactionRunner(kernel);
 };
 
 const buildBookUseCases = (overrides?: BookOverrides) => {
@@ -94,10 +115,7 @@ const buildBookUseCases = (overrides?: BookOverrides) => {
     overrides?.bookRepository ?? createBookRepository(kernel.db);
   return createBookUseCases({
     bookRepository,
-    transactionRunner: createBookTransactionRunner(
-      kernel,
-      overrides?.bookRepository
-    ),
+    transactionRunner: resolveBookTransactionRunner(kernel, overrides),
     idGenerator: kernel.idGenerator,
     permissionChecker: kernel.permissionChecker,
     coverStorage: overrides?.coverStorage ?? createBookCoverStorage(),

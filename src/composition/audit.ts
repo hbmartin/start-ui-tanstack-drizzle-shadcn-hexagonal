@@ -1,10 +1,12 @@
 import type { AuditPort } from '@/modules/audit';
 import {
   createAuditPort,
+  createAuditRepository,
   createLoggerAuditFailureSignal,
   type AuditRepository,
   type AuditRetentionPolicy,
 } from '@/modules/audit/backend';
+import type { DbTransaction } from '@/modules/kernel/backend';
 
 import { getKernel, type Kernel } from './kernel';
 
@@ -30,3 +32,12 @@ export const createAuditRecorder = (
     retentionPolicy: dependencies.retentionPolicy,
   });
 };
+
+export const createTransactionAuditRecorder = (dependencies: {
+  kernel?: Kernel;
+  transaction: DbTransaction;
+}): AuditPort =>
+  createAuditRecorder({
+    kernel: dependencies.kernel,
+    repository: createAuditRepository({ db: dependencies.transaction }),
+  });

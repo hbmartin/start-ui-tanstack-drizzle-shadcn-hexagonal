@@ -24,6 +24,8 @@ import {
 } from '@/modules/auth';
 import {
   createRequestLogger,
+  toCorrelationId,
+  type CorrelationId,
   type Logger,
   type LogLevel,
   toRequestId,
@@ -47,6 +49,7 @@ type ServerTimingEntry = { name: string; durationMs: number };
 export type ProcedureLogger = Logger;
 
 export type ProtectedContext = {
+  correlationId: CorrelationId;
   user: AuthenticatedUser;
   session: AuthenticatedSession;
   scope: RequestScope;
@@ -262,6 +265,14 @@ const requestIdFromRuntime = () => {
   throw new ServerFnError('INTERNAL_SERVER_ERROR');
 };
 
+const correlationIdFromRequestId = (
+  requestId: ReturnType<typeof requestIdFromRuntime>
+) => {
+  const parsed = toCorrelationId(requestId);
+  if (parsed.isOk()) return parsed.get();
+  throw new ServerFnError('INTERNAL_SERVER_ERROR');
+};
+
 const getSessionCreatedAtMs = (
   createdAt: AuthenticatedSession['createdAt'] | null
 ) => {
@@ -308,6 +319,7 @@ export const createServerContextTools = ({
   ): Promise<T> => {
     const start = performance.now();
     const requestId = requestIdFromRuntime();
+    const correlationId = correlationIdFromRequestId(requestId);
     const timings: ServerTimingEntry[] = [];
     let procedureLogger = createRequestLogger({ logger, requestId });
     procedureLogger.info({
@@ -340,6 +352,7 @@ export const createServerContextTools = ({
         }
 
         const ctx: PublicContext = {
+          correlationId,
           user: session?.user ?? null,
           session: session?.session ?? null,
           scope: session?.user ? scopeFromUser(session.user) : null,
@@ -362,6 +375,7 @@ export const createServerContextTools = ({
         throw new ServerFnError('UNAUTHORIZED');
       }
       return fn({
+        correlationId: ctx.correlationId,
         user: ctx.user,
         session: ctx.session,
         scope: ctx.scope,

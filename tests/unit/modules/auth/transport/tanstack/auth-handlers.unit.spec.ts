@@ -39,15 +39,10 @@ describe('auth transport handlers', () => {
 
     expect(
       handlers.currentSession({
+        ...createAuthenticatedContext(),
         user: null,
         session: null,
         scope: null,
-        logger: {
-          debug: () => {},
-          info: () => {},
-          warn: () => {},
-          error: () => {},
-        },
       })
     ).toBeNull();
   });

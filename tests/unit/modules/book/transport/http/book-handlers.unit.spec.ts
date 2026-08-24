@@ -8,6 +8,7 @@ import { BOOK_PUBLISHER_MAX_LENGTH } from '@/modules/book';
 import {
   createBookHandlers,
   zCreateInput,
+  zDeleteByIdInput,
   zGetAllInput,
 } from '@/modules/book/transport/http/book-handlers';
 import { toBookId, toGenreId } from '@/modules/kernel/domain/ids';
@@ -88,6 +89,26 @@ describe('book HTTP transport handlers', () => {
         publisher: null,
         coverId: 'cover-1',
       },
+    });
+  });
+
+  it('passes request correlation into audited deletion', async () => {
+    const ctx = createAuthenticatedContext();
+    const deleteBook = vi.fn(async () =>
+      Result.Ok({ type: 'book_deleted' as const, deletedCoverId: null })
+    );
+    const handlers = createBookHandlers({
+      getUseCases: () => ({ delete: deleteBook }) as ExplicitAny,
+    });
+
+    await expect(
+      handlers.deleteById(ctx, zDeleteByIdInput().parse({ id: 'book-1' }))
+    ).resolves.toBeUndefined();
+
+    expect(deleteBook).toHaveBeenCalledWith({
+      correlationId: ctx.correlationId,
+      currentUserId: ctx.scope.userId,
+      id: unwrapParseResult(toBookId('book-1')),
     });
   });
 

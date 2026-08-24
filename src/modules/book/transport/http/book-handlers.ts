@@ -208,6 +208,7 @@ export const createBookHandlers = ({ getUseCases }: BookHandlerDeps) => {
   ) => {
     return unwrapApplicationResult(
       getUseCases(ctx).delete({
+        correlationId: ctx.correlationId,
         currentUserId: ctx.scope.userId,
         id: data.id,
       }),

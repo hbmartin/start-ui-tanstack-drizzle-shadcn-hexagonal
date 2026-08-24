@@ -1,6 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
 
-import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import type { BookId, UserId } from '@/modules/kernel/domain/ids';
 
 import type { BookResult, BookUpdateOutcome, BookUseCaseDeps } from './types';
@@ -65,56 +64,40 @@ export async function updateBook(
     }
   };
 
-  try {
-    deps.logger.info({
-      event: 'book.update',
-      details: { bookId: input.id },
-    });
-    const result = await deps.transactionRunner.run(({ bookRepository }) =>
-      bookRepository.update(input.id, book)
-    );
-    if (result.isError()) {
-      await reclaimConsumedCover();
-      return Result.Error(result.getError());
-    }
-    const updated = result.get();
-
-    if (updated.type !== 'book_updated' && consumedCoverId) {
-      await reclaimConsumedCover();
-    }
-
-    // Reclaim the superseded cover object. Best-effort: a delete failure is
-    // logged but does not fail the update — the book has already changed.
-    const replacedCoverId =
-      updated.type === 'book_updated' ? updated.replacedCoverId : null;
-    if (
-      updated.type === 'book_updated' &&
-      replacedCoverId &&
-      replacedCoverId !== book.coverId
-    ) {
-      const deleted = await deps.coverStorage.deleteObject(replacedCoverId);
-      if (deleted.isError()) {
-        deps.logger.warn({
-          event: 'book.cover_object.delete_failed',
-          details: { bookId: input.id, objectKey: replacedCoverId },
-        });
-      }
-    }
-
-    return Result.Ok(updated);
-  } catch (error) {
+  deps.logger.info({
+    event: 'book.update',
+    details: { bookId: input.id },
+  });
+  const result = await deps.transactionRunner.run(({ bookRepository }) =>
+    bookRepository.update(input.id, book)
+  );
+  if (result.isError()) {
     await reclaimConsumedCover();
-
-    return Result.Error(
-      error instanceof AppError
-        ? error
-        : new AppError({
-            code: 'BOOK_TRANSACTION_ERROR',
-            category: 'system',
-            status: 500,
-            message: 'Book transaction error',
-            cause: error,
-          })
-    );
+    return Result.Error(result.getError());
   }
+  const updated = result.get();
+
+  if (updated.type !== 'book_updated' && consumedCoverId) {
+    await reclaimConsumedCover();
+  }
+
+  // Reclaim the superseded cover object. Best-effort: a delete failure is
+  // logged but does not fail the update — the book has already changed.
+  const replacedCoverId =
+    updated.type === 'book_updated' ? updated.replacedCoverId : null;
+  if (
+    updated.type === 'book_updated' &&
+    replacedCoverId &&
+    replacedCoverId !== book.coverId
+  ) {
+    const deleted = await deps.coverStorage.deleteObject(replacedCoverId);
+    if (deleted.isError()) {
+      deps.logger.warn({
+        event: 'book.cover_object.delete_failed',
+        details: { bookId: input.id, objectKey: replacedCoverId },
+      });
+    }
+  }
+
+  return Result.Ok(updated);
 }

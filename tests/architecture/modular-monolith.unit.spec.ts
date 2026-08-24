@@ -13,14 +13,6 @@ const transactionApplicationErrorBoundaryFiles = new Set([
   path.join(
     'src',
     'modules',
-    'book',
-    'application',
-    'use-cases',
-    'update-book.ts'
-  ),
-  path.join(
-    'src',
-    'modules',
     'email',
     'application',
     'use-cases',

@@ -21,7 +21,7 @@ export const bookCapabilityManifest = defineCapabilityManifest({
   ],
   preset: 'demo',
   removable: true,
-  dependsOn: ['auth', 'genre'],
+  dependsOn: ['audit', 'auth', 'genre'],
   publicRoutes: [
     {
       routeId: '/app/books/',

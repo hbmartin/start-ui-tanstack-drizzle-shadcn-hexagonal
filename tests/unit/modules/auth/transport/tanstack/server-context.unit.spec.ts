@@ -126,7 +126,9 @@ describe('server function middleware', () => {
       logger: mockLogger,
     });
 
-    await expect(tools.withPublicContext(async () => 'ok')).resolves.toBe('ok');
+    await expect(
+      tools.withPublicContext(async (ctx) => ctx.correlationId)
+    ).resolves.toBe('request-1');
 
     expect(getSession).toHaveBeenCalledOnce();
     expect(getCurrentSession).not.toHaveBeenCalled();

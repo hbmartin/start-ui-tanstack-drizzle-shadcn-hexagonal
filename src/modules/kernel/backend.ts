@@ -15,6 +15,8 @@ export {
   createTransactionRunner,
   getDefaultDbClient,
 } from './infrastructure/db/client';
+export type { DbTransaction } from './infrastructure/db/client';
+export { createResultTransactionRunner } from './infrastructure/db/result-transaction-runner';
 export { book, genre, user } from './infrastructure/db/schema';
 export { isRootDatabase } from './infrastructure/db/types';
 export { createTelemetryLogger } from './infrastructure/logger/telemetry';

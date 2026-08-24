@@ -5,7 +5,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { __resetBookComposition, getBookUseCases } from '@/composition/book';
 import type { BookRepository } from '@/modules/book';
-import { toBookId, toGenreId, toUserId } from '@/modules/kernel/domain/ids';
+import {
+  toBookId,
+  toCorrelationId,
+  toGenreId,
+  toUserId,
+} from '@/modules/kernel/domain/ids';
 import type { ApplicationResult } from '@/modules/kernel/testing';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 
@@ -96,5 +101,22 @@ describe('book composition', () => {
       limit: 20,
       searchTerm: 'du',
     });
+  });
+
+  it('does not pretend a repository override is a transaction for deletion', async () => {
+    const deleteBook = vi.fn(makeBookRepository().delete);
+    const useCases = getBookUseCases({
+      kernel: makeTestKernel(),
+      bookRepository: makeBookRepository({ delete: deleteBook }),
+    });
+
+    const result = await useCases.delete({
+      correlationId: unwrapParseResult(toCorrelationId('request-1')),
+      currentUserId: scope('user-1').userId,
+      id: book.id,
+    });
+
+    expect(result.isError()).toBe(true);
+    expect(deleteBook).not.toHaveBeenCalled();
   });
 });

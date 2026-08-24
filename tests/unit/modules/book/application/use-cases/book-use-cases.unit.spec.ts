@@ -2,6 +2,7 @@ import { Result } from '@bloodyowl/boxed';
 import { testBookAuthor, testBookTitle } from '@tests/support/branded-values';
 import { describe, expect, it, vi } from 'vitest';
 
+import { toAuditEventId, type AuditPort } from '@/modules/audit';
 import type { BookCoverStorage, BookRepository } from '@/modules/book';
 import type { BookUseCaseDeps } from '@/modules/book/application/use-cases/types';
 import type { Book } from '@/modules/book/domain/book';
@@ -10,6 +11,7 @@ import { AppError, type PermissionChecker } from '@/modules/kernel';
 import {
   toBookCoverObjectKey,
   toBookId,
+  toCorrelationId,
   toGeneratedId,
   toGenreId,
   toUserId,
@@ -18,6 +20,10 @@ import type { ApplicationResult } from '@/modules/kernel/testing';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 
 const now = new Date('2026-01-01T00:00:00.000Z');
+const correlationId = unwrapParseResult(toCorrelationId('correlation-1'));
+const auditEventId = unwrapParseResult(
+  toAuditEventId(unwrapParseResult(toGeneratedId('audit-event-1')))
+);
 const book: Book = {
   id: unwrapParseResult(toBookId('book-1')),
   title: testBookTitle('Dune'),
@@ -86,9 +92,22 @@ function makeCoverStorage(
   };
 }
 
+function makeAudit(overrides: Partial<AuditPort> = {}): AuditPort {
+  return {
+    record: async () =>
+      Result.Ok({
+        type: 'audit_recorded',
+        eventId: auditEventId,
+        occurredAt: now,
+      }),
+    ...overrides,
+  };
+}
+
 function makeDeps(
   input: {
     bookRepository?: BookRepository;
+    audit?: AuditPort;
     permissionChecker?: PermissionChecker;
     coverStorage?: BookCoverStorage;
     onTransactionRun?: () => void;
@@ -101,7 +120,10 @@ function makeDeps(
     transactionRunner: {
       run: (work) => {
         input.onTransactionRun?.();
-        return work({ bookRepository });
+        return work({
+          audit: input.audit ?? makeAudit(),
+          bookRepository,
+        });
       },
     },
     idGenerator,
@@ -255,12 +277,13 @@ describe('book use cases', () => {
     expect(getOk(updated)).toEqual({ type: 'book_not_found' });
     expect(transactionRuns).toBe(1);
     const deleted = await useCases.delete({
+      correlationId,
       currentUserId: scope.userId,
       id: unwrapParseResult(toBookId('missing')),
     });
 
     expect(getOk(deleted)).toEqual({ type: 'book_not_found' });
-    expect(transactionRuns).toBe(1);
+    expect(transactionRuns).toBe(2);
   });
 
   it('uses the transaction context repository for updates', async () => {
@@ -276,7 +299,11 @@ describe('book use cases', () => {
     const useCases = createBookUseCases({
       ...makeDeps({ bookRepository: outsideRepository }),
       transactionRunner: {
-        run: (work) => work({ bookRepository: transactionRepository }),
+        run: (work) =>
+          work({
+            audit: makeAudit(),
+            bookRepository: transactionRepository,
+          }),
       },
     });
 
@@ -291,6 +318,143 @@ describe('book use cases', () => {
       book,
       replacedCoverId: null,
     });
+  });
+
+  it('deletes and records the required audit event in one transaction context', async () => {
+    const steps: string[] = [];
+    const outsideDelete = vi.fn(async () => {
+      throw new Error('outside repository should not delete');
+    });
+    const transactionDelete = vi.fn(async () => {
+      steps.push('delete');
+      return Result.Ok({ type: 'book_deleted' as const, deletedCoverId: null });
+    });
+    const record = vi.fn<AuditPort['record']>(async () => {
+      steps.push('audit');
+      return Result.Ok({
+        type: 'audit_recorded',
+        eventId: auditEventId,
+        occurredAt: now,
+      });
+    });
+    const useCases = createBookUseCases({
+      ...makeDeps({ bookRepository: makeRepo({ delete: outsideDelete }) }),
+      transactionRunner: {
+        async run(work) {
+          steps.push('transaction');
+          const result = await work({
+            audit: makeAudit({ record }),
+            bookRepository: makeRepo({ delete: transactionDelete }),
+          });
+          steps.push('commit');
+          return result;
+        },
+      },
+    });
+
+    const result = await useCases.delete({
+      correlationId,
+      currentUserId: scope.userId,
+      id: book.id,
+    });
+
+    expect(getOk(result)).toEqual({
+      type: 'book_deleted',
+      deletedCoverId: null,
+    });
+    expect(outsideDelete).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith({
+      type: 'data.book-deleted',
+      actor: { kind: 'user', userId: scope.userId },
+      subject: { kind: 'book', id: book.id },
+      correlationId,
+      metadata: {},
+    });
+    expect(steps).toEqual(['transaction', 'delete', 'audit', 'commit']);
+  });
+
+  it('fails closed when required book-deletion audit persistence fails', async () => {
+    const auditError = new AppError({
+      code: 'AUDIT_EVENT_PERSISTENCE_FAILED',
+      category: 'system',
+      status: 500,
+    });
+    const deleteObject = vi.fn(async () =>
+      Result.Ok({ type: 'cover_object_deleted' as const })
+    );
+    let rollbackRequested = false;
+    const useCases = createBookUseCases({
+      ...makeDeps({ coverStorage: makeCoverStorage({ deleteObject }) }),
+      transactionRunner: {
+        async run(work) {
+          const result = await work({
+            audit: makeAudit({
+              record: async () => Result.Error(auditError),
+            }),
+            bookRepository: makeRepo({
+              delete: async () =>
+                Result.Ok({
+                  type: 'book_deleted',
+                  deletedCoverId: unwrapParseResult(
+                    toBookCoverObjectKey('books/cover.webp')
+                  ),
+                }),
+            }),
+          });
+          rollbackRequested = result.isError();
+          return result;
+        },
+      },
+    });
+
+    const result = await useCases.delete({
+      correlationId,
+      currentUserId: scope.userId,
+      id: book.id,
+    });
+
+    expect(getError(result)).toBe(auditError);
+    expect(rollbackRequested).toBe(true);
+    expect(deleteObject).not.toHaveBeenCalled();
+  });
+
+  it('rejects a best-effort outcome from a faulty required-audit adapter', async () => {
+    const result = await createBookUseCases(
+      makeDeps({
+        audit: makeAudit({
+          record: async () =>
+            Result.Ok({
+              type: 'audit_best_effort_failed',
+              eventType: 'data.book-deleted',
+              operationalSignalAttempted: true,
+            }),
+        }),
+      })
+    ).delete({ correlationId, currentUserId: scope.userId, id: book.id });
+
+    expect(getError(result)).toMatchObject({
+      code: 'REQUIRED_AUDIT_EVENT_NOT_RECORDED',
+    });
+  });
+
+  it('does not audit when the transactional repository delete fails', async () => {
+    const deleteError = new AppError({
+      code: 'BOOK_DELETE_FAILED',
+      category: 'system',
+      status: 500,
+    });
+    const record = vi.fn<AuditPort['record']>();
+    const result = await createBookUseCases(
+      makeDeps({
+        audit: makeAudit({ record }),
+        bookRepository: makeRepo({
+          delete: async () => Result.Error(deleteError),
+        }),
+      })
+    ).delete({ correlationId, currentUserId: scope.userId, id: book.id });
+
+    expect(getError(result)).toBe(deleteError);
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('prepares cover uploads through permission and object-key policy', async () => {
@@ -600,7 +764,7 @@ describe('book use cases', () => {
       expect(deleteObject).toHaveBeenCalledWith(newKey);
     });
 
-    it('on update reclaims a consumed new cover when the transaction throws', async () => {
+    it('on update reclaims a consumed cover when the transaction runner fails', async () => {
       const error = new AppError({
         code: 'BOOK_TRANSACTION_FAILED',
         category: 'system',
@@ -631,9 +795,7 @@ describe('book use cases', () => {
           coverStorage: makeCoverStorage({ consumeUpload, deleteObject }),
         }),
         transactionRunner: {
-          run: async () => {
-            throw error;
-          },
+          run: async () => Result.Error(error),
         },
       }).update({
         currentUserId: scope.userId,
@@ -693,7 +855,7 @@ describe('book use cases', () => {
           }),
           coverStorage: makeCoverStorage({ deleteObject }),
         })
-      ).delete({ currentUserId: scope.userId, id: book.id });
+      ).delete({ correlationId, currentUserId: scope.userId, id: book.id });
 
       expect(deleteObject).toHaveBeenCalledWith(coverKey);
     });
@@ -719,7 +881,7 @@ describe('book use cases', () => {
           }),
           coverStorage: makeCoverStorage({ deleteObject }),
         })
-      ).delete({ currentUserId: scope.userId, id: book.id });
+      ).delete({ correlationId, currentUserId: scope.userId, id: book.id });
 
       expect(getOk(result)).toEqual({
         type: 'book_deleted',

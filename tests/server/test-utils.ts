@@ -1,7 +1,12 @@
 import { expect, vi } from 'vitest';
 
 import type { Permission } from '@/modules/auth';
-import { toEmailAddress, toSessionId, toUserId } from '@/modules/kernel';
+import {
+  toCorrelationId,
+  toEmailAddress,
+  toSessionId,
+  toUserId,
+} from '@/modules/kernel';
 
 const hoisted = vi.hoisted(() => ({
   mockGetSession: vi.fn(),
@@ -150,6 +155,7 @@ export const createAuthenticatedContext = (overrides?: {
   session?: typeof mockSession;
 }) =>
   ({
+    correlationId: unwrapParseResult(toCorrelationId('correlation-1')),
     user: overrides?.user ?? mockUser,
     session: overrides?.session ?? mockSession,
     scope: {
