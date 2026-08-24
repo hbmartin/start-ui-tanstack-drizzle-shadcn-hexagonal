@@ -6,7 +6,7 @@ import {
 } from '@tests/server/test-utils';
 import { describe, expect, it } from 'vitest';
 
-import { accountUpdateInfo } from '@/modules/account/server';
+import { profileUpdateInfo } from '@/modules/profile/server';
 import { bookGetAll } from '@/modules/book/server';
 import { genreGetAll } from '@/modules/genre/server';
 import { userGetAll } from '@/modules/user/server';
@@ -63,12 +63,12 @@ describe('protected server functions', () => {
   );
 
   it(
-    'returns 401 for direct unauthenticated account mutations',
+    'returns 401 for direct unauthenticated profile mutations',
     async () => {
       mockGetSession.mockResolvedValueOnce(null);
 
       await expect(
-        accountUpdateInfo({ data: { name: 'User' } })
+        profileUpdateInfo({ data: { name: 'User' } })
       ).rejects.toMatchObject({
         code: 'UNAUTHORIZED',
         status: 401,
@@ -78,7 +78,7 @@ describe('protected server functions', () => {
   );
 
   it(
-    'returns 403 for direct unauthorized account mutations',
+    'returns 403 for direct unauthorized profile mutations',
     async () => {
       mockGetSession.mockResolvedValueOnce({
         user: mockUser,
@@ -87,7 +87,7 @@ describe('protected server functions', () => {
       mockUserHasPermission.mockResolvedValue({ success: false, error: false });
 
       await expect(
-        accountUpdateInfo({ data: { name: 'User' } })
+        profileUpdateInfo({ data: { name: 'User' } })
       ).rejects.toMatchObject({
         code: 'FORBIDDEN',
         status: 403,

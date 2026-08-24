@@ -191,13 +191,13 @@
         "patterns": ["src/modules/*/testing.{ts,tsx}"],
       },
       {
-        "name": "account-gates",
+        "name": "profile-gates",
         "patterns": [
-          "src/modules/account/index.ts",
-          "src/modules/account/server.ts",
-          "src/modules/account/backend.ts",
-          "src/modules/account/client.ts",
-          "src/modules/account/presentation.ts",
+          "src/modules/profile/index.ts",
+          "src/modules/profile/server.ts",
+          "src/modules/profile/backend.ts",
+          "src/modules/profile/client.ts",
+          "src/modules/profile/presentation.ts",
         ],
       },
       {
@@ -290,7 +290,7 @@
       {
         "from": "modules",
         "allow": [
-          "account-gates",
+          "profile-gates",
           "auth-gates",
           "book-gates",
           "email-gates",
@@ -316,9 +316,9 @@
         ],
       },
       {
-        "from": "account-gates",
+        "from": "profile-gates",
         "allow": [
-          "modules/account",
+          "modules/profile",
           "server-functions",
           "kernel-gates",
           "platform",
@@ -396,7 +396,7 @@
         "from": "server-functions",
         "allow": [
           "modules",
-          "account-gates",
+          "profile-gates",
           "auth-gates",
           "book-gates",
           "email-gates",
@@ -435,7 +435,7 @@
       {
         "from": "app",
         "allow": [
-          "account-gates",
+          "profile-gates",
           "auth-gates",
           "book-gates",
           "email-gates",
@@ -451,7 +451,7 @@
         "from": "routes",
         "allow": [
           "app",
-          "account-gates",
+          "profile-gates",
           "auth-gates",
           "book-gates",
           "email-gates",
@@ -468,7 +468,7 @@
         "from": "composition",
         "allow": [
           "modules",
-          "account-gates",
+          "profile-gates",
           "auth-gates",
           "book-gates",
           "email-gates",

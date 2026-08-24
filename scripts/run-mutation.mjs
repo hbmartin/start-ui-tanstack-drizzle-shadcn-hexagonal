@@ -10,7 +10,7 @@ const fast = args.has('--fast');
 const dryRun = args.has('--dry-run');
 
 const allScopes = [
-  'account',
+  'profile',
   'auth',
   'book',
   'genre',

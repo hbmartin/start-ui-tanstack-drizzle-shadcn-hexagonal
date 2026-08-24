@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { zu } from '@/platform/lib/zod/zod-utils';
 
-import { ACCOUNT_NAME_MAX_LENGTH } from '@/modules/account';
+import { PROFILE_NAME_MAX_LENGTH } from '@/modules/profile';
 
 const zOtp = () =>
   z
@@ -37,5 +37,5 @@ export type FormFieldsOnboarding = z.infer<
 >;
 export const zFormFieldsOnboarding = () =>
   z.object({
-    name: zu.fieldText.required({ max: ACCOUNT_NAME_MAX_LENGTH }),
+    name: zu.fieldText.required({ max: PROFILE_NAME_MAX_LENGTH }),
   });

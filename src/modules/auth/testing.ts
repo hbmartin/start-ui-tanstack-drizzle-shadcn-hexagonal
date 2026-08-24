@@ -16,9 +16,9 @@ export type { AuthSession } from './domain/session';
 export { createAuthUseCases } from './factory';
 export { isBlockedBetterAuthHttpPath } from './infrastructure/better-auth/auth-http-exposure';
 export {
-  AccountRepositoryDrizzle,
-  createAccountRepository,
-} from './infrastructure/drizzle/account-repository-drizzle';
+  ProfileRepositoryDrizzle,
+  createProfileRepository,
+} from './infrastructure/drizzle/profile-repository-drizzle';
 export * as authDrizzleSchema from './infrastructure/drizzle/schema';
 export {
   createUserRepository,

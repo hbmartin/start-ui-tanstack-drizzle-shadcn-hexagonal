@@ -1,8 +1,8 @@
 export {
-  __resetAccountComposition,
-  type AccountOverrides,
-  getAccountUseCases,
-} from './account';
+  __resetProfileComposition,
+  type ProfileOverrides,
+  getProfileUseCases,
+} from './profile';
 export {
   __resetAuthComposition,
   type AuthOverrides,
@@ -36,7 +36,7 @@ export {
   type UserOverrides,
 } from './user';
 
-import { type AccountOverrides, getAccountUseCases } from './account';
+import { type ProfileOverrides, getProfileUseCases } from './profile';
 import { type BookOverrides, getBookUseCases } from './book';
 import { type EmailOverrides, getEmailServices } from './email';
 import { type GenreOverrides, getGenreUseCases } from './genre';
@@ -48,7 +48,7 @@ export type ServicesOverrides = {
   book?: Omit<BookOverrides, 'kernel'>;
   user?: Omit<UserOverrides, 'kernel'>;
   genre?: Omit<GenreOverrides, 'kernel'>;
-  account?: Omit<AccountOverrides, 'kernel'>;
+  profile?: Omit<ProfileOverrides, 'kernel'>;
   email?: Omit<EmailOverrides, 'kernel' | 'db'>;
 };
 
@@ -59,7 +59,7 @@ export function getServices(overrides?: ServicesOverrides) {
       book: getBookUseCases(),
       user: getUserUseCases(),
       genre: getGenreUseCases(),
-      account: getAccountUseCases(),
+      profile: getProfileUseCases(),
       email: getEmailServices(),
     } as const;
   }
@@ -70,7 +70,7 @@ export function getServices(overrides?: ServicesOverrides) {
     book: getBookUseCases({ ...overrides.book, kernel }),
     user: getUserUseCases({ ...overrides.user, kernel }),
     genre: getGenreUseCases({ ...overrides.genre, kernel }),
-    account: getAccountUseCases({ ...overrides.account, kernel }),
+    profile: getProfileUseCases({ ...overrides.profile, kernel }),
     email: getEmailServices({ ...overrides.email, kernel }),
   } as const;
 }

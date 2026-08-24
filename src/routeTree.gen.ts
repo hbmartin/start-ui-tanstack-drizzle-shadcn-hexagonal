@@ -21,13 +21,13 @@ import { Route as LoginIndexRouteImport } from './routes/login/index'
 import { Route as AppIndexRouteImport } from './routes/app/index'
 import { Route as ApiUploadRouteImport } from './routes/api/upload'
 import { Route as ManagerUsersIndexRouteImport } from './routes/manager/users/index'
+import { Route as ManagerProfileIndexRouteImport } from './routes/manager/profile.index'
 import { Route as ManagerDashboardIndexRouteImport } from './routes/manager/dashboard.index'
 import { Route as ManagerBooksIndexRouteImport } from './routes/manager/books/index'
-import { Route as ManagerAccountIndexRouteImport } from './routes/manager/account.index'
 import { Route as LoginVerifyIndexRouteImport } from './routes/login/verify.index'
 import { Route as LoginErrorIndexRouteImport } from './routes/login/error.index'
+import { Route as AppProfileIndexRouteImport } from './routes/app/profile.index'
 import { Route as AppBooksIndexRouteImport } from './routes/app/books/index'
-import { Route as AppAccountIndexRouteImport } from './routes/app/account.index'
 import { Route as ApiWebhooksResendRouteImport } from './routes/api/webhooks.resend'
 import { Route as ApiTelemetrySentryTunnelRouteImport } from './routes/api/telemetry.sentry-tunnel'
 import { Route as ApiTelemetryLogsRouteImport } from './routes/api/telemetry.logs'
@@ -103,6 +103,11 @@ const ManagerUsersIndexRoute = ManagerUsersIndexRouteImport.update({
   path: '/users/',
   getParentRoute: () => ManagerRouteRoute,
 } as any)
+const ManagerProfileIndexRoute = ManagerProfileIndexRouteImport.update({
+  id: '/profile/',
+  path: '/profile/',
+  getParentRoute: () => ManagerRouteRoute,
+} as any)
 const ManagerDashboardIndexRoute = ManagerDashboardIndexRouteImport.update({
   id: '/dashboard/',
   path: '/dashboard/',
@@ -111,11 +116,6 @@ const ManagerDashboardIndexRoute = ManagerDashboardIndexRouteImport.update({
 const ManagerBooksIndexRoute = ManagerBooksIndexRouteImport.update({
   id: '/books/',
   path: '/books/',
-  getParentRoute: () => ManagerRouteRoute,
-} as any)
-const ManagerAccountIndexRoute = ManagerAccountIndexRouteImport.update({
-  id: '/account/',
-  path: '/account/',
   getParentRoute: () => ManagerRouteRoute,
 } as any)
 const LoginVerifyIndexRoute = LoginVerifyIndexRouteImport.update({
@@ -128,14 +128,14 @@ const LoginErrorIndexRoute = LoginErrorIndexRouteImport.update({
   path: '/error/',
   getParentRoute: () => LoginRouteRoute,
 } as any)
+const AppProfileIndexRoute = AppProfileIndexRouteImport.update({
+  id: '/profile/',
+  path: '/profile/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const AppBooksIndexRoute = AppBooksIndexRouteImport.update({
   id: '/books/',
   path: '/books/',
-  getParentRoute: () => AppRouteRoute,
-} as any)
-const AppAccountIndexRoute = AppAccountIndexRouteImport.update({
-  id: '/account/',
-  path: '/account/',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const ApiWebhooksResendRoute = ApiWebhooksResendRouteImport.update({
@@ -230,13 +230,13 @@ export interface FileRoutesByFullPath {
   '/api/telemetry/logs': typeof ApiTelemetryLogsRoute
   '/api/telemetry/sentry-tunnel': typeof ApiTelemetrySentryTunnelRoute
   '/api/webhooks/resend': typeof ApiWebhooksResendRoute
-  '/app/account/': typeof AppAccountIndexRoute
   '/app/books/': typeof AppBooksIndexRoute
+  '/app/profile/': typeof AppProfileIndexRoute
   '/login/error/': typeof LoginErrorIndexRoute
   '/login/verify/': typeof LoginVerifyIndexRoute
-  '/manager/account/': typeof ManagerAccountIndexRoute
   '/manager/books/': typeof ManagerBooksIndexRoute
   '/manager/dashboard/': typeof ManagerDashboardIndexRoute
+  '/manager/profile/': typeof ManagerProfileIndexRoute
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/app/books/$id/': typeof AppBooksIdIndexRoute
@@ -261,13 +261,13 @@ export interface FileRoutesByTo {
   '/api/telemetry/logs': typeof ApiTelemetryLogsRoute
   '/api/telemetry/sentry-tunnel': typeof ApiTelemetrySentryTunnelRoute
   '/api/webhooks/resend': typeof ApiWebhooksResendRoute
-  '/app/account': typeof AppAccountIndexRoute
   '/app/books': typeof AppBooksIndexRoute
+  '/app/profile': typeof AppProfileIndexRoute
   '/login/error': typeof LoginErrorIndexRoute
   '/login/verify': typeof LoginVerifyIndexRoute
-  '/manager/account': typeof ManagerAccountIndexRoute
   '/manager/books': typeof ManagerBooksIndexRoute
   '/manager/dashboard': typeof ManagerDashboardIndexRoute
+  '/manager/profile': typeof ManagerProfileIndexRoute
   '/manager/users': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/app/books/$id': typeof AppBooksIdIndexRoute
@@ -297,13 +297,13 @@ export interface FileRoutesById {
   '/api/telemetry/logs': typeof ApiTelemetryLogsRoute
   '/api/telemetry/sentry-tunnel': typeof ApiTelemetrySentryTunnelRoute
   '/api/webhooks/resend': typeof ApiWebhooksResendRoute
-  '/app/account/': typeof AppAccountIndexRoute
   '/app/books/': typeof AppBooksIndexRoute
+  '/app/profile/': typeof AppProfileIndexRoute
   '/login/error/': typeof LoginErrorIndexRoute
   '/login/verify/': typeof LoginVerifyIndexRoute
-  '/manager/account/': typeof ManagerAccountIndexRoute
   '/manager/books/': typeof ManagerBooksIndexRoute
   '/manager/dashboard/': typeof ManagerDashboardIndexRoute
+  '/manager/profile/': typeof ManagerProfileIndexRoute
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/app/books/$id/': typeof AppBooksIdIndexRoute
@@ -334,13 +334,13 @@ export interface FileRouteTypes {
     | '/api/telemetry/logs'
     | '/api/telemetry/sentry-tunnel'
     | '/api/webhooks/resend'
-    | '/app/account/'
     | '/app/books/'
+    | '/app/profile/'
     | '/login/error/'
     | '/login/verify/'
-    | '/manager/account/'
     | '/manager/books/'
     | '/manager/dashboard/'
+    | '/manager/profile/'
     | '/manager/users/'
     | '/api/dev/email/$template'
     | '/app/books/$id/'
@@ -365,13 +365,13 @@ export interface FileRouteTypes {
     | '/api/telemetry/logs'
     | '/api/telemetry/sentry-tunnel'
     | '/api/webhooks/resend'
-    | '/app/account'
     | '/app/books'
+    | '/app/profile'
     | '/login/error'
     | '/login/verify'
-    | '/manager/account'
     | '/manager/books'
     | '/manager/dashboard'
+    | '/manager/profile'
     | '/manager/users'
     | '/api/dev/email/$template'
     | '/app/books/$id'
@@ -400,13 +400,13 @@ export interface FileRouteTypes {
     | '/api/telemetry/logs'
     | '/api/telemetry/sentry-tunnel'
     | '/api/webhooks/resend'
-    | '/app/account/'
     | '/app/books/'
+    | '/app/profile/'
     | '/login/error/'
     | '/login/verify/'
-    | '/manager/account/'
     | '/manager/books/'
     | '/manager/dashboard/'
+    | '/manager/profile/'
     | '/manager/users/'
     | '/api/dev/email/$template'
     | '/app/books/$id/'
@@ -523,6 +523,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ManagerUsersIndexRouteImport
       parentRoute: typeof ManagerRouteRoute
     }
+    '/manager/profile/': {
+      id: '/manager/profile/'
+      path: '/profile'
+      fullPath: '/manager/profile/'
+      preLoaderRoute: typeof ManagerProfileIndexRouteImport
+      parentRoute: typeof ManagerRouteRoute
+    }
     '/manager/dashboard/': {
       id: '/manager/dashboard/'
       path: '/dashboard'
@@ -535,13 +542,6 @@ declare module '@tanstack/react-router' {
       path: '/books'
       fullPath: '/manager/books/'
       preLoaderRoute: typeof ManagerBooksIndexRouteImport
-      parentRoute: typeof ManagerRouteRoute
-    }
-    '/manager/account/': {
-      id: '/manager/account/'
-      path: '/account'
-      fullPath: '/manager/account/'
-      preLoaderRoute: typeof ManagerAccountIndexRouteImport
       parentRoute: typeof ManagerRouteRoute
     }
     '/login/verify/': {
@@ -558,18 +558,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginErrorIndexRouteImport
       parentRoute: typeof LoginRouteRoute
     }
+    '/app/profile/': {
+      id: '/app/profile/'
+      path: '/profile'
+      fullPath: '/app/profile/'
+      preLoaderRoute: typeof AppProfileIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/app/books/': {
       id: '/app/books/'
       path: '/books'
       fullPath: '/app/books/'
       preLoaderRoute: typeof AppBooksIndexRouteImport
-      parentRoute: typeof AppRouteRoute
-    }
-    '/app/account/': {
-      id: '/app/account/'
-      path: '/account'
-      fullPath: '/app/account/'
-      preLoaderRoute: typeof AppAccountIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/api/webhooks/resend': {
@@ -675,15 +675,15 @@ declare module '@tanstack/react-router' {
 
 interface AppRouteRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
-  AppAccountIndexRoute: typeof AppAccountIndexRoute
   AppBooksIndexRoute: typeof AppBooksIndexRoute
+  AppProfileIndexRoute: typeof AppProfileIndexRoute
   AppBooksIdIndexRoute: typeof AppBooksIdIndexRoute
 }
 
 const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppIndexRoute: AppIndexRoute,
-  AppAccountIndexRoute: AppAccountIndexRoute,
   AppBooksIndexRoute: AppBooksIndexRoute,
+  AppProfileIndexRoute: AppProfileIndexRoute,
   AppBooksIdIndexRoute: AppBooksIdIndexRoute,
 }
 
@@ -709,9 +709,9 @@ const LoginRouteRouteWithChildren = LoginRouteRoute._addFileChildren(
 
 interface ManagerRouteRouteChildren {
   ManagerIndexRoute: typeof ManagerIndexRoute
-  ManagerAccountIndexRoute: typeof ManagerAccountIndexRoute
   ManagerBooksIndexRoute: typeof ManagerBooksIndexRoute
   ManagerDashboardIndexRoute: typeof ManagerDashboardIndexRoute
+  ManagerProfileIndexRoute: typeof ManagerProfileIndexRoute
   ManagerUsersIndexRoute: typeof ManagerUsersIndexRoute
   ManagerBooksIdIndexRoute: typeof ManagerBooksIdIndexRoute
   ManagerBooksNewIndexRoute: typeof ManagerBooksNewIndexRoute
@@ -723,9 +723,9 @@ interface ManagerRouteRouteChildren {
 
 const ManagerRouteRouteChildren: ManagerRouteRouteChildren = {
   ManagerIndexRoute: ManagerIndexRoute,
-  ManagerAccountIndexRoute: ManagerAccountIndexRoute,
   ManagerBooksIndexRoute: ManagerBooksIndexRoute,
   ManagerDashboardIndexRoute: ManagerDashboardIndexRoute,
+  ManagerProfileIndexRoute: ManagerProfileIndexRoute,
   ManagerUsersIndexRoute: ManagerUsersIndexRoute,
   ManagerBooksIdIndexRoute: ManagerBooksIdIndexRoute,
   ManagerBooksNewIndexRoute: ManagerBooksNewIndexRoute,

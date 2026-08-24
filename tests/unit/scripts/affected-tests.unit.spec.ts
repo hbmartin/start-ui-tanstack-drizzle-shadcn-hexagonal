@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   type AffectedTestsResult,
+  type VitestCommandRunner,
   buildVitestCommand,
   classifyChangedFiles,
   collectChangedFilesFromGit,
@@ -12,12 +13,14 @@ import {
   deduplicateAndSort,
   findAffectedTests,
   formatOutput,
+  groupVitestTestFiles,
   isCliEntrypoint,
   main,
   normalizePath,
   parseCliArguments,
   parseImpactClosureReport,
   parseNullDelimitedPaths,
+  runVitest,
   runStrategyB,
 } from '../../../scripts/affected-tests';
 
@@ -399,17 +402,89 @@ describe('output formatting', () => {
 });
 
 describe('Vitest runner command', () => {
-  it('builds the expected pnpm Vitest command', () => {
+  it('builds a project-scoped pnpm Vitest command', () => {
     expect(buildVitestCommand(['tests/unit/a.unit.spec.ts'])).toEqual({
       args: [
         'exec',
         'vitest',
         'run',
+        '--project=unit',
         '--passWithNoTests',
         'tests/unit/a.unit.spec.ts',
       ],
       command: 'pnpm',
+      project: 'unit',
     });
+  });
+
+  it('groups affected tests into deterministic sequential projects', () => {
+    expect(
+      groupVitestTestFiles([
+        'tests/integration/z.integration.test.ts',
+        'tests/unit/b.unit.spec.ts',
+        'tests/browser/a.browser.spec.tsx',
+        'tests/security/a.unit.spec.ts',
+      ])
+    ).toEqual([
+      {
+        files: ['tests/security/a.unit.spec.ts', 'tests/unit/b.unit.spec.ts'],
+        project: 'unit',
+      },
+      {
+        files: ['tests/browser/a.browser.spec.tsx'],
+        project: 'browser',
+      },
+      {
+        files: ['tests/integration/z.integration.test.ts'],
+        project: 'integration',
+      },
+    ]);
+  });
+
+  it('stops sequential project execution on the first child failure', async () => {
+    const runCommand = vi
+      .fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(7)
+      .mockResolvedValueOnce(0);
+
+    const code = await runVitest(
+      [
+        'tests/unit/a.unit.spec.ts',
+        'tests/browser/a.browser.spec.tsx',
+        'tests/integration/a.integration.test.ts',
+      ],
+      false,
+      runCommand
+    );
+
+    expect(code).toBe(7);
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand.mock.calls[1]?.[0]).toMatchObject({ project: 'browser' });
+  });
+
+  it('uses project discovery instead of a huge explicit path list for run-all fallbacks', async () => {
+    const runCommand = vi.fn<VitestCommandRunner>(async () => 0);
+
+    const code = await runVitest(
+      [
+        'tests/unit/a.unit.spec.ts',
+        'tests/browser/a.browser.spec.tsx',
+        'tests/integration/a.integration.test.ts',
+      ],
+      true,
+      runCommand
+    );
+
+    expect(code).toBe(0);
+    expect(runCommand).toHaveBeenCalledTimes(3);
+    for (const [command] of runCommand.mock.calls) {
+      expect(command.args).not.toContain('tests/unit/a.unit.spec.ts');
+      expect(command.args).not.toContain('tests/browser/a.browser.spec.tsx');
+      expect(command.args).not.toContain(
+        'tests/integration/a.integration.test.ts'
+      );
+    }
   });
 
   it('does not spawn Vitest when the CLI run finds no affected tests', async () => {
@@ -443,7 +518,10 @@ describe('Vitest runner command', () => {
 
     expect(code).toBe(7);
     expect(findAffectedTests).toHaveBeenCalledWith({ base: 'origin/main' });
-    expect(runVitest).toHaveBeenCalledWith(['tests/unit/a.unit.spec.ts']);
+    expect(runVitest).toHaveBeenCalledWith(
+      ['tests/unit/a.unit.spec.ts'],
+      false
+    );
     expect(stdout.join('')).toContain('tests/unit/a.unit.spec.ts');
   });
 });

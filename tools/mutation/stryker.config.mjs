@@ -22,7 +22,7 @@ const commonModuleScope = (moduleName) => ({
 });
 
 const scopes = {
-  account: commonModuleScope('account'),
+  profile: commonModuleScope('profile'),
   auth: commonModuleScope('auth'),
   book: commonModuleScope('book'),
   genre: commonModuleScope('genre'),

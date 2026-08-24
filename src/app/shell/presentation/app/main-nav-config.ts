@@ -24,10 +24,10 @@ export const MAIN_NAV_LINKS = linkOptions([
     to: '/app/books',
   },
   {
-    labelTranslationKey: 'layout:nav.account',
+    labelTranslationKey: 'layout:nav.profile',
     icon: IconUserCircleDuotone,
     iconActive: IconUserCircleFill,
-    to: '/app/account',
+    to: '/app/profile',
   },
 ]);
 

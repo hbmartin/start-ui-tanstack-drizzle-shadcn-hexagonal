@@ -14,7 +14,7 @@ export const permissionStatements = {
     'delete',
   ],
   session: ['list', 'revoke', 'delete'],
-  account: ['read', 'update'],
+  profile: ['read', 'update'],
   apps: ['app', 'manager'],
   book: ['read', 'create', 'update', 'delete'],
   genre: ['read'],
@@ -30,7 +30,7 @@ export const rolePermissions = {
   user: {
     user: [],
     session: [],
-    account: ['update'],
+    profile: ['update'],
     apps: ['app'],
     book: ['read'],
     genre: ['read'],
@@ -46,7 +46,7 @@ export const rolePermissions = {
       'delete',
     ],
     session: ['list', 'revoke', 'delete'],
-    account: ['update'],
+    profile: ['update'],
     apps: ['app', 'manager'],
     book: ['read', 'create', 'update', 'delete'],
     genre: ['read'],
@@ -81,7 +81,7 @@ export const hasRolePermission = (role: Role, permissions: Permission) => {
 };
 
 export const defaultUserPermissions = {
-  account: ['update'],
+  profile: ['update'],
   apps: ['app'],
   book: ['read'],
   genre: ['read'],

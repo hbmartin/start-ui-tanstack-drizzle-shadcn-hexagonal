@@ -66,11 +66,6 @@
         "count": 1
       }
     },
-    "src/modules/account/presentation/user-card.tsx": {
-      "crap_high": {
-        "count": 1
-      }
-    },
     "src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts": {
       "crap_moderate": {
         "count": 2
@@ -152,6 +147,11 @@
         "count": 1
       },
       "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/modules/profile/presentation/user-card.tsx": {
+      "crap_high": {
         "count": 1
       }
     },
@@ -294,11 +294,6 @@
         "count": 1
       }
     },
-    "src/modules/account/presentation/user-card.tsx\u0000UserCard": {
-      "crap_high": {
-        "count": 1
-      }
-    },
     "src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts\u0000list": {
       "crap_moderate": {
         "count": 1
@@ -408,6 +403,11 @@
         "count": 1
       },
       "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/modules/profile/presentation/user-card.tsx\u0000UserCard": {
+      "crap_high": {
         "count": 1
       }
     },

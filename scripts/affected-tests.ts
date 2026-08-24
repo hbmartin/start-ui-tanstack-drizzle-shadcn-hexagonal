@@ -105,10 +105,17 @@ export type MainDependencies = {
   findAffectedTests?: (options: {
     base?: string;
   }) => Promise<AffectedTestsResult>;
-  runVitest?: (testFiles: string[]) => Promise<number>;
+  runVitest?: (testFiles: string[], runAll: boolean) => Promise<number>;
   stderr?: (message: string) => void;
   stdout?: (message: string) => void;
 };
+
+export type VitestProject = 'unit' | 'browser' | 'integration';
+export type VitestCommandRunner = (command: {
+  args: string[];
+  command: string;
+  project: VitestProject;
+}) => Promise<number>;
 
 type BooleanCliOption = Exclude<keyof CliOptions, 'base'>;
 
@@ -702,15 +709,47 @@ export const formatOutput = (
   ].join('\n');
 };
 
-export const buildVitestCommand = (testFiles: string[]) => ({
-  args: ['exec', 'vitest', 'run', '--passWithNoTests', ...testFiles],
+export const getVitestProject = (testFile: string): VitestProject => {
+  if (testFile.startsWith('tests/browser/')) return 'browser';
+  if (testFile.startsWith('tests/integration/')) return 'integration';
+  return 'unit';
+};
+
+export const groupVitestTestFiles = (testFiles: string[]) => {
+  const groups = new Map<VitestProject, string[]>([
+    ['unit', []],
+    ['browser', []],
+    ['integration', []],
+  ]);
+
+  for (const testFile of deduplicateAndSort(testFiles)) {
+    groups.get(getVitestProject(testFile))?.push(testFile);
+  }
+
+  return [...groups.entries()].flatMap(([project, files]) =>
+    files.length > 0 ? [{ files, project }] : []
+  );
+};
+
+export const buildVitestCommand = (
+  testFiles: string[],
+  project = getVitestProject(testFiles[0] ?? '')
+) => ({
+  args: [
+    'exec',
+    'vitest',
+    'run',
+    `--project=${project}`,
+    '--passWithNoTests',
+    ...testFiles,
+  ],
   command: 'pnpm',
+  project,
 });
 
-export const runVitest = (testFiles: string[]) =>
+export const runVitestCommand: VitestCommandRunner = (command) =>
   new Promise<number>((resolve) => {
-    const { args, command } = buildVitestCommand(testFiles);
-    const child = spawn(command, args, {
+    const child = spawn(command.command, command.args, {
       shell: process.platform === 'win32',
       stdio: 'inherit',
     });
@@ -724,6 +763,21 @@ export const runVitest = (testFiles: string[]) =>
       resolve(code ?? 1);
     });
   });
+
+export const runVitest = async (
+  testFiles: string[],
+  runAll = false,
+  runCommand: VitestCommandRunner = runVitestCommand
+) => {
+  for (const { files, project } of groupVitestTestFiles(testFiles)) {
+    const code = await runCommand(
+      buildVitestCommand(runAll ? [] : files, project)
+    );
+    if (code !== 0) return code;
+  }
+
+  return 0;
+};
 
 const writeOutput = (output: string, write: (message: string) => void) => {
   if (!output) return;
@@ -772,7 +826,7 @@ export const main = async (
       return 0;
     }
 
-    return await runVitestDependency(result.testFiles);
+    return await runVitestDependency(result.testFiles, result.runAll);
   } catch (error) {
     stderr(`${error instanceof Error ? error.message : String(error)}\n`);
     return 2;

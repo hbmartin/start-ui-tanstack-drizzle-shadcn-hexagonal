@@ -17,6 +17,21 @@ export {
 export type { AuthUseCaseDeps } from './application/use-cases/types';
 export { AUTH_EMAIL_OTP_EXPIRATION_IN_MINUTES } from './domain/auth-policy';
 export {
+  type AuthIdentity,
+  type AuthIdentityId,
+  type AuthProvider,
+  authProviders,
+  toAuthIdentityId,
+  zAuthIdentityId,
+} from './domain/auth-identity';
+export {
+  type Invite,
+  type InviteId,
+  isInviteUsable,
+  toInviteId,
+  zInviteId,
+} from './domain/invite';
+export {
   defaultUserPermissions,
   hasRolePermission,
   isRole,

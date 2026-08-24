@@ -112,13 +112,13 @@ export function NavUser() {
               <DropdownMenuItem
                 render={
                   <Link
-                    to="/manager/account"
+                    to="/manager/profile"
                     onClick={() => setOpenMobile(false)}
                   />
                 }
               >
                 <CircleUserIcon />
-                {t('layout:nav.account')}
+                {t('layout:nav.profile')}
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

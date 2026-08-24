@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 const sourceExtensions = new Set(['.ts', '.tsx']);
 const forbiddenValidationHelpers = [
-  'isAccountNameValid',
+  'isProfileNameValid',
   'isValidGenreColor',
   'isTrackedEmailEvent',
 ] as const;
