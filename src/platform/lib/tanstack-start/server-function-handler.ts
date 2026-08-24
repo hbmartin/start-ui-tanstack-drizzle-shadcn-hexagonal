@@ -38,12 +38,7 @@ const recordServerFunctionMetric = (
   });
 };
 
-export async function runServerFunctionHandler<
-  TDeps,
-  TContext,
-  TData,
-  TResult,
->({
+async function runServerFunctionHandler<TDeps, TContext, TData, TResult>({
   getDeps,
   operationName,
   selectRunner,

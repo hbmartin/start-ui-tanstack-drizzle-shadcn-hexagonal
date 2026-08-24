@@ -2,6 +2,8 @@ import { Result } from '@bloodyowl/boxed';
 import { createHash } from 'node:crypto';
 
 import i18n from '@/platform/lib/i18n';
+
+import '@/app/i18n/setup';
 import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields';
 
 import type { AuthEmailPort, SendSignInOtpInput } from '@/modules/auth';

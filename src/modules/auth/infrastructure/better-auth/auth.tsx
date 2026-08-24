@@ -202,11 +202,3 @@ export function getDefaultAuth() {
   defaultAuth ??= createAuth();
   return defaultAuth;
 }
-
-export const auth = new Proxy({} as Auth, {
-  get(_target, prop) {
-    const instance = getDefaultAuth();
-    const value = Reflect.get(instance, prop, instance);
-    return typeof value === 'function' ? value.bind(instance) : value;
-  },
-});

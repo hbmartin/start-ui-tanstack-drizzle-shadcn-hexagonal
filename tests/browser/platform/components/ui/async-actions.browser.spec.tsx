@@ -1,4 +1,3 @@
-/* oxlint-disable simple-import-sort/imports -- Oxfmt owns import ordering. */
 import { page, render, setupUser } from '@tests/utils';
 import { useState } from 'react';
 import { expect, test, vi } from 'vitest';

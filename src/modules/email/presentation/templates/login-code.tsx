@@ -7,10 +7,7 @@ import { EmailFooter } from '@/modules/email/presentation/components/email-foote
 import { EmailLayout } from '@/modules/email/presentation/components/email-layout';
 import { styles } from '@/modules/email/presentation/styles';
 
-export const TemplateLoginCode = (props: {
-  language: string;
-  code: string;
-}) => {
+const TemplateLoginCode = (props: { language: string; code: string }) => {
   const t = i18n.getFixedT(props.language, 'emails');
 
   return (

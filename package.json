@@ -46,10 +46,11 @@
     "lint": "oxlint --type-aware --deny-warnings .",
     "lint:fix": "oxlint --fix .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "depcruise": "depcruise --config .dependency-cruiser.cjs src",
-    "architecture:graph": "tsx scripts/generate-module-dependency-graph.ts",
-    "architecture:graph:check": "tsx scripts/generate-module-dependency-graph.ts --check",
-    "lint:sheriff": "sheriff verify",
+    "quality:dead-code": "fallow dead-code --quiet --baseline fallow-baselines/dead-code.json",
+    "quality:dupes": "fallow dupes --quiet --baseline fallow-baselines/dupes.json",
+    "quality:health": "fallow health --quiet --summary --baseline fallow-baselines/health.json --baseline-mode identity",
+    "quality:fallow": "run-p -n quality:dead-code quality:dupes quality:health",
+    "quality:audit": "fallow audit",
     "check:test-layering": "node scripts/check-test-layering.mjs",
     "semgrep": "semgrep scan --config .semgrep.yml --error --quiet",
     "codeql:db": "mkdir -p test-results/codeql && codeql version && codeql pack install .github/codeql/start-ui-web-queries && codeql database create test-results/codeql/start-ui-web-db --language=javascript-typescript --source-root . --codescanning-config .github/codeql/codeql-local-extraction.yml --overwrite",
@@ -61,10 +62,9 @@
     "security:tanstack": "node scripts/check-tanstack-security.mjs",
     "security:licenses": "node scripts/check-license-compliance.mjs",
     "security:risk-register": "node scripts/check-risk-register.mjs",
-    "knip:deps": "dotenv -e .env -e .env.example -- knip --include dependencies,unlisted --no-progress",
     "gen:build-info": "dotenv -- node ./run-jiti ./src/app/build-info/infrastructure/generate-build-info.ts",
     "gen:icons": "svgr --config-file src/platform/components/icons/svgr.config.cjs src/platform/components/icons/svg-sources && oxfmt src/platform/components/icons/generated",
-    "test": "run-p -n test:unit test:browser test:integration",
+    "test": "run-s test:unit test:browser test:integration",
     "test:unit": "vitest run --project=unit",
     "test:property": "node scripts/run-property-tests.mjs",
     "test:browser": "vitest run --project=browser",
@@ -94,8 +94,8 @@
     "test:e2e:visual:update": "pnpm test:e2e:visual --update-snapshots",
     "test:visual": "run-s test:browser:visual test:e2e:visual",
     "test:visual:update": "run-s test:browser:visual:update test:e2e:visual:update",
-    "check": "run-p -n format:check lint typecheck mutation:compat depcruise check:test-layering check:migrations semgrep security:audit knip:deps",
-    "check:ci": "run-p -n format:check lint typecheck mutation:compat depcruise check:test-layering check:migrations security:audit knip:deps",
+    "check": "run-p -n format:check lint typecheck mutation:compat quality:fallow check:test-layering check:migrations semgrep security:audit",
+    "check:ci": "run-p -n format:check lint typecheck mutation:compat quality:fallow check:test-layering check:migrations security:audit",
     "verify": "pnpm check && pnpm test && pnpm build",
     "verify:task": "node scripts/task-verify.mjs",
     "test:ui": "vitest",
@@ -193,7 +193,6 @@
     "@fast-check/vitest": "0.4.1",
     "@playwright/test": "1.61.1",
     "@rolldown/plugin-babel": "^0.2.3",
-    "@softarc/sheriff-core": "^0.19.6",
     "@svgr/cli": "8.1.0",
     "@tailwindcss/postcss": "4.3.1",
     "@tanstack/devtools-vite": "0.7.0",
@@ -215,13 +214,10 @@
     "babel-plugin-react-compiler": "1.0.0",
     "catching-jit-tests-vitest": "^0.4.0",
     "cross-env": "10.1.0",
-    "dependency-cruiser": "^17.4.3",
     "dotenv-cli": "11.0.0",
     "drizzle-kit": "^0.31.10",
-    "eslint-plugin-simple-import-sort": "13.0.0",
+    "fallow": "3.17.0",
     "jiti": "2.7.0",
-    "jscpd": "^4.2.4",
-    "knip": "^6.21.0",
     "lefthook": "2.1.9",
     "npm-run-all2": "9.0.3",
     "oxc-parser": "0.144.0",
@@ -243,22 +239,5 @@
   "engines": {
     "node": "24.x"
   },
-  "packageManager": "pnpm@11.9.0+sha512.bd682d5d03fe525ef7c9fd6780c6884d1e756ac4c9c9fe00c538782824310dcf90e3ddc4f53835f06dfaebd5085e41855e0bcbb3b60de2ac5bbab89e5036f03b",
-  "jscpd": {
-    "threshold": 0,
-    "reporters": [
-      "markdown"
-    ],
-    "ignore": [
-      "**/node_modules/**",
-      "**/dist/**",
-      "**/coverage/**",
-      "**/tests/**",
-      "**/*.json",
-      "**/*.test.ts",
-      "**/*.css",
-      "**/*.md"
-    ],
-    "absolute": false
-  }
+  "packageManager": "pnpm@11.9.0+sha512.bd682d5d03fe525ef7c9fd6780c6884d1e756ac4c9c9fe00c538782824310dcf90e3ddc4f53835f06dfaebd5085e41855e0bcbb3b60de2ac5bbab89e5036f03b"
 }

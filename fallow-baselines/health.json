@@ -1,0 +1,496 @@
+{
+  "finding_counts": {
+    "drizzle/seed/book.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "drizzle/seed/user.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/affected-tests.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/check-license-compliance.mjs": {
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/check-migration-edits.mjs": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/check-risk-register.mjs": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/check-tanstack-security.mjs": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/check-test-layering.mjs": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/refresh-security-audit.mjs": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/composition/email.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/composition/telemetry/otel-adapter.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/composition/telemetry/transport.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/account/presentation/user-card.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/modules/auth/presentation/page-login.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/auth/transport/tanstack/server-context.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/modules/book/application/use-cases/create-book.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/book/application/use-cases/update-book.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/book/infrastructure/drizzle/book-repository-drizzle.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/book/presentation/manager/page-book-update.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/email/infrastructure/drizzle/email-status-repository-drizzle.ts": {
+      "complexity_high": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      }
+    },
+    "src/modules/email/infrastructure/resend/email-gateway-resend.tsx": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/modules/email/infrastructure/smtp/email-gateway-smtp.tsx": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/modules/email/transport/http/resend-webhook-handlers.ts": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "src/modules/genre/infrastructure/drizzle/genre-repository-drizzle.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/kernel/infrastructure/config/email.ts": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/kernel/infrastructure/config/telemetry.ts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/kernel/infrastructure/logger/telemetry.ts": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/platform/components/ui/calendar.tsx": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/platform/components/ui/search-input.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "src/platform/components/upload/upload-button.tsx": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/platform/components/upload/upload-input.tsx": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "src/platform/lib/redaction/sanitize-log-fields.ts": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/platform/lib/temporal/date-time.ts": {
+      "crap_high": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/routes/__root.tsx": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "tests/architecture/modular-monolith.unit.spec.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "tests/security/github-actions-supply-chain.unit.spec.ts": {
+      "crap_moderate": {
+        "count": 3
+      }
+    },
+    "vite.config.ts": {
+      "crap_high": {
+        "count": 2
+      }
+    }
+  },
+  "identity_finding_counts": {
+    "drizzle/seed/book.ts\u0000createBooks": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "drizzle/seed/user.ts\u0000createUsers": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/affected-tests.ts\u0000findAffectedTests": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/check-license-compliance.mjs\u0000findLicenseViolations": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/check-license-compliance.mjs\u0000isLicenseAllowed": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/check-license-compliance.mjs\u0000parsePrimary": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/check-migration-edits.mjs\u0000parseNameStatus": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/check-risk-register.mjs\u0000validateSecuritySnapshot": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/check-tanstack-security.mjs\u0000compareVersions": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/check-test-layering.mjs\u0000moduleImportViolation": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/refresh-security-audit.mjs\u0000main": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/composition/email.ts\u0000buildEmailServices": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/composition/telemetry/otel-adapter.ts\u0000captureAttributes": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/composition/telemetry/otel-adapter.ts\u0000emitLog": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/composition/telemetry/transport.ts\u0000readBoundedBody": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/account/presentation/user-card.tsx\u0000UserCard": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts\u0000list": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts\u0000listSessions": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/auth/presentation/page-login.tsx\u0000onSubmit": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/auth/transport/tanstack/server-context.ts\u0000<arrow>": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/auth/transport/tanstack/server-context.ts\u0000handleError": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/book/application/use-cases/create-book.ts\u0000createBook": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/book/application/use-cases/update-book.ts\u0000updateBook": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/book/infrastructure/drizzle/book-repository-drizzle.ts\u0000list": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/book/presentation/manager/page-book-update.tsx\u0000bookDefaultValues": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/email/infrastructure/drizzle/email-status-repository-drizzle.ts\u0000toDomain": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/modules/email/infrastructure/drizzle/email-status-repository-drizzle.ts\u0000upsertStatusByExternalIdWithDb": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/modules/email/infrastructure/resend/email-gateway-resend.tsx\u0000sendEmail": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/modules/email/infrastructure/smtp/email-gateway-smtp.tsx\u0000sendEmail": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/email/infrastructure/smtp/email-gateway-smtp.tsx\u0000sendSmtpMessage": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/email/transport/http/resend-webhook-handlers.ts\u0000readBoundedTextBody": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/email/transport/http/resend-webhook-handlers.ts\u0000receive": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/genre/infrastructure/drizzle/genre-repository-drizzle.ts\u0000list": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/kernel/infrastructure/config/email.ts\u0000<arrow>": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/kernel/infrastructure/config/telemetry.ts\u0000getTelemetryConfig": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "src/modules/kernel/infrastructure/logger/telemetry.ts\u0000write": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "src/platform/components/ui/calendar.tsx\u0000Calendar": {
+      "complexity_moderate": {
+        "count": 1
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/platform/components/ui/search-input.tsx\u0000SearchInput": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "src/platform/components/upload/upload-button.tsx\u0000UploadButton": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/platform/components/upload/upload-input.tsx\u0000UploadInput": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "src/platform/lib/redaction/sanitize-log-fields.ts\u0000sanitizeLogValue": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/platform/lib/temporal/date-time.ts\u0000<arrow>": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "src/platform/lib/temporal/date-time.ts\u0000compileDateFormat": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "src/routes/__root.tsx\u0000RootDocument": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "tests/architecture/modular-monolith.unit.spec.ts\u0000getStaticString": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "tests/security/github-actions-supply-chain.unit.spec.ts\u0000<arrow>": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "tests/security/github-actions-supply-chain.unit.spec.ts\u0000dockerRunImageFromCommand": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "tests/security/github-actions-supply-chain.unit.spec.ts\u0000tokenizeShellCommand": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "vite.config.ts\u0000<arrow>": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "vite.config.ts\u0000default": {
+      "crap_high": {
+        "count": 1
+      }
+    }
+  },
+  "runtime_coverage_findings": [],
+  "target_keys": [
+    "src/modules/kernel/infrastructure/logger/telemetry.ts:complexity",
+    "src/platform/hooks/use-clipboard.ts:high impact"
+  ]
+}

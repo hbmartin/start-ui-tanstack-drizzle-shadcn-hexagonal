@@ -10,7 +10,7 @@ const emptyStringAsUndefined = (input: string) =>
 
 const DEFAULT_REQUIRED_ERROR = 'common:errors.required';
 
-export type FieldTextOptions = {
+type FieldTextOptions = {
   /** Translation key for the required / invalid-type error. */
   error?: string;
   /**

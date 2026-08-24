@@ -17,7 +17,7 @@ const MAX_ARRAY_INDEX = 2 ** 32 - 2;
 const MAX_SANITIZED_ARRAY_LENGTH = 10_000;
 const MAX_SANITIZED_OVERSIZED_ARRAY_ENTRIES = 1_000;
 
-export const DEFAULT_SENSITIVE_LOG_KEYS = new Set(
+const DEFAULT_SENSITIVE_LOG_KEYS = new Set(
   [
     'authorization',
     'cookie',

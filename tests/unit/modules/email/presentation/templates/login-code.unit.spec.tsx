@@ -13,8 +13,7 @@ vi.mock('@/platform/lib/i18n', () => ({
   default: i18nMock,
 }));
 
-const loadTemplate = async () =>
-  import('@/modules/email/presentation/templates/login-code');
+const loadTemplate = async () => import('@/modules/email/presentation');
 
 describe('TemplateLoginCode', () => {
   it('uses a fixed translator instead of mutating global language state', async () => {

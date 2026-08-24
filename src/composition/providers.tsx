@@ -2,7 +2,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { ThemeProvider } from 'next-themes';
 import { type ReactNode, useEffect } from 'react';
 import '@/platform/lib/temporal/polyfill';
-import '@/platform/lib/i18n';
+import '@/app/i18n/setup';
 import '@fontsource-variable/inter';
 
 import { QueryClientProvider } from '@/platform/lib/tanstack-query/provider';

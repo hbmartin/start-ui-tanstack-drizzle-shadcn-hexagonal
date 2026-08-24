@@ -15,9 +15,7 @@ import {
   toTelemetryStringTags,
 } from '@/platform/telemetry';
 
-export type LogRedactor = (
-  fields: Record<string, unknown>
-) => Record<string, unknown>;
+type LogRedactor = (fields: Record<string, unknown>) => Record<string, unknown>;
 
 type TelemetryLoggerInput = {
   telemetry: TelemetryAdapter;

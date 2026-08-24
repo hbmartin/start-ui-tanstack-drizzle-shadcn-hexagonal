@@ -11,6 +11,8 @@ import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { getPageTitle } from '@/platform/lib/get-page-title';
+import '@/app/i18n/setup';
+
 import i18n from '@/platform/lib/i18n';
 import { AVAILABLE_LANGUAGES } from '@/platform/lib/i18n/constants';
 

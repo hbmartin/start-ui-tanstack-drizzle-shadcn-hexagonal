@@ -6,7 +6,7 @@ import {
   formatCurrentLocalIsoDateTime,
 } from '@/platform/lib/temporal/date-time';
 
-import { AppError } from '@/modules/kernel/domain/errors/app-error';
+import { AppError } from '@/modules/kernel';
 
 const getContent = () => {
   const getCommitHashShort = () => {

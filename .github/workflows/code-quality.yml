@@ -108,8 +108,8 @@ jobs:
       - name: Ensure affected tests did not mutate files
         run: git diff --exit-code -- .
 
-  dependency-cruiser:
-    name: Dependency Cruiser
+  fallow:
+    name: Fallow architecture and quality
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -118,6 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup pnpm
@@ -125,25 +126,11 @@ jobs:
         with:
           node-version: 24
 
-      - name: Run dependency-cruiser
-        run: pnpm depcruise
+      - name: Run project-wide Fallow gates
+        run: pnpm quality:fallow
 
-      - name: Generate dependency graphs
-        if: always()
-        run: |
-          mkdir -p test-results/dependency-cruiser
-          status=0
-          pnpm exec depcruise --config .dependency-cruiser.cjs --output-type json --output-to test-results/dependency-cruiser/dependency-cruiser.json src || status=$?
-          pnpm exec depcruise --config .dependency-cruiser.cjs --output-type mermaid --output-to test-results/dependency-cruiser/dependency-cruiser.mmd src || status=$?
-          exit "$status"
-
-      - name: Upload dependency graphs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dependency-cruiser-graphs
-          path: test-results/dependency-cruiser/
-          retention-days: 30
+      - name: Gate changed-code regressions
+        run: pnpm quality:audit --format github-annotations
 
       - name: Ensure static checks did not mutate files
         run: git diff --exit-code -- .

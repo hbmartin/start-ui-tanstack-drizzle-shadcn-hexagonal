@@ -7,7 +7,7 @@ const TELEMETRY_LOG_ENDPOINT = '/api/telemetry/logs';
 const MAX_BATCH_SIZE = 20;
 const FLUSH_DELAY_MS = 2_000;
 
-export type FrontendLogPayload = {
+type FrontendLogPayload = {
   level: TelemetryLogLevel;
   event: string;
   message?: string;

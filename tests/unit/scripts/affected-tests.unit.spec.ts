@@ -10,14 +10,13 @@ import {
   collectChangedFilesFromGit,
   computeMirrorTestPaths,
   deduplicateAndSort,
-  type DependencyCruiserReport,
   findAffectedTests,
-  findRelatedTestsInGraph,
   formatOutput,
   isCliEntrypoint,
   main,
   normalizePath,
   parseCliArguments,
+  parseImpactClosureReport,
   parseNullDelimitedPaths,
   runStrategyB,
 } from '../../../scripts/affected-tests';
@@ -42,10 +41,9 @@ const makeResult = (
 ): AffectedTestsResult => ({
   changedFiles: [],
   consideredSourceFiles: [],
-  dependencyCruiserFailed: false,
+  impactAnalysisFailed: false,
   directTestFiles: [],
   excludedChangedFiles: [],
-  rootsCruised: [],
   runAll: false,
   strategyAFiles: [],
   strategyBFiles: [],
@@ -191,8 +189,8 @@ describe('changed file classification', () => {
 });
 
 describe('global config fallback', () => {
-  it('runs all runnable Vitest tests without dependency graph discovery', async () => {
-    const dependencyCruiser = vi.fn(async () => {
+  it('runs all runnable Vitest tests without impact discovery', async () => {
+    const impactClosure = vi.fn(async () => {
       throw new Error('should not run');
     });
 
@@ -202,7 +200,7 @@ describe('global config fallback', () => {
         'tests/browser/a.browser.spec.tsx',
       ],
       changedFiles: ['vitest.config.ts'],
-      dependencyCruiser,
+      impactClosure,
     });
 
     expect(result.runAll).toBe(true);
@@ -211,7 +209,7 @@ describe('global config fallback', () => {
       'tests/unit/a.unit.spec.ts',
       'tests/browser/a.browser.spec.tsx',
     ]);
-    expect(dependencyCruiser).not.toHaveBeenCalled();
+    expect(impactClosure).not.toHaveBeenCalled();
   });
 });
 
@@ -252,47 +250,21 @@ describe('mirror path strategy', () => {
   });
 });
 
-describe('dependency graph strategy', () => {
-  it('walks transitive importers until it reaches runnable tests', () => {
-    const report: DependencyCruiserReport = {
-      modules: [
-        { source: 'src/modules/user/domain/user.ts' },
-        {
-          dependencies: [{ resolved: 'src/modules/user/domain/user.ts' }],
-          source: 'src/modules/user/index.ts',
-        },
-        {
-          dependencies: [{ resolved: 'src/modules/user/index.ts' }],
-          source: 'tests/unit/modules/user/domain/user.unit.spec.ts',
-        },
-      ],
-    };
-
-    expect(
-      findRelatedTestsInGraph(['src/modules/user/domain/user.ts'], report)
-    ).toEqual({
-      consideredSourceFiles: ['src/modules/user/domain/user.ts'],
-      testFiles: ['tests/unit/modules/user/domain/user.unit.spec.ts'],
-    });
+describe('Fallow impact-closure strategy', () => {
+  it('rejects malformed and partial impact reports', () => {
+    expect(() => parseImpactClosureReport('not-json')).toThrow('invalid JSON');
+    expect(() =>
+      parseImpactClosureReport(JSON.stringify({ kind: 'trace', seed: 'x' }))
+    ).toThrow('unexpected report shape');
   });
 
-  it('combines direct, graph, and mirror tests with excluded change details', async () => {
+  it('combines direct, impact, and mirror tests with excluded change details', async () => {
     const cwd = makeTempCwd([
       'src/modules/foo/foo.ts',
       'tests/unit/modules/foo/foo.unit.spec.ts',
       'tests/unit/modules/foo/foo-graph.unit.spec.ts',
       'tests/security/server-functions.unit.spec.ts',
     ]);
-    const report: DependencyCruiserReport = {
-      modules: [
-        { source: 'src/modules/foo/foo.ts' },
-        {
-          dependencies: [{ resolved: 'src/modules/foo/foo.ts' }],
-          source: 'tests/unit/modules/foo/foo-graph.unit.spec.ts',
-        },
-      ],
-    };
-
     const result = await findAffectedTests({
       changedFiles: [
         'src/modules/foo/foo.ts',
@@ -300,7 +272,10 @@ describe('dependency graph strategy', () => {
         'README.md',
       ],
       cwd,
-      dependencyCruiser: async () => report,
+      impactClosure: async () => [
+        'src/modules/foo/index.ts',
+        'tests/unit/modules/foo/foo-graph.unit.spec.ts',
+      ],
     });
 
     expect(result.directTestFiles).toEqual([
@@ -320,7 +295,7 @@ describe('dependency graph strategy', () => {
     ]);
   });
 
-  it('runs all tests when dependency-cruiser fails for test support changes', async () => {
+  it('runs all tests when Fallow impact analysis fails', async () => {
     const cwd = makeTempCwd([
       'tests/browser/components/form.browser.spec.tsx',
       'tests/server/test-utils.ts',
@@ -330,23 +305,54 @@ describe('dependency graph strategy', () => {
     const result = await findAffectedTests({
       changedFiles: ['tests/server/test-utils.ts'],
       cwd,
-      dependencyCruiser: async () => {
-        throw new Error('dependency-cruiser failed');
+      impactClosure: async () => {
+        throw new Error('Fallow failed');
       },
     });
 
-    expect(result.dependencyCruiserFailed).toBe(true);
+    expect(result.impactAnalysisFailed).toBe(true);
     expect(result.runAll).toBe(true);
-    expect(result.runAllReason).toBe(
-      'dependency-cruiser failed for test support changes'
-    );
+    expect(result.runAllReason).toBe('Fallow impact analysis failed');
     expect(result.testFiles).toEqual([
       'tests/browser/components/form.browser.spec.tsx',
       'tests/unit/a.unit.spec.ts',
     ]);
     expect(result.warnings).toEqual([
-      'Warning: dependency-cruiser failed, continuing with mirror-path strategy only',
+      'Warning: Fallow impact analysis failed; running the complete Vitest suite',
     ]);
+  });
+
+  it('fails closed when a changed source was deleted', async () => {
+    const cwd = makeTempCwd(['tests/unit/a.unit.spec.ts']);
+
+    const result = await findAffectedTests({
+      changedFiles: ['src/deleted.ts'],
+      cwd,
+      impactClosure: vi.fn(async () => []),
+    });
+
+    expect(result.runAll).toBe(true);
+    expect(result.impactAnalysisFailed).toBe(true);
+    expect(result.testFiles).toEqual(['tests/unit/a.unit.spec.ts']);
+  });
+
+  it('fails closed when analysis finds no tests for changed source', async () => {
+    const cwd = makeTempCwd([
+      'src/a.ts',
+      'tests/browser/other.browser.spec.tsx',
+    ]);
+
+    const result = await findAffectedTests({
+      changedFiles: ['src/a.ts'],
+      cwd,
+      impactClosure: async () => ['src/b.ts'],
+    });
+
+    expect(result.runAll).toBe(true);
+    expect(result.runAllReason).toBe(
+      'no tests were discovered for changed source files'
+    );
+    expect(result.testFiles).toEqual(['tests/browser/other.browser.spec.tsx']);
   });
 });
 
@@ -355,7 +361,6 @@ describe('output formatting', () => {
     changedFiles: ['src/a.ts'],
     directTestFiles: ['tests/unit/a.unit.spec.ts'],
     excludedChangedFiles: ['README.md'],
-    rootsCruised: ['src', 'tests'],
     strategyAFiles: ['tests/unit/a-graph.unit.spec.ts'],
     strategyBFiles: ['tests/unit/a.unit.spec.ts'],
     testFiles: ['tests/unit/a-graph.unit.spec.ts', 'tests/unit/a.unit.spec.ts'],
@@ -370,7 +375,7 @@ describe('output formatting', () => {
   it('prints verbose discovery sections', () => {
     expect(
       formatOutput(result, { json: false, summary: false, verbose: true })
-    ).toContain('# Strategy A - dependency-cruiser (1):');
+    ).toContain('# Strategy A - Fallow impact closure (1):');
   });
 
   it('prints summary output', () => {

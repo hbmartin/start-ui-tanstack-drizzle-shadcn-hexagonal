@@ -125,10 +125,7 @@ const completeDbObservation = ({
   });
 };
 
-export function observeDbOperation<T>(
-  input: DbOperationInput,
-  work: () => T
-): T {
+function observeDbOperation<T>(input: DbOperationInput, work: () => T): T {
   const attributes = attributesForOperation(input);
   const startedAt = performance.now();
   const span = startManualSpan({

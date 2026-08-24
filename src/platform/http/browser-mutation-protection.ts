@@ -18,7 +18,7 @@ const DEFAULT_PROTECTED_BROWSER_MUTATION_PATHNAMES = [
   ...SIDE_EFFECT_ROUTE_PATHNAMES,
 ] as const;
 
-export const browserMutationVaryHeaders = [
+const browserMutationVaryHeaders = [
   'Sec-Fetch-Site',
   'Origin',
   'Referer',

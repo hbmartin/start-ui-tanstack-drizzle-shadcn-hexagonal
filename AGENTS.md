@@ -12,7 +12,7 @@ Use these commands instead of invoking underlying tools directly.
 | Command | Purpose |
 |---|---|
 | `pnpm dev` | Start the local dev server. |
-| `pnpm check` | Static checks: format, lint, typecheck, depcruise, semgrep, audit. |
+| `pnpm check` | Static checks: format, lint, typecheck, Fallow, Semgrep, audit. |
 | `pnpm test` | Vitest unit and browser projects. |
 | `pnpm test:affected:list` | List tests associated with changed files. |
 | `pnpm test:affected` | Run tests associated with changed files. |
@@ -142,6 +142,6 @@ Use the cheapest test that proves the behavior:
 | E2E | `tests/e2e/*.spec.ts` |
 | Fixtures/support | `tests/support`, `tests/server`, nearest `*.fixture.tsx` when useful |
 
-When a regression class is likely to repeat, add a guardrail through depcruise, Semgrep, or an architecture test.
+When a regression class is likely to repeat, add a guardrail through Fallow, Semgrep, or an architecture test.
 
 When touching Drizzle repositories, raw `sql`, `db.execute`, schema serialization, or migrations, prefer an integration test against the local database driver in addition to focused unit coverage. Mocked DB unit tests do not prove SQL serialization or migration behavior.

@@ -41,8 +41,6 @@ const bookUploadRoutes = () => {
   };
 };
 
-export type UploadRoutes = keyof ReturnType<typeof bookUploadRoutes>;
-
 const uploadHandlerFactory = createCachedFactory(() => {
   const storage = new BetterUploadObjectStorage();
   return storage.createUploadRequestHandler(bookUploadRoutes());

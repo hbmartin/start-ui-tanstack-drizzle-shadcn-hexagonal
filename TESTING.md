@@ -84,4 +84,4 @@ Mutation testing is intentionally slower. Use the data-driven runner during deep
 - Public workflow integration tests call only public module APIs.
 - Adapter integration tests assert durable state or provider contract effects.
 - Property tests have bounded, reproducible generators and clear invariant names.
-- New architecture or security regressions have guardrails through depcruise, Semgrep, or `check:test-layering` where practical.
+- New architecture or security regressions have guardrails through Fallow, Semgrep, or `check:test-layering` where practical.

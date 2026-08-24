@@ -12,7 +12,6 @@ export type DbTransaction = Parameters<
 >[0];
 
 export type DbLike = DbClient | DbTransaction;
-export type TransactionCapableDb = DbClient;
 export type RunInTransaction = <T>(
   work: (transaction: DbTransaction) => Promise<T>,
   options?: TransactionOptions
@@ -36,11 +35,6 @@ export type DatabaseMetadata = {
 
 export type Database = DbClient & DatabaseMetadata;
 
-export type TransactionCapableDatabase = TransactionCapableDb &
-  DatabaseMetadata & {
-    $runInTransaction: RunInTransaction;
-  };
-
 export function isRootDatabase(db: DbLike): db is Database {
   return (
     typeof db === 'object' &&
@@ -48,10 +42,4 @@ export function isRootDatabase(db: DbLike): db is Database {
     '$driver' in db &&
     '$transactionCapable' in db
   );
-}
-
-export function isTransactionCapableDatabase(
-  db: DbLike
-): db is TransactionCapableDatabase {
-  return isRootDatabase(db) && typeof db.$runInTransaction === 'function';
 }

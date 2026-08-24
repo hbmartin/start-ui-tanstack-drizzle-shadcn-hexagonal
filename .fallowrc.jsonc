@@ -1,0 +1,539 @@
+{
+  "$schema": "./node_modules/fallow/schema.json",
+
+  // TanStack Start discovers routes and entrypoints through Vite rather than a
+  // conventional src/index.ts. Public gates are also intentional template API
+  // even when the demo preset does not consume every export.
+  "entry": [
+    "src/server.ts",
+    "src/start.ts",
+    "src/router.tsx",
+    "src/routes/**/*.{ts,tsx}",
+    "src/app/**/{index,presentation}.{ts,tsx}",
+    "src/modules/*/{index,server,backend,client,presentation,testing}.{ts,tsx}",
+    "src/platform/components/**/*.{ts,tsx}",
+    "src/platform/runtime-config/{client,presentation,testing}.ts",
+    "tests/e2e/visual/screenshot.css",
+    "tests/unit/scripts/check-license-compliance.unit.spec.mjs",
+    "tests/**/*.{ts,tsx,mts,mjs}",
+    "drizzle/**/*.ts",
+    "scripts/**/*.{ts,mts,js,mjs}",
+    "vite.config.ts",
+    "vitest*.config.ts",
+  ],
+
+  "ignorePatterns": [
+    ".agents/**",
+    ".claude/**",
+    ".github/codeql/**/test/**",
+    "src/routeTree.gen.ts",
+    "src/app/build-info/presentation/build-info.gen.json",
+    "tools/mutation/node_modules/**",
+  ],
+
+  "ignoreExports": [
+    {
+      "file": "src/modules/*/{index,server,backend,client,presentation,testing}.{ts,tsx}",
+      "exports": ["*"],
+    },
+    { "file": "src/platform/**/index.{ts,tsx}", "exports": ["*"] },
+    { "file": "src/platform/components/**/*.{ts,tsx}", "exports": ["*"] },
+    { "file": "src/app/**/{index,presentation}.{ts,tsx}", "exports": ["*"] },
+    {
+      "file": "src/app/shell/presentation/{app,manager}/layout.tsx",
+      "exports": ["*"],
+    },
+    {
+      "file": "src/composition/{index,auth,email,email-preview}.{ts,tsx}",
+      "exports": ["*"],
+    },
+    {
+      // App/manager pages deliberately share local component names; their
+      // public presentation gates supply the distinct exported names.
+      "file": "src/modules/*/presentation/{app,manager}/page-*.tsx",
+      "exports": ["*"],
+    },
+    {
+      "file": "src/platform/components/page-layout/{app,manager}.tsx",
+      "exports": ["*"],
+    },
+    {
+      "file": "src/modules/{book,genre,user}/presentation/schema.ts",
+      "exports": ["*"],
+    },
+    { "file": "src/types/**", "exports": ["*"] },
+  ],
+
+  "ignoreDependencies": [
+    // CLI/plugin or framework-loaded dependencies whose use is not represented
+    // as an ordinary source import in Fallow's static graph.
+    "dotenv-cli",
+    "dotenv",
+    "nitro",
+    "react-dom",
+    "@tanstack/react-devtools",
+    "@tanstack/react-query-devtools",
+    "@tanstack/react-router-devtools",
+    // The Stryker compatibility self-test resolves the native checker by
+    // package identity; it is intentionally not imported by application code.
+    "@typescript/native",
+    "oxlint-tsgolint",
+  ],
+
+  "ignoreDependencyOverrides": [
+    // Reviewed transitive security overrides; pnpm's frozen lockfile and the
+    // committed advisory snapshot remain the ground truth for their presence.
+    { "package": "body-parser", "source": "pnpm-workspace.yaml" },
+    { "package": "effect", "source": "pnpm-workspace.yaml" },
+    { "package": "http-proxy-middleware", "source": "pnpm-workspace.yaml" },
+  ],
+
+  // Called reflectively by JSON.stringify rather than through a static member
+  // access that Fallow can observe.
+  "usedClassMembers": ["toJSON"],
+
+  "rules": {
+    "unused-files": "error",
+    "unused-exports": "error",
+    "unused-types": "error",
+    "private-type-leaks": "off",
+    "unused-dependencies": "error",
+    "unused-dev-dependencies": "error",
+    "unused-optional-dependencies": "error",
+    "unused-enum-members": "error",
+    "unused-class-members": "error",
+    "unresolved-imports": "error",
+    "unlisted-dependencies": "error",
+    "duplicate-exports": "error",
+    "circular-dependencies": "error",
+    "re-export-cycle": "error",
+    "boundary-violation": "error",
+    "policy-violation": "error",
+    "type-only-dependencies": "error",
+    "test-only-dependencies": "error",
+    // Tool and test entrypoints are intentionally executable but remain dev
+    // dependencies; Fallow currently classifies package-script roots as prod.
+    "dev-dependencies-in-production": "off",
+    "stale-suppressions": "error",
+    "require-suppression-reason": "error",
+    "unused-dependency-overrides": "error",
+    "misconfigured-dependency-overrides": "error",
+  },
+
+  "rulePacks": ["rule-packs/start-ui-web.json"],
+
+  "typeAware": {
+    "enabled": true,
+    "projects": ["tsconfig.json"],
+    "require": "complete",
+  },
+
+  "duplicates": {
+    "enabled": true,
+    "mode": "mild",
+    "near": false,
+    "minTokens": 70,
+    "minLines": 8,
+    "minOccurrences": 2,
+    "threshold": 0,
+    "ignoreImports": true,
+    "ignore": [
+      "src/routeTree.gen.ts",
+      "src/platform/components/icons/generated/**",
+      "drizzle/migrations/**",
+      "tests/**",
+    ],
+  },
+
+  "health": {
+    "maxCyclomatic": 20,
+    "maxCognitive": 15,
+    "maxCrap": 30,
+    "maxUnitSize": 60,
+    "ignore": [
+      "src/routeTree.gen.ts",
+      "src/platform/components/icons/generated/**",
+      "drizzle/migrations/**",
+    ],
+    "thresholdOverrides": [
+      {
+        "files": ["tests/**"],
+        "maxUnitSize": 500,
+        "reason": "Test describe blocks are declarative suites, not production functions.",
+      },
+    ],
+  },
+
+  "audit": {
+    "gate": "new-only",
+    "css": false,
+    "deadCodeBaseline": "fallow-baselines/dead-code.json",
+    "healthBaseline": "fallow-baselines/health.json",
+    "dupesBaseline": "fallow-baselines/dupes.json",
+  },
+
+  // First match wins. Public/testing gates are classified before module
+  // catch-alls so sibling capability internals cannot be reached through a
+  // permissive module zone.
+  "boundaries": {
+    "zones": [
+      { "name": "start", "patterns": ["src/start.ts"] },
+      { "name": "server-entry", "patterns": ["src/server.ts"] },
+      {
+        "name": "router",
+        "patterns": ["src/router.tsx", "src/routeTree.gen.ts"],
+      },
+      { "name": "composition", "patterns": ["src/composition/**"] },
+      { "name": "routes", "patterns": ["src/routes/**"] },
+      { "name": "app", "patterns": ["src/app/**"] },
+      {
+        "name": "testing-gates",
+        "patterns": ["src/modules/*/testing.{ts,tsx}"],
+      },
+      {
+        "name": "account-gates",
+        "patterns": [
+          "src/modules/account/index.ts",
+          "src/modules/account/server.ts",
+          "src/modules/account/backend.ts",
+          "src/modules/account/client.ts",
+          "src/modules/account/presentation.ts",
+        ],
+      },
+      {
+        "name": "auth-gates",
+        "patterns": [
+          "src/modules/auth/index.ts",
+          "src/modules/auth/server.ts",
+          "src/modules/auth/backend.ts",
+          "src/modules/auth/client.ts",
+          "src/modules/auth/presentation.ts",
+        ],
+      },
+      {
+        "name": "book-gates",
+        "patterns": [
+          "src/modules/book/index.ts",
+          "src/modules/book/server.ts",
+          "src/modules/book/backend.ts",
+          "src/modules/book/client.ts",
+          "src/modules/book/presentation.ts",
+        ],
+      },
+      {
+        "name": "email-gates",
+        "patterns": [
+          "src/modules/email/index.ts",
+          "src/modules/email/server.ts",
+          "src/modules/email/backend.ts",
+          "src/modules/email/client.ts",
+          "src/modules/email/presentation.ts",
+        ],
+      },
+      {
+        "name": "genre-gates",
+        "patterns": [
+          "src/modules/genre/index.ts",
+          "src/modules/genre/server.ts",
+          "src/modules/genre/backend.ts",
+          "src/modules/genre/client.ts",
+          "src/modules/genre/presentation.ts",
+        ],
+      },
+      {
+        "name": "user-gates",
+        "patterns": [
+          "src/modules/user/index.ts",
+          "src/modules/user/server.ts",
+          "src/modules/user/backend.ts",
+          "src/modules/user/client.ts",
+          "src/modules/user/presentation.ts",
+        ],
+      },
+      {
+        "name": "kernel-gates",
+        "patterns": [
+          "src/modules/kernel/index.ts",
+          "src/modules/kernel/server.ts",
+          "src/modules/kernel/backend.ts",
+          "src/modules/kernel/client.ts",
+        ],
+      },
+      {
+        "name": "module-db-schema",
+        "patterns": ["src/modules/*/infrastructure/drizzle/schema.ts"],
+      },
+      {
+        "name": "kernel-db-schema",
+        "patterns": [
+          "src/modules/kernel/infrastructure/db/schema/index.ts",
+          "src/modules/kernel/infrastructure/db/schema/relations.ts",
+        ],
+      },
+      {
+        "name": "server-functions",
+        "patterns": ["src/modules/*/transport/server-functions/**"],
+      },
+      {
+        "name": "modules",
+        "autoDiscover": ["src/modules"],
+        "patterns": [],
+      },
+      {
+        "name": "platform-telemetry",
+        "patterns": ["src/platform/telemetry/**"],
+      },
+      { "name": "platform", "patterns": ["src/platform/**"] },
+      { "name": "types", "patterns": ["src/types/**"] },
+    ],
+    "rules": [
+      {
+        "from": "modules",
+        "allow": [
+          "account-gates",
+          "auth-gates",
+          "book-gates",
+          "email-gates",
+          "genre-gates",
+          "user-gates",
+          "kernel-gates",
+          "modules/kernel",
+          "module-db-schema",
+          "kernel-db-schema",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "modules/kernel",
+        "allow": [
+          "kernel-gates",
+          "kernel-db-schema",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "account-gates",
+        "allow": [
+          "modules/account",
+          "server-functions",
+          "kernel-gates",
+          "platform",
+          "types",
+        ],
+      },
+      {
+        "from": "auth-gates",
+        "allow": [
+          "modules/auth",
+          "server-functions",
+          "kernel-gates",
+          "composition",
+          "platform",
+          "types",
+        ],
+      },
+      {
+        "from": "book-gates",
+        "allow": [
+          "modules/book",
+          "server-functions",
+          "kernel-gates",
+          "platform",
+          "types",
+        ],
+      },
+      {
+        "from": "email-gates",
+        "allow": ["modules/email", "kernel-gates", "platform", "types"],
+      },
+      {
+        "from": "genre-gates",
+        "allow": [
+          "modules/genre",
+          "server-functions",
+          "kernel-gates",
+          "platform",
+          "types",
+        ],
+      },
+      {
+        "from": "user-gates",
+        "allow": [
+          "modules/user",
+          "server-functions",
+          "kernel-gates",
+          "platform",
+          "types",
+        ],
+      },
+      {
+        "from": "kernel-gates",
+        "allow": [
+          "modules/kernel",
+          "kernel-db-schema",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "testing-gates",
+        "allow": [
+          "modules",
+          "module-db-schema",
+          "kernel-db-schema",
+          "kernel-gates",
+          "composition",
+          "platform",
+          "types",
+        ],
+      },
+      {
+        "from": "server-functions",
+        "allow": [
+          "modules",
+          "account-gates",
+          "auth-gates",
+          "book-gates",
+          "email-gates",
+          "genre-gates",
+          "user-gates",
+          "kernel-gates",
+          "composition",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "module-db-schema",
+        "allow": [
+          "modules/auth",
+          "modules/kernel",
+          "kernel-db-schema",
+          "kernel-gates",
+          "platform",
+          "types",
+        ],
+      },
+      {
+        "from": "kernel-db-schema",
+        "allow": [
+          "modules/kernel",
+          "module-db-schema",
+          "kernel-gates",
+          "platform",
+          "types",
+        ],
+      },
+      { "from": "platform", "allow": ["platform-telemetry", "types"] },
+      { "from": "platform-telemetry", "allow": ["platform", "types"] },
+      {
+        "from": "app",
+        "allow": [
+          "account-gates",
+          "auth-gates",
+          "book-gates",
+          "email-gates",
+          "genre-gates",
+          "user-gates",
+          "kernel-gates",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "routes",
+        "allow": [
+          "app",
+          "account-gates",
+          "auth-gates",
+          "book-gates",
+          "email-gates",
+          "genre-gates",
+          "user-gates",
+          "kernel-gates",
+          "composition",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "composition",
+        "allow": [
+          "modules",
+          "account-gates",
+          "auth-gates",
+          "book-gates",
+          "email-gates",
+          "genre-gates",
+          "user-gates",
+          "kernel-gates",
+          "module-db-schema",
+          "kernel-db-schema",
+          "app",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "router",
+        "allow": [
+          "routes",
+          "app",
+          "composition",
+          "auth-gates",
+          "kernel-gates",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "start",
+        "allow": [
+          "router",
+          "composition",
+          "auth-gates",
+          "kernel-gates",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+        "allowTypeOnly": ["modules"],
+      },
+      {
+        "from": "server-entry",
+        "allow": [
+          "start",
+          "router",
+          "composition",
+          "kernel-gates",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      { "from": "types", "allow": ["app", "platform"] },
+    ],
+    "coverage": {
+      "requireAllFiles": true,
+      "allowUnmatched": [
+        ".github/**",
+        "drizzle/**",
+        "scripts/**",
+        "tests/**",
+        "tools/**",
+        "*.{ts,tsx,js,mjs,cjs}",
+        "src/**/*.d.ts",
+      ],
+    },
+  },
+}

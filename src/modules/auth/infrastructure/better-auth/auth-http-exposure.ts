@@ -11,7 +11,7 @@
  * server-side `auth.api.*` calls are unaffected by these flags.
  */
 
-export const DEFAULT_BETTER_AUTH_BASE_PATH = '/api/auth';
+const DEFAULT_BETTER_AUTH_BASE_PATH = '/api/auth';
 
 export type AuthHttpExposureFlags = {
   /** Better Auth base path. Defaults to `/api/auth`. */

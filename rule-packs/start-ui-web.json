@@ -1,0 +1,197 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/rule-pack-schema.json",
+  "version": 1,
+  "name": "start-ui-web",
+  "description": "Provider ownership and platform-wrapper policies for the modular monolith.",
+  "rules": [
+    {
+      "id": "domain-application-no-react",
+      "kind": "banned-import",
+      "specifiers": [
+        "react",
+        "react-dom",
+        "@tanstack/react-router",
+        "@tanstack/react-query"
+      ],
+      "files": ["src/modules/*/{domain,application}/**"],
+      "message": "Domain and application code must remain framework independent.",
+      "severity": "error"
+    },
+    {
+      "id": "domain-application-no-database-sdk",
+      "kind": "banned-import",
+      "specifiers": [
+        "drizzle-orm",
+        "@neondatabase/serverless",
+        "pg",
+        "postgres"
+      ],
+      "files": ["src/modules/*/{domain,application}/**"],
+      "message": "Use an application port; persistence SDKs belong to infrastructure.",
+      "severity": "error"
+    },
+    {
+      "id": "domain-application-no-telemetry-sdk",
+      "kind": "banned-import",
+      "specifiers": ["@sentry", "@opentelemetry"],
+      "files": ["src/modules/*/{domain,application}/**"],
+      "message": "Use the injected Logger port instead of a telemetry SDK.",
+      "severity": "error"
+    },
+    {
+      "id": "app-code-uses-platform-primitives",
+      "kind": "banned-import",
+      "specifiers": ["@base-ui/react", "@radix-ui", "radix-ui"],
+      "files": [
+        "src/app/**",
+        "src/modules/**",
+        "src/routes/**",
+        "src/composition/**"
+      ],
+      "message": "Consume primitives through src/platform UI wrappers.",
+      "severity": "error"
+    },
+    {
+      "id": "better-auth-owned-by-auth",
+      "kind": "banned-import",
+      "specifiers": ["better-auth"],
+      "files": ["src/**"],
+      "exclude": [
+        "src/modules/auth/infrastructure/better-auth/**",
+        "src/modules/auth/presentation/better-auth-client.ts"
+      ],
+      "message": "Better Auth is confined to the auth-owned adapter and browser facade.",
+      "severity": "error"
+    },
+    {
+      "id": "resend-owned-by-email",
+      "kind": "banned-import",
+      "specifiers": ["resend"],
+      "files": ["src/**"],
+      "exclude": ["src/modules/email/infrastructure/resend/**"],
+      "message": "Resend imports belong to the email Resend adapter.",
+      "severity": "error"
+    },
+    {
+      "id": "react-email-owned-by-email",
+      "kind": "banned-import",
+      "specifiers": ["@react-email/render"],
+      "files": ["src/**"],
+      "exclude": [
+        "src/modules/email/infrastructure/resend/**",
+        "src/modules/email/infrastructure/smtp/**",
+        "src/composition/email-preview.tsx"
+      ],
+      "message": "React Email rendering belongs to email infrastructure or local preview composition.",
+      "severity": "error"
+    },
+    {
+      "id": "better-upload-server-owned-by-storage",
+      "kind": "banned-import",
+      "specifiers": ["@better-upload/server"],
+      "files": ["src/**"],
+      "exclude": ["src/modules/kernel/infrastructure/storage/**"],
+      "message": "Server upload SDKs belong to the kernel object-storage adapter.",
+      "severity": "error"
+    },
+    {
+      "id": "better-upload-client-owned-by-platform",
+      "kind": "banned-import",
+      "specifiers": ["@better-upload/client"],
+      "files": ["src/**"],
+      "exclude": [
+        "src/platform/components/upload/**",
+        "src/platform/components/form/field-upload-input/**"
+      ],
+      "message": "Client upload SDKs belong to platform upload wrappers.",
+      "severity": "error"
+    },
+    {
+      "id": "sentry-owned-by-entrypoints-and-telemetry",
+      "kind": "banned-import",
+      "specifiers": ["@sentry"],
+      "files": ["src/**"],
+      "exclude": [
+        "src/server.ts",
+        "src/start.ts",
+        "src/composition/telemetry/sentry.client.ts",
+        "src/composition/telemetry/sentry.server.ts"
+      ],
+      "message": "Sentry owns exceptions only and is confined to entrypoints and telemetry composition.",
+      "severity": "error"
+    },
+    {
+      "id": "otel-owned-by-telemetry-composition",
+      "kind": "banned-import",
+      "specifiers": ["@opentelemetry"],
+      "files": ["src/**"],
+      "exclude": ["src/composition/telemetry/**"],
+      "message": "OpenTelemetry SDK imports belong to telemetry composition.",
+      "severity": "error"
+    },
+    {
+      "id": "drizzle-owned-by-persistence",
+      "kind": "banned-import",
+      "specifiers": ["drizzle-orm", "better-auth/adapters/drizzle"],
+      "files": ["src/**"],
+      "exclude": [
+        "src/modules/kernel/infrastructure/db/**",
+        "src/modules/*/infrastructure/drizzle/**",
+        "src/modules/auth/infrastructure/better-auth/**"
+      ],
+      "message": "Drizzle belongs to database and module persistence adapters.",
+      "severity": "error"
+    },
+    {
+      "id": "database-drivers-owned-by-kernel",
+      "kind": "banned-import",
+      "specifiers": ["@neondatabase/serverless", "pg", "postgres"],
+      "files": ["src/**"],
+      "exclude": ["src/modules/kernel/infrastructure/db/**"],
+      "message": "Low-level database drivers are owned by kernel DB infrastructure.",
+      "severity": "error"
+    },
+    {
+      "id": "id-sdk-owned-by-kernel",
+      "kind": "banned-import",
+      "specifiers": ["@paralleldrive/cuid2"],
+      "files": ["src/**"],
+      "exclude": ["src/modules/kernel/infrastructure/**"],
+      "message": "ID generation SDKs belong to kernel infrastructure.",
+      "severity": "error"
+    },
+    {
+      "id": "presentation-schema-static-errors",
+      "kind": "banned-import",
+      "specifiers": ["i18next", "react-i18next"],
+      "files": ["src/modules/*/presentation/schema.ts"],
+      "message": "Presentation schemas emit static error keys; translation happens in platform form rendering.",
+      "severity": "error"
+    },
+    {
+      "id": "transport-static-errors",
+      "kind": "banned-import",
+      "specifiers": ["i18next", "react-i18next"],
+      "files": ["src/modules/*/transport/**"],
+      "message": "Transport emits stable error keys and never performs translation.",
+      "severity": "error"
+    },
+    {
+      "id": "pino-forbidden",
+      "kind": "banned-import",
+      "specifiers": ["pino", "pino-pretty"],
+      "files": ["src/**"],
+      "message": "Use the OpenTelemetry-backed structured logger port.",
+      "severity": "error"
+    },
+    {
+      "id": "workos-future-adapter-only",
+      "kind": "banned-import",
+      "specifiers": ["@workos", "@workos-inc"],
+      "files": ["src/**"],
+      "exclude": ["src/modules/auth/infrastructure/workos/**"],
+      "message": "WorkOS belongs to a future auth-owned adapter.",
+      "severity": "error"
+    }
+  ]
+}

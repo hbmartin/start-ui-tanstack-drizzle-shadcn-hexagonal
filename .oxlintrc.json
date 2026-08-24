@@ -3,8 +3,7 @@
   "plugins": ["react", "unicorn", "typescript", "node", "vitest", "promise"],
   "jsPlugins": [
     "@tanstack/eslint-plugin-query",
-    "@tanstack/eslint-plugin-router",
-    "eslint-plugin-simple-import-sort"
+    "@tanstack/eslint-plugin-router"
   ],
   "ignorePatterns": [
     ".agents/**",
@@ -13,9 +12,7 @@
     "**/*.testproj/**",
     "tools/mutation/node_modules/**"
   ],
-  "categories": {
-    "correctness": "error"
-  },
+  "categories": { "correctness": "error" },
   "rules": {
     "no-unreachable": "error",
     "typescript/no-unused-vars": [
@@ -39,12 +36,7 @@
     "unicorn/filename-case": ["error", { "case": "kebabCase" }],
     "react/rules-of-hooks": "error",
     "react/react-compiler": "error",
-    "react/only-export-components": [
-      "warn",
-      {
-        "allowConstantExport": true
-      }
-    ],
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
     "promise/always-return": "warn",
     "promise/catch-or-return": "warn",
     "promise/no-multiple-resolved": "error",
@@ -68,33 +60,6 @@
     "vitest/valid-expect": "error",
     "vitest/valid-expect-in-promise": "error",
     "vitest/valid-title": "error",
-    "simple-import-sort/imports": [
-      "warn",
-      {
-        "groups": [
-          ["^@?\\w", "^\\u0000"],
-          ["^.+\\.s?css$"],
-          ["^@/platform/lib", "^@/platform/hooks"],
-          ["^@/data"],
-          ["^@/platform/components", "^@/container"],
-          ["^@/store"],
-          ["^@/"],
-          [
-            "^\\./?$",
-            "^\\.(?!/?$)",
-            "^\\.\\./?$",
-            "^\\.\\.(?!/?$)",
-            "^\\.\\./\\.\\./?$",
-            "^\\.\\./\\.\\.(?!/?$)",
-            "^\\.\\./\\.\\./\\.\\./?$",
-            "^\\.\\./\\.\\./\\.\\.\\.(?!/?$)"
-          ],
-          ["^@/types"],
-          ["^"]
-        ]
-      }
-    ],
-    "simple-import-sort/exports": "warn",
     "@tanstack/query/exhaustive-deps": "error",
     "@tanstack/query/no-rest-destructuring": "error",
     "@tanstack/query/stable-query-client": "error",
@@ -114,39 +79,10 @@
         "typescript/no-floating-promises": ["error", { "ignoreVoid": true }],
         "react/only-export-components": [
           "error",
-          {
-            "allowConstantExport": true
-          }
+          { "allowConstantExport": true }
         ],
         "promise/always-return": "error",
         "promise/catch-or-return": "error",
-        "simple-import-sort/imports": [
-          "error",
-          {
-            "groups": [
-              ["^@?\\w", "^\\u0000"],
-              ["^.+\\.s?css$"],
-              ["^@/platform/lib", "^@/platform/hooks"],
-              ["^@/data"],
-              ["^@/platform/components", "^@/container"],
-              ["^@/store"],
-              ["^@/"],
-              [
-                "^\\./?$",
-                "^\\.(?!/?$)",
-                "^\\.\\./?$",
-                "^\\.\\.(?!/?$)",
-                "^\\.\\./\\.\\./?$",
-                "^\\.\\./\\.\\.(?!/?$)",
-                "^\\.\\./\\.\\./\\.\\./?$",
-                "^\\.\\./\\.\\./\\.\\.\\.(?!/?$)"
-              ],
-              ["^@/types"],
-              ["^"]
-            ]
-          }
-        ],
-        "simple-import-sort/exports": "error",
         "@tanstack/query/prefer-query-options": "error"
       }
     },

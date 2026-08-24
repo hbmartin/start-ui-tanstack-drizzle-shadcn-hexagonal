@@ -206,28 +206,6 @@ export function withDatabaseErrorDetails(
   return dbError ? { ...details, dbError } : details;
 }
 
-export interface DatabaseErrorLogFields {
-  event: string;
-  error: string;
-  exception?: Error;
-  details: Record<string, unknown>;
-}
-
-export function buildDatabaseErrorLogFields(params: {
-  event: string;
-  error: unknown;
-  context: Record<string, unknown>;
-}): DatabaseErrorLogFields {
-  const errorMessage =
-    params.error instanceof Error ? params.error.message : String(params.error);
-  return {
-    event: params.event,
-    error: errorMessage,
-    exception: params.error instanceof Error ? params.error : undefined,
-    details: withDatabaseErrorDetails(params.context, params.error),
-  };
-}
-
 function getCause(error: unknown): unknown {
   return isRecord(error) && 'cause' in error ? error.cause : undefined;
 }

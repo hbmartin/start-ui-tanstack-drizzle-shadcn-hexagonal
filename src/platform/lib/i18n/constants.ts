@@ -1,7 +1,5 @@
-import locales from '@/app/i18n';
-
 export type Language = {
-  key: keyof typeof locales;
+  key: 'en' | 'fr' | 'ar' | 'sw';
   dir?: 'ltr' | 'rtl';
   fontScale?: number;
 };

@@ -4,8 +4,7 @@ import { zu } from '@/platform/lib/zod/zod-utils';
 
 import { ACCOUNT_NAME_MAX_LENGTH } from '@/modules/account';
 
-export type Otp = z.infer<ReturnType<typeof zOtp>>;
-export const zOtp = () =>
+const zOtp = () =>
   z
     .string({
       error: 'auth:common.otp.required',

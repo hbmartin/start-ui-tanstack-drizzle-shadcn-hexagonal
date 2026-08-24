@@ -15,6 +15,7 @@ import {
 } from '@/modules/kernel/testing';
 
 vi.mock('@/platform/lib/i18n', () => ({
+  configureI18n: vi.fn(async () => undefined),
   default: {
     getFixedT: () => (key: string) => `translated:${key}`,
   },

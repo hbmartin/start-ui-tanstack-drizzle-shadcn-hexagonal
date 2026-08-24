@@ -16,7 +16,7 @@ const sortRecord = (value: Record<string, unknown>): Record<string, unknown> =>
       .map(([key, entry]) => [key, normalizeForHash(entry)])
   );
 
-export const normalizeForHash = (value: unknown): unknown => {
+const normalizeForHash = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(normalizeForHash);
   if (isRecord(value)) return sortRecord(value);
   if (
@@ -45,7 +45,7 @@ export const hashTelemetryValue = (value: unknown): string => {
   return `h${(hash >>> 0).toString(16).padStart(8, '0')}`;
 };
 
-export const isTelemetryDebugMode = () => {
+const isTelemetryDebugMode = () => {
   if (envClient.DEV || envClient.VITE_TELEMETRY_DEBUG_RAW_VALUES) {
     return true;
   }

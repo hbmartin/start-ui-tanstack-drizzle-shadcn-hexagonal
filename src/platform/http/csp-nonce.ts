@@ -14,7 +14,7 @@ declare global {
   }
 }
 
-export const replaceCspNoncePlaceholder = (value: string, nonce: string) =>
+const replaceCspNoncePlaceholder = (value: string, nonce: string) =>
   value.replaceAll(CSP_NONCE_PLACEHOLDER, nonce);
 
 const escapeHtmlAttribute = (value: string) =>

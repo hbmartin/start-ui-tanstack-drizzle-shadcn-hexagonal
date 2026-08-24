@@ -119,6 +119,3 @@ export const observedLoader = <TLoader extends RouteBoundaryFn>(
 ): TLoader =>
   ((args: Parameters<TLoader>[0]) =>
     runObservedRouteBoundary(routeId, 'loader', () => loader(args))) as TLoader;
-
-export const observeLoader = <T>(routeId: string, fn: () => T): T =>
-  runObservedRouteBoundary(routeId, 'loader', fn);

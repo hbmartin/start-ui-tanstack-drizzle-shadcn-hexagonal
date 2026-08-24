@@ -98,6 +98,7 @@ const getBrowserMutationGuardLogger = async () => {
 
   if (!browserMutationGuardLoggerPromise) {
     browserMutationGuardLoggerPromise =
+      // fallow-ignore-next-line boundary-violation -- Lazy server-only bootstrap; Semgrep rejects static infrastructure imports here.
       import('@/modules/kernel/infrastructure/logger/telemetry')
         .then(({ createTelemetryLogger }) => {
           const logger = createTelemetryLogger({

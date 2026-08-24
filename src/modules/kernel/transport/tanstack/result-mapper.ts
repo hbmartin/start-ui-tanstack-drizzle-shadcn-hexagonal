@@ -27,7 +27,7 @@ const codeForCategory: Record<AppError['category'], ServerFnErrorCode> = {
   unauthorized: 'UNAUTHORIZED',
 };
 
-export const throwServerFnErrorForReason = (
+const throwServerFnErrorForReason = (
   reason: string,
   reasons: Record<string, ReasonConfig>
 ): never => {
@@ -44,7 +44,7 @@ export const throwServerFnErrorForReason = (
   });
 };
 
-export const mapAppErrorToServerFnError = (error: unknown): never => {
+const mapAppErrorToServerFnError = (error: unknown): never => {
   if (error instanceof AppError) {
     // Never forward an internal (5xx/system) error's developer-facing message
     // to the client. The real message is still logged server-side; the client

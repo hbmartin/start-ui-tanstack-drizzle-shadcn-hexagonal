@@ -4,11 +4,7 @@ import { baseEnvSchema, parseEnv } from './env-schema';
 import { assertDatabaseUrlTls } from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
-export const DATABASE_DRIVERS = [
-  'node-pg',
-  'neon-http',
-  'neon-websocket',
-] as const;
+const DATABASE_DRIVERS = ['node-pg', 'neon-http', 'neon-websocket'] as const;
 
 export type DatabaseDriver = (typeof DATABASE_DRIVERS)[number];
 export type MigrationDatabaseDriver = Exclude<DatabaseDriver, 'neon-http'>;

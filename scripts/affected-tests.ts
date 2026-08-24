@@ -1,13 +1,11 @@
-import { cruise } from 'dependency-cruiser';
-import extractDepcruiseOptions from 'dependency-cruiser/config-utl/extract-depcruise-options';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveTrustedTool } from './trusted-tool';
+import { resolveTrustedProjectBin, resolveTrustedTool } from './trusted-tool';
 
-const DEPENDENCY_CRUISE_ROOT_CANDIDATES = ['src', 'tests', 'scripts'] as const;
+const FALLOW_COMMAND = 'fallow';
 const GIT_COMMAND = 'git';
 
 const GLOBAL_CONFIG_FILES = new Set([
@@ -17,6 +15,7 @@ const GLOBAL_CONFIG_FILES = new Set([
   'package.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
+  '.fallowrc.jsonc',
   'tests/setup.base.ts',
   'tests/setup.browser.ts',
   'tests/server/test-setup.ts',
@@ -72,32 +71,18 @@ export type ClassifiedChangedFiles = {
   testSupportFiles: string[];
 };
 
-type Dependency = {
-  module?: string;
-  resolved?: string;
-};
-
-type DependencyCruiserModule = {
-  dependencies?: Dependency[];
-  source: string;
-};
-
-export type DependencyCruiserReport = {
-  modules: DependencyCruiserModule[];
-};
-
-export type GraphDiscoveryResult = {
-  consideredSourceFiles: string[];
-  testFiles: string[];
+export type ImpactClosureReport = {
+  affected_not_shown: string[];
+  kind: 'trace';
+  seed: string;
 };
 
 export type AffectedTestsResult = {
   changedFiles: string[];
   consideredSourceFiles: string[];
-  dependencyCruiserFailed: boolean;
+  impactAnalysisFailed: boolean;
   directTestFiles: string[];
   excludedChangedFiles: string[];
-  rootsCruised: string[];
   runAll: boolean;
   runAllReason?: string;
   strategyAFiles: string[];
@@ -111,10 +96,7 @@ export type FindAffectedTestsOptions = {
   base?: string;
   changedFiles?: string[];
   cwd?: string;
-  dependencyCruiser?: (
-    roots: string[],
-    cwd: string
-  ) => Promise<DependencyCruiserReport>;
+  impactClosure?: (seed: string, cwd: string) => Promise<string[]>;
 };
 
 export type GitRunner = (args: string[], description: string) => string;
@@ -304,7 +286,11 @@ export const classifyChangedFiles = (
   };
 
   for (const filePath of deduplicateAndSort(changedFiles)) {
-    if (GLOBAL_CONFIG_FILES.has(filePath)) {
+    if (
+      GLOBAL_CONFIG_FILES.has(filePath) ||
+      filePath.startsWith('rule-packs/') ||
+      filePath.startsWith('fallow-baselines/')
+    ) {
       classified.globalConfigChanged = true;
       classified.globalConfigFiles.push(filePath);
     } else if (isRunnableVitestTestFile(filePath)) {
@@ -449,102 +435,85 @@ export const collectAllRunnableVitestTestFiles = (
   return deduplicateAndSort(testFiles);
 };
 
-export const collectExistingCruiseRoots = (
-  cwd = process.cwd(),
-  candidates: readonly string[] = DEPENDENCY_CRUISE_ROOT_CANDIDATES
-) => candidates.filter((candidate) => existsSync(path.join(cwd, candidate)));
-
-export const runDependencyCruiserWithApi = async (
-  roots: string[],
-  cwd = process.cwd()
-): Promise<DependencyCruiserReport> => {
-  const options = await extractDepcruiseOptions(
-    path.resolve(cwd, '.dependency-cruiser.cjs')
-  );
-  const result = await cruise(roots, options);
-  const output = result.output as DependencyCruiserReport | undefined;
-
-  if (!output?.modules) {
+export const parseImpactClosureReport = (
+  output: string
+): ImpactClosureReport => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
     throw new AffectedTestsError(
-      'dependency-cruiser returned no module graph.'
+      'Fallow impact closure returned invalid JSON.'
     );
   }
 
-  return output;
-};
-
-const isWorkspaceGraphPath = (filePath: string) => {
-  const normalized = normalizePath(filePath);
-  return (
-    normalized.startsWith('src/') ||
-    normalized.startsWith('tests/') ||
-    normalized.startsWith('scripts/')
-  );
-};
-
-export const collectWorkspaceModules = (report: DependencyCruiserReport) =>
-  new Set(
-    report.modules
-      .map((module) => normalizePath(module.source))
-      .filter(isWorkspaceGraphPath)
-  );
-
-export const buildReverseDependencies = (report: DependencyCruiserReport) => {
-  const reverseDependencies = new Map<string, Set<string>>();
-
-  for (const module of report.modules) {
-    const source = normalizePath(module.source);
-    if (!isWorkspaceGraphPath(source)) continue;
-
-    for (const dependency of module.dependencies ?? []) {
-      if (!dependency.resolved) continue;
-
-      const resolved = normalizePath(dependency.resolved);
-      if (!isWorkspaceGraphPath(resolved)) continue;
-
-      const importers = reverseDependencies.get(resolved) ?? new Set<string>();
-      importers.add(source);
-      reverseDependencies.set(resolved, importers);
-    }
-  }
-
-  return reverseDependencies;
-};
-
-export const findRelatedTestsInGraph = (
-  changedFiles: string[],
-  report: DependencyCruiserReport
-): GraphDiscoveryResult => {
-  const workspaceModules = collectWorkspaceModules(report);
-  const reverseDependencies = buildReverseDependencies(report);
-  const consideredSourceFiles = deduplicateAndSort(changedFiles).filter(
-    (filePath) => workspaceModules.has(filePath)
-  );
-  const relatedTests = new Set<string>();
-  const visited = new Set<string>();
-  const queue = [...consideredSourceFiles];
-
-  while (queue.length > 0) {
-    const dependency = queue.shift();
-    if (!dependency || visited.has(dependency)) continue;
-
-    visited.add(dependency);
-
-    for (const importer of reverseDependencies.get(dependency) ?? []) {
-      if (isRunnableVitestTestFile(importer)) {
-        relatedTests.add(importer);
-      }
-
-      if (!visited.has(importer)) {
-        queue.push(importer);
-      }
-    }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !('kind' in parsed) ||
+    parsed.kind !== 'trace' ||
+    !('seed' in parsed) ||
+    typeof parsed.seed !== 'string' ||
+    !('affected_not_shown' in parsed) ||
+    !Array.isArray(parsed.affected_not_shown) ||
+    !parsed.affected_not_shown.every((item) => typeof item === 'string')
+  ) {
+    throw new AffectedTestsError(
+      'Fallow impact closure returned an unexpected report shape.'
+    );
   }
 
   return {
-    consideredSourceFiles,
-    testFiles: deduplicateAndSort([...relatedTests]),
+    affected_not_shown: deduplicateAndSort(parsed.affected_not_shown),
+    kind: 'trace',
+    seed: normalizePath(parsed.seed),
   };
+};
+
+export const runFallowImpactClosure = async (
+  seed: string,
+  cwd = process.cwd()
+) => {
+  const result = spawnSync(
+    resolveTrustedProjectBin(FALLOW_COMMAND, cwd),
+    [
+      'dead-code',
+      '--impact-closure',
+      seed,
+      '--format',
+      'json',
+      '--quiet',
+      '--no-cache',
+      '--no-type-aware',
+    ],
+    {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
+
+  if (result.error) {
+    throw new AffectedTestsError(
+      `Fallow impact closure failed for ${seed}: ${result.error.message}`
+    );
+  }
+
+  if (result.status !== 0) {
+    const detail = result.stderr.trim() || `exit code ${String(result.status)}`;
+    throw new AffectedTestsError(
+      `Fallow impact closure failed for ${seed}: ${detail}`
+    );
+  }
+
+  const report = parseImpactClosureReport(result.stdout);
+  if (report.seed !== normalizePath(seed)) {
+    throw new AffectedTestsError(
+      `Fallow impact closure reported seed ${report.seed} for ${seed}.`
+    );
+  }
+
+  return report.affected_not_shown;
 };
 
 export const runStrategyB = (sourceFiles: string[], cwd = process.cwd()) =>
@@ -555,7 +524,7 @@ export const findAffectedTests = async ({
   base,
   changedFiles,
   cwd = process.cwd(),
-  dependencyCruiser = runDependencyCruiserWithApi,
+  impactClosure = runFallowImpactClosure,
 }: FindAffectedTestsOptions = {}): Promise<AffectedTestsResult> => {
   const normalizedChangedFiles = deduplicateAndSort(
     changedFiles ?? collectChangedFilesFromGit({ base, cwd })
@@ -569,10 +538,9 @@ export const findAffectedTests = async ({
     return {
       changedFiles: normalizedChangedFiles,
       consideredSourceFiles: [],
-      dependencyCruiserFailed: false,
+      impactAnalysisFailed: false,
       directTestFiles: filterExistingFiles(classified.directTestFiles, cwd),
       excludedChangedFiles: classified.excludedFiles,
-      rootsCruised: [],
       runAll: true,
       runAllReason: 'global config file changed',
       strategyAFiles: [],
@@ -582,42 +550,47 @@ export const findAffectedTests = async ({
     };
   }
 
-  const rootsCruised = collectExistingCruiseRoots(cwd);
   const graphSeeds = deduplicateAndSort([
     ...classified.sourceFiles,
     ...classified.testSupportFiles,
   ]);
-  let dependencyCruiserFailed = false;
+  let impactAnalysisFailed = false;
   let strategyAFiles: string[] = [];
   let consideredSourceFiles: string[] = [];
-  let workspaceModules = new Set<string>();
   const warnings: string[] = [];
 
-  if (rootsCruised.length > 0 && graphSeeds.length > 0) {
+  if (graphSeeds.length > 0) {
     try {
-      const report = await dependencyCruiser(rootsCruised, cwd);
-      workspaceModules = collectWorkspaceModules(report);
-      const graphResult = findRelatedTestsInGraph(graphSeeds, report);
-      strategyAFiles = graphResult.testFiles;
-      consideredSourceFiles = graphResult.consideredSourceFiles;
+      const affectedFiles: string[] = [];
+      for (const seed of graphSeeds) {
+        if (!existsSync(path.join(cwd, seed))) {
+          throw new AffectedTestsError(
+            `Changed source no longer exists and cannot be analyzed: ${seed}`
+          );
+        }
+        affectedFiles.push(...(await impactClosure(seed, cwd)));
+      }
+      consideredSourceFiles = graphSeeds;
+      strategyAFiles = deduplicateAndSort(affectedFiles).filter(
+        isRunnableVitestTestFile
+      );
     } catch {
-      dependencyCruiserFailed = true;
+      impactAnalysisFailed = true;
       warnings.push(
-        'Warning: dependency-cruiser failed, continuing with mirror-path strategy only'
+        'Warning: Fallow impact analysis failed; running the complete Vitest suite'
       );
     }
   }
 
-  if (dependencyCruiserFailed && classified.testSupportFiles.length > 0) {
+  if (impactAnalysisFailed) {
     return {
       changedFiles: normalizedChangedFiles,
       consideredSourceFiles: [],
-      dependencyCruiserFailed,
+      impactAnalysisFailed,
       directTestFiles: filterExistingFiles(classified.directTestFiles, cwd),
       excludedChangedFiles: classified.excludedFiles,
-      rootsCruised,
       runAll: true,
-      runAllReason: 'dependency-cruiser failed for test support changes',
+      runAllReason: 'Fallow impact analysis failed',
       strategyAFiles: [],
       strategyBFiles: [],
       testFiles: allTestFiles ?? collectAllRunnableVitestTestFiles(cwd),
@@ -627,25 +600,37 @@ export const findAffectedTests = async ({
 
   const strategyBFiles = runStrategyB(classified.sourceFiles, cwd);
   const directTestFiles = filterExistingFiles(classified.directTestFiles, cwd);
-  const graphSeedFilesMissingFromGraph = graphSeeds.filter(
-    (filePath) => !workspaceModules.has(filePath)
-  );
-  const excludedChangedFiles = deduplicateAndSort([
-    ...classified.excludedFiles,
-    ...graphSeedFilesMissingFromGraph,
-  ]);
+  const excludedChangedFiles = classified.excludedFiles;
   const testFiles = filterExistingFiles(
     [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
     cwd
   );
 
+  if (graphSeeds.length > 0 && testFiles.length === 0) {
+    return {
+      changedFiles: normalizedChangedFiles,
+      consideredSourceFiles,
+      impactAnalysisFailed: false,
+      directTestFiles,
+      excludedChangedFiles,
+      runAll: true,
+      runAllReason: 'no tests were discovered for changed source files',
+      strategyAFiles,
+      strategyBFiles,
+      testFiles: allTestFiles ?? collectAllRunnableVitestTestFiles(cwd),
+      warnings: [
+        ...warnings,
+        'Warning: no affected tests were discovered; running the complete Vitest suite',
+      ],
+    };
+  }
+
   return {
     changedFiles: normalizedChangedFiles,
     consideredSourceFiles,
-    dependencyCruiserFailed,
+    impactAnalysisFailed,
     directTestFiles,
     excludedChangedFiles,
-    rootsCruised,
     runAll: false,
     strategyAFiles,
     strategyBFiles,
@@ -666,10 +651,9 @@ export const formatSummary = (result: AffectedTestsResult) => {
   const lines = [
     `Run all: ${result.runAll ? 'yes' : 'no'}`,
     ...(result.runAllReason ? [`Run all reason: ${result.runAllReason}`] : []),
-    `Dependency-cruiser failed: ${
-      result.dependencyCruiserFailed ? 'yes' : 'no'
+    `Fallow impact analysis failed: ${
+      result.impactAnalysisFailed ? 'yes' : 'no'
     }`,
-    `Dependency-cruiser roots: ${result.rootsCruised.length}`,
     `Changed files: ${result.changedFiles.length}`,
     `Considered source files: ${result.consideredSourceFiles.length}`,
     `Excluded changed files: ${result.excludedChangedFiles.length}`,
@@ -710,7 +694,7 @@ export const formatOutput = (
   return [
     ...formatVerboseSection('Direct test changes', result.directTestFiles),
     ...formatVerboseSection(
-      'Strategy A - dependency-cruiser',
+      'Strategy A - Fallow impact closure',
       result.strategyAFiles
     ),
     ...formatVerboseSection('Strategy B - mirror paths', result.strategyBFiles),
