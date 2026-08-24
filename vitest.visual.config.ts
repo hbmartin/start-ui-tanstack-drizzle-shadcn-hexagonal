@@ -35,8 +35,6 @@ export default defineConfig({
       '@base-ui/react/use-render',
       '@tanstack/react-router',
       'better-auth/client/plugins',
-      'better-auth/plugins/access',
-      'better-auth/plugins/admin/access',
       'better-auth/react',
     ],
   },

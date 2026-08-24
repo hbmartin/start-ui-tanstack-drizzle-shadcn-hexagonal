@@ -67,8 +67,6 @@ const betterAuthEnvSchema = baseEnvSchema
     AUTH_OTP_SEND_MAX: z.coerce.number().int().min(1).prefault(3),
     AUTH_ALLOWED_HOSTS: z.string().optional(),
     AUTH_TRUSTED_ORIGINS: z.string().optional(),
-    AUTH_ADMIN_ENDPOINTS_ENABLED: z.stringbool().default(false),
-    AUTH_OPENAPI_ENABLED: z.stringbool().default(false),
     GITHUB_CLIENT_ID: zOptionalProviderSecret(),
     GITHUB_CLIENT_SECRET: zOptionalProviderSecret(),
   })
@@ -132,8 +130,6 @@ export type BetterAuthConfig = {
   otpSendMax: number;
   allowedHosts?: string[];
   trustedOrigins?: string[];
-  adminEndpointsEnabled: boolean;
-  openApiEnabled: boolean;
   githubClientId?: string;
   githubClientSecret?: string;
 };
@@ -170,8 +166,6 @@ export function getBetterAuthConfig(): BetterAuthConfig {
     otpSendMax: env.AUTH_OTP_SEND_MAX,
     allowedHosts: splitCsv(env.AUTH_ALLOWED_HOSTS),
     trustedOrigins: splitCsv(env.AUTH_TRUSTED_ORIGINS),
-    adminEndpointsEnabled: env.AUTH_ADMIN_ENDPOINTS_ENABLED,
-    openApiEnabled: env.AUTH_OPENAPI_ENABLED,
     githubClientId: env.GITHUB_CLIENT_ID,
     githubClientSecret: env.GITHUB_CLIENT_SECRET,
   };

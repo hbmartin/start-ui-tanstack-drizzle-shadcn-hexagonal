@@ -1,76 +1,136 @@
 /**
- * HTTP exposure policy for the Better Auth catch-all route (`/api/auth/$`).
+ * Deny-by-default HTTP policy for Better Auth's catch-all route.
  *
- * Better Auth's `admin` and `openAPI` plugins register HTTP endpoints under the
- * auth base path. The `admin` plugin must stay registered because the app calls
- * its *server-side* API (`auth.api.userHasPermission`, `removeUser`, …) directly
- * in-process — those calls bypass the HTTP `handler(request)` path entirely.
- *
- * This module decides, per inbound HTTP pathname, whether an endpoint group is
- * disabled and should be answered with a 404 before reaching Better Auth. The
- * server-side `auth.api.*` calls are unaffected by these flags.
+ * The application deliberately exposes only the provider endpoints needed to
+ * begin and complete authentication. Account administration, session
+ * revocation, sign-out, signup, password reset, and other mutations remain
+ * unexposed until app-owned use cases can enforce authorization and durable
+ * audit policy. Better Auth's in-process `auth.api.*` calls are unaffected.
  */
 
-const DEFAULT_BETTER_AUTH_BASE_PATH = '/api/auth';
+const BETTER_AUTH_BASE_PATH = '/api/auth';
+const MAX_AUTH_HTTP_BODY_BYTES = 8 * 1024;
 
-export type AuthHttpExposureFlags = {
-  /** Better Auth base path. Defaults to `/api/auth`. */
-  basePath?: string;
-  /** Expose Better Auth's `/admin/*` HTTP endpoints. */
-  adminEndpointsEnabled: boolean;
-  /** Expose `/open-api/generate-schema` and the `/reference` page. */
-  openApiEnabled: boolean;
+type JsonRecord = Record<string, unknown>;
+
+const isJsonRecord = (value: unknown): value is JsonRecord =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const hasJsonMediaType = (request: Request) => {
+  const mediaType = request.headers
+    .get('content-type')
+    ?.split(';', 1)[0]
+    ?.trim()
+    .toLowerCase();
+  return mediaType === 'application/json';
 };
 
-const trimTrailingSlash = (value: string) => value.replace(/\/+$/, '');
-const normalizePathname = (value: string) => {
-  let normalized = '';
-  let previousWasSlash = false;
+const hasValidDeclaredBodyLength = (request: Request) => {
+  const contentLength = request.headers.get('content-length');
+  if (!contentLength) return true;
+  if (!/^\d+$/u.test(contentLength)) return false;
+  return Number(contentLength) <= MAX_AUTH_HTTP_BODY_BYTES;
+};
 
-  for (const char of value) {
-    if (char === '/') {
-      if (!previousWasSlash) normalized += char;
-      previousWasSlash = true;
-      continue;
+const readBoundedBodyBytes = async (
+  request: Request
+): Promise<Uint8Array | undefined> => {
+  const reader = request.clone().body?.getReader();
+  if (!reader) return undefined;
+
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    byteLength += value.byteLength;
+    if (byteLength > MAX_AUTH_HTTP_BODY_BYTES) {
+      void reader.cancel().catch(() => undefined);
+      return undefined;
     }
-
-    normalized += char;
-    previousWasSlash = false;
+    chunks.push(value);
   }
 
-  return normalized;
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 };
 
-/**
- * True when `pathname` is exactly `prefix` or sits directly beneath it
- * (next character is a `/`). Avoids matching unrelated siblings such as
- * `/api/auth/administrate` against the `/api/auth/admin` prefix.
- */
-const isUnderPrefix = (pathname: string, prefix: string) =>
-  pathname === prefix || pathname.startsWith(`${prefix}/`);
-
-export const isBlockedBetterAuthHttpPath = (
-  pathname: string,
-  flags: AuthHttpExposureFlags
-): boolean => {
-  const normalizedPathname = normalizePathname(pathname);
-  const basePath = trimTrailingSlash(
-    flags.basePath ?? DEFAULT_BETTER_AUTH_BASE_PATH
+const parseJsonRecord = (bytes: Uint8Array): JsonRecord | undefined => {
+  const parsed: unknown = JSON.parse(
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   );
+  return isJsonRecord(parsed) ? parsed : undefined;
+};
+
+const readBoundedJsonBody = async (
+  request: Request
+): Promise<JsonRecord | undefined> => {
+  if (!hasJsonMediaType(request) || !hasValidDeclaredBodyLength(request)) {
+    return undefined;
+  }
+
+  try {
+    const bytes = await readBoundedBodyBytes(request);
+    if (!bytes) return undefined;
+    return parseJsonRecord(bytes);
+  } catch {
+    return undefined;
+  }
+};
+
+const hasCanonicalPath = (request: Request, pathname: string) => {
+  const requestPathname = new URL(request.url).pathname;
+  return (
+    requestPathname === pathname &&
+    !requestPathname.includes('%') &&
+    !requestPathname.includes('//')
+  );
+};
+
+export const isAllowedBetterAuthHttpRequest = async (
+  request: Request
+): Promise<boolean> => {
   if (
-    !flags.adminEndpointsEnabled &&
-    isUnderPrefix(normalizedPathname, `${basePath}/admin`)
+    request.method === 'GET' &&
+    hasCanonicalPath(request, `${BETTER_AUTH_BASE_PATH}/callback/github`)
   ) {
     return true;
   }
 
-  if (
-    !flags.openApiEnabled &&
-    (isUnderPrefix(normalizedPathname, `${basePath}/open-api`) ||
-      isUnderPrefix(normalizedPathname, `${basePath}/reference`))
-  ) {
-    return true;
+  if (request.method !== 'POST') return false;
+  const isOtpSend = hasCanonicalPath(
+    request,
+    `${BETTER_AUTH_BASE_PATH}/email-otp/send-verification-otp`
+  );
+  const isOtpSignIn = hasCanonicalPath(
+    request,
+    `${BETTER_AUTH_BASE_PATH}/sign-in/email-otp`
+  );
+  const isSocialSignIn = hasCanonicalPath(
+    request,
+    `${BETTER_AUTH_BASE_PATH}/sign-in/social`
+  );
+  if (!isOtpSend && !isOtpSignIn && !isSocialSignIn) return false;
+
+  const body = await readBoundedJsonBody(request);
+  if (!body) return false;
+
+  if (isOtpSend) return body.type === 'sign-in';
+
+  if (isOtpSignIn) return true;
+
+  if (isSocialSignIn) {
+    return body.provider === 'github' && body.requestSignUp !== true;
   }
 
   return false;
 };
+
+export const isBlockedBetterAuthHttpRequest = async (
+  request: Request
+): Promise<boolean> => !(await isAllowedBetterAuthHttpRequest(request));

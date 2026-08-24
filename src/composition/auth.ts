@@ -11,7 +11,7 @@ import {
   type Auth,
   createAuth,
 } from '@/modules/auth/infrastructure/better-auth/auth';
-import { isBlockedBetterAuthHttpPath } from '@/modules/auth/infrastructure/better-auth/auth-http-exposure';
+import { isBlockedBetterAuthHttpRequest } from '@/modules/auth/infrastructure/better-auth/auth-http-exposure';
 import { AuthorizationGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/authorization-gateway-better-auth';
 import { SessionGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/session-gateway-better-auth';
 import { UserAdminGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/user-admin-gateway-better-auth';
@@ -21,7 +21,6 @@ import { ConfigurationError } from '@/modules/kernel';
 import {
   createTelemetryLogger,
   getAuthProviderConfig,
-  getBetterAuthConfig,
   getRedisConfig,
 } from '@/modules/kernel/backend';
 
@@ -112,17 +111,10 @@ const buildAuthHttpGateway = (
 ): AuthHttpGateway => {
   if (overrides?.authHttpGateway) return overrides.authHttpGateway;
   const authInstance = getAuth(overrides);
-  const { adminEndpointsEnabled, openApiEnabled } = getBetterAuthConfig();
 
   return {
-    handle: (request) => {
-      const { pathname } = new URL(request.url, 'http://localhost');
-      if (
-        isBlockedBetterAuthHttpPath(pathname, {
-          adminEndpointsEnabled,
-          openApiEnabled,
-        })
-      ) {
+    handle: async (request) => {
+      if (await isBlockedBetterAuthHttpRequest(request)) {
         return new Response('Not Found', { status: 404 });
       }
       return authInstance.handler(request);

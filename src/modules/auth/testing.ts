@@ -14,7 +14,10 @@ export {
 } from './application/scope-authorization';
 export type { AuthSession } from './domain/session';
 export { createAuthUseCases } from './factory';
-export { isBlockedBetterAuthHttpPath } from './infrastructure/better-auth/auth-http-exposure';
+export {
+  isAllowedBetterAuthHttpRequest,
+  isBlockedBetterAuthHttpRequest,
+} from './infrastructure/better-auth/auth-http-exposure';
 export {
   ProfileRepositoryDrizzle,
   createProfileRepository,

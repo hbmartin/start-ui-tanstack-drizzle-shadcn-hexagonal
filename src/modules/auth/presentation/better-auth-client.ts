@@ -1,26 +1,10 @@
 import {
-  adminClient,
   emailOTPClient,
   inferAdditionalFields,
 } from 'better-auth/client/plugins';
-import { createAccessControl } from 'better-auth/plugins/access';
-import { adminAc } from 'better-auth/plugins/admin/access';
 import { createAuthClient } from 'better-auth/react';
 
-import { permissionStatements, rolePermissions } from '@/modules/auth';
 import { getEnvClient } from '@/platform/env/client';
-
-const ac = createAccessControl(permissionStatements);
-const betterAuthClientPermissions = {
-  ac,
-  roles: {
-    admin: ac.newRole({
-      ...adminAc.statements,
-      ...rolePermissions.admin,
-    }),
-    user: ac.newRole(rolePermissions.user),
-  },
-};
 
 const createBetterAuthBrowserClient = () => {
   const env = getEnvClient();
@@ -38,9 +22,6 @@ const createBetterAuthBrowserClient = () => {
             input: false,
           },
         },
-      }),
-      adminClient({
-        ...betterAuthClientPermissions,
       }),
       emailOTPClient(),
     ],
@@ -82,8 +63,5 @@ export const betterAuthBrowserClient = {
     errorCallbackURL: string;
   }) {
     return getBetterAuthBrowserClient().signIn.social(input);
-  },
-  signOut() {
-    return getBetterAuthBrowserClient().signOut();
   },
 };

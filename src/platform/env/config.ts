@@ -44,7 +44,7 @@ const clientSchema = () =>
     VITE_AUTH_SIGNUP_ENABLED: z
       .enum(['true', 'false'])
       .optional()
-      .prefault('true')
+      .prefault('false')
       .transform((value) => value === 'true'),
     VITE_VISUAL_TEST: z
       .enum(['true', 'false'])
@@ -107,15 +107,17 @@ const clientSchema = () =>
 
 export type EnvClient = z.infer<ReturnType<typeof clientSchema>>;
 
+export const parseClientEnv = (raw: RuntimeEnv): EnvClient =>
+  clientSchema().parse({
+    ...raw,
+    VITE_BASE_URL: getBaseUrl(raw),
+  });
+
 let cachedClientEnv: EnvClient | undefined;
 
 export function getEnvClient(): EnvClient {
   if (cachedClientEnv) return cachedClientEnv;
-  const raw = readRuntimeEnv();
-  cachedClientEnv = clientSchema().parse({
-    ...raw,
-    VITE_BASE_URL: getBaseUrl(raw),
-  });
+  cachedClientEnv = parseClientEnv(readRuntimeEnv());
   return cachedClientEnv;
 }
 

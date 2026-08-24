@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   emailOTP: vi.fn<(options: ExplicitAny) => ExplicitAny>(() => ({
     id: 'email-otp-plugin',
   })),
-  openAPI: vi.fn(() => ({ id: 'open-api-plugin' })),
   tanstackStartCookies: vi.fn(() => ({ id: 'tanstack-cookies-plugin' })),
 }));
 
@@ -25,11 +24,9 @@ vi.mock('better-auth/adapters/drizzle', () => ({
   drizzleAdapter: mocks.drizzleAdapter,
 }));
 
-vi.mock('better-auth/plugins', () => ({
-  admin: mocks.admin,
-  emailOTP: mocks.emailOTP,
-  openAPI: mocks.openAPI,
-}));
+vi.mock('better-auth/plugins/admin', () => ({ admin: mocks.admin }));
+
+vi.mock('better-auth/plugins/email-otp', () => ({ emailOTP: mocks.emailOTP }));
 
 vi.mock('better-auth/tanstack-start', () => ({
   tanstackStartCookies: mocks.tanstackStartCookies,
@@ -57,7 +54,7 @@ vi.mock('@/modules/kernel/infrastructure/config/auth', () => ({
 vi.mock('@/platform/env/client', () => {
   const envClient = {
     DEV: false,
-    VITE_AUTH_SIGNUP_ENABLED: true,
+    VITE_AUTH_SIGNUP_ENABLED: false,
     VITE_BASE_URL: 'https://app.example',
   };
   return { envClient, getEnvClient: () => envClient };
@@ -83,6 +80,16 @@ describe('Better Auth security configuration', () => {
     expect(options.advanced.disableOriginCheck).toBeUndefined();
     expect(options.account.encryptOAuthTokens).toBe(true);
     expect(options.trustedOrigins).toEqual(['https://app.example']);
+    expect(options.socialProviders.github).toMatchObject({
+      disableImplicitSignUp: true,
+      disableSignUp: true,
+    });
+    expect(mocks.admin).toHaveBeenCalledOnce();
+    expect(options.plugins).toEqual([
+      { id: 'admin-plugin' },
+      { id: 'email-otp-plugin' },
+      { id: 'tanstack-cookies-plugin' },
+    ]);
   });
 
   it('wires durable secondary storage, rate limiting, and session hardening', async () => {
@@ -142,6 +149,7 @@ describe('Better Auth security configuration', () => {
     const emailOtpOptions = mocks.emailOTP.mock.calls.at(
       -1
     )?.[0] as ExplicitAny;
+    expect(emailOtpOptions.disableSignUp).toBe(true);
     expect(emailOtpOptions.allowedAttempts).toBe(3);
     expect(emailOtpOptions.rateLimit).toEqual({ window: 60, max: 3 });
   });

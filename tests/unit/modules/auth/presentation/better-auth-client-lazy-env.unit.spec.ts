@@ -16,6 +16,10 @@ describe('Better Auth browser client environment lifecycle', () => {
     const authClient =
       await import('@/modules/auth/presentation/better-auth-client');
 
-    expect(() => authClient.betterAuthBrowserClient.signOut()).toThrow();
+    expect(() =>
+      authClient.betterAuthBrowserClient.sendEmailOtp({
+        email: 'user@example.com',
+      })
+    ).toThrow();
   });
 });

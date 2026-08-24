@@ -1,7 +1,8 @@
 import { Result } from '@bloodyowl/boxed';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { admin, emailOTP, openAPI } from 'better-auth/plugins';
+import { admin } from 'better-auth/plugins/admin';
+import { emailOTP } from 'better-auth/plugins/email-otp';
 import { tanstackStartCookies } from 'better-auth/tanstack-start';
 import { match } from 'ts-pattern';
 
@@ -113,13 +114,11 @@ export function createAuth(input?: Database | CreateAuthOptions) {
         clientId: authConfig.githubClientId!,
         clientSecret: authConfig.githubClientSecret!,
         disableImplicitSignUp: !authSignupEnabled,
+        disableSignUp: !authSignupEnabled,
       },
     },
 
     plugins: [
-      openAPI({
-        disableDefaultReference: true,
-      }),
       admin({
         ...betterAuthPermissions,
       }),

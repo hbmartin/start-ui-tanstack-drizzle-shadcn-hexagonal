@@ -61,4 +61,27 @@ describe('getEnvClient URL security', () => {
 
     expect(() => getEnvClient()).toThrow(/VITE_SENTRY_DSN/);
   });
+
+  it('defaults public signup to disabled', async () => {
+    const { parseClientEnv } = await import('@/platform/env/config');
+
+    expect(
+      parseClientEnv({
+        VITE_BASE_URL: 'http://localhost:3000',
+        VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default',
+      }).VITE_AUTH_SIGNUP_ENABLED
+    ).toBe(false);
+  });
+
+  it('requires an explicit opt-in to public signup', async () => {
+    const { parseClientEnv } = await import('@/platform/env/config');
+
+    expect(
+      parseClientEnv({
+        VITE_AUTH_SIGNUP_ENABLED: 'true',
+        VITE_BASE_URL: 'http://localhost:3000',
+        VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default',
+      }).VITE_AUTH_SIGNUP_ENABLED
+    ).toBe(true);
+  });
 });
