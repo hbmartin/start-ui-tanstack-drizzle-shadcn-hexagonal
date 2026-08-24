@@ -33,18 +33,6 @@ const createProductionUserAuthGateway = (): UserAuthGateway => ({
     if (result.isError()) return Result.Error(result.getError());
     return Result.Ok({ type: 'user_auth_removed' });
   },
-  async revokeUserSessions(userId) {
-    const [{ getRequestHeaders }, { getAuthUseCases }] = await Promise.all([
-      import('@tanstack/react-start/server'),
-      import('./auth'),
-    ]);
-    const result = await getAuthUseCases().revokeUserSessions({
-      userId,
-      headers: getRequestHeaders(),
-    });
-    if (result.isError()) return Result.Error(result.getError());
-    return Result.Ok({ type: 'user_auth_sessions_revoked' });
-  },
 });
 
 export type UserOverrides = {

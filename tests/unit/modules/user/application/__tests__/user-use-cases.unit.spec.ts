@@ -8,6 +8,7 @@ import type {
   PermissionChecker,
   PermissionRequest,
   ResultTransactionRunner,
+  UserId,
 } from '@/modules/kernel';
 import {
   AppError,
@@ -186,9 +187,6 @@ function makeAuthGateway(overrides: Partial<UserAuthGateway> = {}) {
     removeUser: vi.fn<UserAuthGateway['removeUser']>(async () =>
       Result.Ok({ type: 'user_auth_removed' })
     ),
-    revokeUserSessions: vi.fn<UserAuthGateway['revokeUserSessions']>(async () =>
-      Result.Ok({ type: 'user_auth_sessions_revoked' })
-    ),
   };
 
   return Object.assign(gateway, overrides);
@@ -202,6 +200,13 @@ function makeSecurityRepository(
       UserSecurityRepository['lockAuthorizationPrincipal']
     >(async () =>
       Result.Ok({ type: 'user_security_principal_found', role: 'admin' })
+    ),
+    lockUserForUpdate: vi.fn<UserSecurityRepository['lockUserForUpdate']>(
+      async () =>
+        Result.Ok({
+          type: 'user_security_update_target_found',
+          snapshot: { email: user.email, role: user.role },
+        })
     ),
     revokeSessions: vi.fn<UserSecurityRepository['revokeSessions']>(async () =>
       Result.Ok({ type: 'user_sessions_revoked', count: 1 })
@@ -613,6 +618,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: {
@@ -639,6 +645,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: unwrapParseResult(toUserId('missing')),
             user: {
@@ -660,6 +667,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: userId,
             id: userId,
             user: { email: nextEmail, role: 'admin' },
@@ -709,6 +717,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: {
@@ -765,6 +774,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: { email: user.email, role: 'admin' },
@@ -777,7 +787,7 @@ describe('user use cases', () => {
     });
 
     it('does not require set-role or revoke sessions for an unchanged submitted role', async () => {
-      const { useCases, repo, auth, permissionChecker } = makeContext({
+      const { useCases, repo, permissionChecker } = makeContext({
         permissionChecker: makePermissionChecker(userUpdatePermission),
         repo: {
           getUpdateSnapshot: vi.fn<UserRepository['getUpdateSnapshot']>(
@@ -796,6 +806,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: { email: user.email, role: 'user' },
@@ -817,11 +828,10 @@ describe('user use cases', () => {
         role: undefined,
         emailVerified: undefined,
       });
-      expect(auth.revokeUserSessions).not.toHaveBeenCalled();
     });
 
     it('revokes the target sessions after a role change so the cached role is evicted', async () => {
-      const { useCases, auth, logger } = makeContext({
+      const { useCases, audit, logger, securityRepository } = makeContext({
         permissionChecker: makePermissionChecker(
           userUpdatePermission,
           userSetRolePermission
@@ -835,30 +845,210 @@ describe('user use cases', () => {
               })
           ),
         },
+        securityRepository: {
+          lockUserForUpdate: vi.fn<UserSecurityRepository['lockUserForUpdate']>(
+            async () =>
+              Result.Ok({
+                type: 'user_security_update_target_found',
+                snapshot: { email: user.email, role: 'admin' },
+              })
+          ),
+        },
       });
 
-      await expectOk(
+      const outcome = await expectOk(
         useCases.update({
+          correlationId,
           currentUserId: adminId,
           id: userId,
           user: { email: user.email, role: 'user' },
         })
       );
+      expect(outcome).toMatchObject({ type: 'user_updated' });
 
-      expect(auth.revokeUserSessions).toHaveBeenCalledWith(userId);
+      expect(securityRepository.revokeSessions).toHaveBeenCalledWith(userId);
+      expect(audit.record).toHaveBeenNthCalledWith(1, {
+        type: 'authorization.role-changed',
+        actor: { kind: 'user', userId: adminId },
+        subject: { kind: 'user', id: userId },
+        correlationId,
+        metadata: { from: 'admin', to: 'user' },
+      });
+      expect(audit.record).toHaveBeenNthCalledWith(2, {
+        type: 'session.revoked',
+        actor: { kind: 'user', userId: adminId },
+        subject: { kind: 'user', id: userId },
+        correlationId,
+        metadata: { reason: 'role-change', scope: 'all' },
+      });
       expect(logger.warn).toHaveBeenCalledWith({
         event: 'security.session_revoked',
+        correlationId,
         details: {
           mode: 'all',
           reason: 'role_changed',
           revokedByUserId: adminId,
           targetUserId: userId,
+          count: 1,
         },
       });
     });
 
+    it('does not emit a revocation audit or signal when a role change finds no sessions', async () => {
+      const { useCases, audit, logger, securityRepository } = makeContext({
+        permissionChecker: makePermissionChecker(
+          userUpdatePermission,
+          userSetRolePermission
+        ),
+        repo: {
+          getUpdateSnapshot: vi.fn<UserRepository['getUpdateSnapshot']>(
+            async () =>
+              Result.Ok({
+                type: 'user_update_snapshot_found',
+                snapshot: { email: user.email, role: 'user' },
+              })
+          ),
+        },
+        securityRepository: {
+          revokeSessions: vi.fn<UserSecurityRepository['revokeSessions']>(
+            async () => Result.Ok({ type: 'user_sessions_revoked', count: 0 })
+          ),
+        },
+      });
+
+      await expectOk(
+        useCases.update({
+          correlationId,
+          currentUserId: adminId,
+          id: userId,
+          user: { email: user.email, role: 'admin' },
+        })
+      );
+
+      expect(securityRepository.revokeSessions).toHaveBeenCalledWith(userId);
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'authorization.role-changed' })
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('uses the locked role as authoritative when the outer snapshot is stale', async () => {
+      const { useCases, audit, repo, securityRepository } = makeContext({
+        permissionChecker: makePermissionChecker(
+          userUpdatePermission,
+          userSetRolePermission
+        ),
+        repo: {
+          getUpdateSnapshot: vi.fn<UserRepository['getUpdateSnapshot']>(
+            async () =>
+              Result.Ok({
+                type: 'user_update_snapshot_found',
+                snapshot: { email: user.email, role: 'admin' },
+              })
+          ),
+        },
+        securityRepository: {
+          lockUserForUpdate: vi.fn<UserSecurityRepository['lockUserForUpdate']>(
+            async () =>
+              Result.Ok({
+                type: 'user_security_update_target_found',
+                snapshot: { email: user.email, role: 'user' },
+              })
+          ),
+        },
+      });
+
+      await expectOk(
+        useCases.update({
+          correlationId,
+          currentUserId: adminId,
+          id: userId,
+          user: {
+            email: user.email,
+            name: testUserDisplayName('Durable Name'),
+            role: 'user',
+          },
+        })
+      );
+
+      expect(repo.update).toHaveBeenCalledWith(userId, {
+        email: user.email,
+        emailVerified: undefined,
+        name: testUserDisplayName('Durable Name'),
+        role: undefined,
+      });
+      expect(securityRepository.revokeSessions).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('locks both orientations in the same code-unit user-id order', async () => {
+      const uppercaseId = unwrapParseResult(toUserId('Z-admin'));
+      const lowercaseId = unwrapParseResult(toUserId('a-user'));
+      const lockOrder: UserId[] = [];
+      const makeOrderTrackingSecurity =
+        (): Partial<UserSecurityRepository> => ({
+          lockAuthorizationPrincipal: vi.fn<
+            UserSecurityRepository['lockAuthorizationPrincipal']
+          >(async (id) => {
+            lockOrder.push(id);
+            return Result.Ok({
+              type: 'user_security_principal_found',
+              role: 'admin',
+            });
+          }),
+          lockUserForUpdate: vi.fn<UserSecurityRepository['lockUserForUpdate']>(
+            async (id) => {
+              lockOrder.push(id);
+              return Result.Ok({
+                type: 'user_security_update_target_found',
+                snapshot: { email: user.email, role: 'user' },
+              });
+            }
+          ),
+        });
+      const makeRoleChangeContext = () =>
+        makeContext({
+          permissionChecker: makePermissionChecker(
+            userUpdatePermission,
+            userSetRolePermission
+          ),
+          repo: {
+            getUpdateSnapshot: vi.fn<UserRepository['getUpdateSnapshot']>(
+              async () =>
+                Result.Ok({
+                  type: 'user_update_snapshot_found',
+                  snapshot: { email: user.email, role: 'user' },
+                })
+            ),
+          },
+          securityRepository: makeOrderTrackingSecurity(),
+        });
+
+      await expectOk(
+        makeRoleChangeContext().useCases.update({
+          correlationId,
+          currentUserId: lowercaseId,
+          id: uppercaseId,
+          user: { email: user.email, role: 'admin' },
+        })
+      );
+      expect(lockOrder).toEqual([uppercaseId, lowercaseId]);
+
+      lockOrder.length = 0;
+      await expectOk(
+        makeRoleChangeContext().useCases.update({
+          correlationId,
+          currentUserId: uppercaseId,
+          id: lowercaseId,
+          user: { email: user.email, role: 'admin' },
+        })
+      );
+      expect(lockOrder).toEqual([uppercaseId, lowercaseId]);
+    });
+
     it('does not revoke sessions when no role write is submitted', async () => {
-      const { useCases, auth } = makeContext({
+      const { useCases } = makeContext({
         permissionChecker: makePermissionChecker(userUpdatePermission),
         repo: {
           getUpdateSnapshot: vi.fn<UserRepository['getUpdateSnapshot']>(
@@ -871,15 +1061,15 @@ describe('user use cases', () => {
         },
       });
 
-      await expectOk(
+      const outcome = await expectOk(
         useCases.update({
+          correlationId,
           currentUserId: adminId,
           id: userId,
           user: { email: user.email, role: 'user' },
         })
       );
-
-      expect(auth.revokeUserSessions).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ type: 'user_updated' });
     });
 
     it('surfaces a post-role-change session-revoke failure as an app error', async () => {
@@ -897,8 +1087,15 @@ describe('user use cases', () => {
               })
           ),
         },
-        auth: {
-          revokeUserSessions: vi.fn<UserAuthGateway['revokeUserSessions']>(
+        securityRepository: {
+          lockUserForUpdate: vi.fn<UserSecurityRepository['lockUserForUpdate']>(
+            async () =>
+              Result.Ok({
+                type: 'user_security_update_target_found',
+                snapshot: { email: user.email, role: 'admin' },
+              })
+          ),
+          revokeSessions: vi.fn<UserSecurityRepository['revokeSessions']>(
             async () =>
               Result.Error(
                 new AppError({
@@ -915,6 +1112,7 @@ describe('user use cases', () => {
       await expect(
         expectFailure(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: { email: user.email, role: 'user' },
@@ -943,6 +1141,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: { name: null, email: user.email },
@@ -974,6 +1173,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: { email: user.email },
@@ -995,6 +1195,7 @@ describe('user use cases', () => {
       await expect(
         expectOk(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: {
@@ -1018,6 +1219,7 @@ describe('user use cases', () => {
       await expect(
         expectFailure(
           useCases.update({
+            correlationId,
             currentUserId: adminId,
             id: userId,
             user: {

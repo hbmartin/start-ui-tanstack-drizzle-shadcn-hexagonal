@@ -12,15 +12,9 @@ const telemetry = { startSpan } as unknown as Pick<
   'startSpan'
 >;
 
-const makeAuth = (input?: {
-  removeSuccess?: boolean;
-  revokeSuccess?: boolean;
-}) => ({
+const makeAuth = (input?: { removeSuccess?: boolean }) => ({
   api: {
     removeUser: vi.fn(async () => ({ success: input?.removeSuccess ?? true })),
-    revokeUserSessions: vi.fn(async () => ({
-      success: input?.revokeSuccess ?? true,
-    })),
   },
 });
 
@@ -59,38 +53,8 @@ describe('UserAdminGatewayBetterAuth', () => {
     );
   });
 
-  it('revokes all provider sessions through the bounded adapter', async () => {
-    const auth = makeAuth();
-    const gateway = new UserAdminGatewayBetterAuth(
-      telemetry,
-      auth as unknown as Auth
-    );
-    const headers = new Headers();
-    const userId = unwrapParseResult(toUserId('user-1'));
-
-    const result = await gateway.revokeUserSessions({ userId, headers });
-
-    expect(result).toMatchObject({
-      tag: 'Ok',
-      value: { type: 'auth_user_sessions_revoked' },
-    });
-    expect(auth.api.revokeUserSessions).toHaveBeenCalledWith({
-      body: { userId },
-      headers,
-    });
-    expect(startSpan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attributes: expect.objectContaining({
-          'operation.name': 'auth.revokeUserSessions',
-        }),
-        name: 'auth.revokeUserSessions',
-      }),
-      expect.any(Function)
-    );
-  });
-
   it('maps an unsuccessful remove response to an application error', async () => {
-    const auth = makeAuth({ removeSuccess: false, revokeSuccess: false });
+    const auth = makeAuth({ removeSuccess: false });
     const gateway = new UserAdminGatewayBetterAuth(
       telemetry,
       auth as unknown as Auth
@@ -103,23 +67,6 @@ describe('UserAdminGatewayBetterAuth', () => {
     expect(result).toMatchObject({
       tag: 'Error',
       error: { code: 'AUTH_USER_REMOVE_FAILED' },
-    });
-  });
-
-  it('maps an unsuccessful revoke-all response to an application error', async () => {
-    const auth = makeAuth({ removeSuccess: false, revokeSuccess: false });
-    const gateway = new UserAdminGatewayBetterAuth(
-      telemetry,
-      auth as unknown as Auth
-    );
-    const result = await gateway.revokeUserSessions({
-      userId: unwrapParseResult(toUserId('user-1')),
-      headers: new Headers(),
-    });
-
-    expect(result).toMatchObject({
-      tag: 'Error',
-      error: { code: 'AUTH_USER_SESSIONS_REVOKE_FAILED' },
     });
   });
 });

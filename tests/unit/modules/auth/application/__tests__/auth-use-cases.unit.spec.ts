@@ -62,9 +62,6 @@ const makeDeps = (overrides?: {
   } as AuthEmailPort,
   userAdminGateway: {
     removeUser: vi.fn(async () => Result.Ok({ type: 'auth_user_removed' })),
-    revokeUserSessions: vi.fn(async () =>
-      Result.Ok({ type: 'auth_user_sessions_revoked' })
-    ),
     ...overrides?.userAdminGateway,
   } as UserAdminGateway,
 });
@@ -148,19 +145,8 @@ describe('auth use cases', () => {
       userId: unwrapParseResult(toUserId('user-1')),
       headers,
     });
-    const revokedSessions = await useCases.revokeUserSessions({
-      userId: unwrapParseResult(toUserId('user-1')),
-      headers,
-    });
     expect(getOk(removed)).toEqual({ type: 'auth_user_removed' });
-    expect(getOk(revokedSessions)).toEqual({
-      type: 'auth_user_sessions_revoked',
-    });
     expect(deps.userAdminGateway.removeUser).toHaveBeenCalledWith({
-      userId: unwrapParseResult(toUserId('user-1')),
-      headers,
-    });
-    expect(deps.userAdminGateway.revokeUserSessions).toHaveBeenCalledWith({
       userId: unwrapParseResult(toUserId('user-1')),
       headers,
     });

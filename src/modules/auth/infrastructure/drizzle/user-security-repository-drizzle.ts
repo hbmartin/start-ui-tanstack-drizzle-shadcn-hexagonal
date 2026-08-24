@@ -3,7 +3,12 @@ import { and, eq, or } from 'drizzle-orm';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import type { ApplicationResult } from '@/modules/kernel/application/result';
-import type { SessionId, UserId } from '@/modules/kernel/domain/ids';
+import {
+  type EmailAddress,
+  type SessionId,
+  toEmailAddress,
+  type UserId,
+} from '@/modules/kernel/domain/ids';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 
 import {
@@ -91,6 +96,40 @@ class UserSecurityRepositoryDrizzle {
       );
     } catch (error) {
       return Result.Error(persistenceError('authorization lock', error));
+    }
+  }
+
+  async lockUserForUpdate(userId: UserId): Promise<
+    ApplicationResult<
+      | Readonly<{
+          snapshot: { email: EmailAddress; role: 'admin' | 'user' };
+          type: 'user_security_update_target_found';
+        }>
+      | Readonly<{ type: 'user_security_update_target_not_found' }>
+    >
+  > {
+    try {
+      const [target] = await this.db
+        .select({ email: userTable.email, role: userTable.role })
+        .from(userTable)
+        .where(eq(userTable.id, userId))
+        .for('update');
+      if (!target) {
+        return Result.Ok({ type: 'user_security_update_target_not_found' });
+      }
+      const email = toEmailAddress(target.email);
+      if (email.isError()) {
+        return Result.Error(
+          persistenceError('update target row validation', email.getError())
+        );
+      }
+
+      return Result.Ok({
+        type: 'user_security_update_target_found',
+        snapshot: { email: email.get(), role: target.role },
+      });
+    } catch (error) {
+      return Result.Error(persistenceError('update target lock', error));
     }
   }
 

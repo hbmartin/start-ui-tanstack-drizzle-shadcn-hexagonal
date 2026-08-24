@@ -29,6 +29,7 @@ import {
   AppError,
   type ApplicationResult,
   toCorrelationId,
+  toEmailAddress,
   toGeneratedId,
   toSessionId,
   toUserId,
@@ -71,13 +72,22 @@ const getOk = <TOutcome extends { type: string }>(
   return result.get();
 };
 
-const createAudit = (db: DbLike, eventId: string) =>
-  createAuditPort({
+const createAudit = (db: DbLike, eventId: string) => {
+  let sequence = 0;
+  return createAuditPort({
     clock: { now: () => now },
     failureSignal: createLoggerAuditFailureSignal(logger),
-    idGenerator: { createId: () => toGeneratedId(eventId) },
+    idGenerator: {
+      createId: () => {
+        sequence += 1;
+        return toGeneratedId(
+          sequence === 1 ? eventId : `${eventId}-${sequence}`
+        );
+      },
+    },
     repository: createAuditRepository({ db }),
   });
+};
 
 const makeCachedAuth = (input: { sessionId: string; userId: string }) =>
   ({
@@ -136,18 +146,20 @@ describe('user session revocation audit transaction', () => {
     await database?.close();
   });
 
-  const createUseCases = (eventId: string, auditOverride?: AuditPort) =>
+  const createUseCases = (
+    eventId: string,
+    auditFactory?: (transaction: DbLike) => AuditPort
+  ) =>
     createUserUseCases({
       userRepository: createUserRepository({ db: database.db }),
       userAuthGateway: {
         removeUser: async () => Result.Ok({ type: 'user_auth_removed' }),
-        revokeUserSessions: async () =>
-          Result.Ok({ type: 'user_auth_sessions_revoked' }),
       },
       transactionRunner: createResultTransactionRunner({
         transactionRunner: createTransactionRunner(database.db),
         bindContext: (transaction): UserTransactionContext => ({
-          audit: auditOverride ?? createAudit(transaction, eventId),
+          audit:
+            auditFactory?.(transaction) ?? createAudit(transaction, eventId),
           securityRepository: createUserSecurityRepository({ db: transaction }),
           userRepository: createUserRepository({ db: transaction }),
         }),
@@ -255,9 +267,9 @@ describe('user session revocation audit transaction', () => {
       category: 'system',
       status: 500,
     });
-    const result = await createUseCases('unused', {
+    const result = await createUseCases('unused', () => ({
       record: async () => Result.Error(auditError),
-    }).revokeSessions({
+    })).revokeSessions({
       correlationId,
       currentUserId: adminId,
       id: userId,
@@ -278,9 +290,9 @@ describe('user session revocation audit transaction', () => {
       category: 'system',
       status: 500,
     });
-    const result = await createUseCases('unused', {
+    const result = await createUseCases('unused', () => ({
       record: async () => Result.Error(auditError),
-    }).revokeSession({
+    })).revokeSession({
       correlationId,
       currentUserId: adminId,
       currentSessionId,
@@ -360,6 +372,204 @@ describe('user session revocation audit transaction', () => {
 
     expect(revokeAll).toEqual({ type: 'user_forbidden' });
     expect(revokeOne).toEqual({ type: 'user_forbidden' });
+    await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
+      2
+    );
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      []
+    );
+  });
+
+  it('commits a role change, session invalidation, and both required audits together', async () => {
+    const outcome = getOk(
+      await createUseCases('audit-role-change').update({
+        correlationId,
+        currentUserId: adminId,
+        id: userId,
+        user: {
+          email: unwrapParseResult(toEmailAddress('user@example.com')),
+          role: 'admin',
+        },
+      })
+    );
+
+    expect(outcome).toMatchObject({
+      type: 'user_updated',
+      user: { id: userId, role: 'admin' },
+    });
+    await expect(database.db.select().from(sessionTable)).resolves.toEqual([]);
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'audit-role-change',
+          type: 'authorization.role-changed',
+          actorId: adminId,
+          subjectId: userId,
+          correlationId,
+          metadata: { from: 'user', to: 'admin' },
+        }),
+        expect.objectContaining({
+          id: 'audit-role-change-2',
+          type: 'session.revoked',
+          actorId: adminId,
+          subjectId: userId,
+          correlationId,
+          metadata: { reason: 'role-change', scope: 'all' },
+        }),
+      ])
+    );
+  });
+
+  it('records only the role audit when a role change has no sessions to invalidate', async () => {
+    await database.db.delete(sessionTable);
+
+    const outcome = getOk(
+      await createUseCases('audit-role-only').update({
+        correlationId,
+        currentUserId: adminId,
+        id: userId,
+        user: {
+          email: unwrapParseResult(toEmailAddress('user@example.com')),
+          role: 'admin',
+        },
+      })
+    );
+
+    expect(outcome).toMatchObject({
+      type: 'user_updated',
+      user: { role: 'admin' },
+    });
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'audit-role-only',
+        type: 'authorization.role-changed',
+        metadata: { from: 'user', to: 'admin' },
+      }),
+    ]);
+  });
+
+  it('rejects a role change when the durable actor was demoted', async () => {
+    await database.db
+      .update(userTable)
+      .set({ role: 'user' })
+      .where(eq(userTable.id, adminId));
+
+    const outcome = getOk(
+      await createUseCases('unused').update({
+        correlationId,
+        currentUserId: adminId,
+        id: userId,
+        user: {
+          email: unwrapParseResult(toEmailAddress('user@example.com')),
+          role: 'admin',
+        },
+      })
+    );
+
+    expect(outcome).toEqual({ type: 'user_forbidden' });
+    await expect(
+      database.db
+        .select({ role: userTable.role })
+        .from(userTable)
+        .where(eq(userTable.id, userId))
+    ).resolves.toEqual([{ role: 'user' }]);
+    await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
+      2
+    );
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      []
+    );
+  });
+
+  it('rolls a role write back when identity ownership is divergent', async () => {
+    await database.db.insert(authIdentity).values({
+      provider: 'better-auth',
+      providerUserId: 'different-provider-user',
+      userId,
+    });
+
+    const result = await createUseCases('unused').update({
+      correlationId,
+      currentUserId: adminId,
+      id: userId,
+      user: {
+        email: unwrapParseResult(toEmailAddress('user@example.com')),
+        role: 'admin',
+      },
+    });
+
+    expect(result).toMatchObject({
+      tag: 'Error',
+      error: { code: 'AUTH_IDENTITY_DESTRUCTIVE_MAPPING_UNSUPPORTED' },
+    });
+    await expect(
+      database.db
+        .select({ role: userTable.role })
+        .from(userTable)
+        .where(eq(userTable.id, userId))
+    ).resolves.toEqual([{ role: 'user' }]);
+    await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
+      2
+    );
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      []
+    );
+  });
+
+  it('maps corrupt durable target data to a bounded persistence failure', async () => {
+    await database.db
+      .update(userTable)
+      .set({ email: 'not-an-email-address' })
+      .where(eq(userTable.id, userId));
+
+    const result = await createUserSecurityRepository({
+      db: database.db,
+    }).lockUserForUpdate(userId);
+
+    expect(result).toMatchObject({
+      tag: 'Error',
+      error: {
+        category: 'system',
+        code: 'USER_SECURITY_PERSISTENCE_FAILED',
+        status: 500,
+      },
+    });
+  });
+
+  it('rolls role, sessions, and the first audit back when the second audit fails', async () => {
+    const auditError = new AppError({
+      code: 'AUDIT_EVENT_PERSISTENCE_FAILED',
+      category: 'system',
+      status: 500,
+    });
+    const result = await createUseCases(
+      'audit-role-rollback',
+      (transaction) => {
+        const durableAudit = createAudit(transaction, 'audit-role-rollback');
+        return {
+          record: vi
+            .fn<AuditPort['record']>()
+            .mockImplementationOnce((event) => durableAudit.record(event))
+            .mockImplementationOnce(async () => Result.Error(auditError)),
+        };
+      }
+    ).update({
+      correlationId,
+      currentUserId: adminId,
+      id: userId,
+      user: {
+        email: unwrapParseResult(toEmailAddress('user@example.com')),
+        role: 'admin',
+      },
+    });
+
+    expect(result.isError()).toBe(true);
+    await expect(
+      database.db
+        .select({ role: userTable.role })
+        .from(userTable)
+        .where(eq(userTable.id, userId))
+    ).resolves.toEqual([{ role: 'user' }]);
     await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
       2
     );

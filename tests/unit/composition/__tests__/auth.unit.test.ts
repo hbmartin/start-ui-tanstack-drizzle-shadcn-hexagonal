@@ -32,9 +32,6 @@ const makeAuthOverrides = (): Required<AuthOverrides> => ({
   } as AuthEmailPort,
   userAdminGateway: {
     removeUser: vi.fn(async () => Result.Ok({ type: 'auth_user_removed' })),
-    revokeUserSessions: vi.fn(async () =>
-      Result.Ok({ type: 'auth_user_sessions_revoked' })
-    ),
   } as UserAdminGateway,
 });
 

@@ -3,17 +3,9 @@ import type { UserId } from '@/modules/kernel/domain/ids';
 
 export type UserAdminRemoveOutcome = { type: 'auth_user_removed' };
 
-export type UserAdminRevokeSessionsOutcome = {
-  type: 'auth_user_sessions_revoked';
-};
-
 export interface UserAdminGateway {
   removeUser(input: {
     userId: UserId;
     headers: Headers;
   }): Promise<ApplicationResult<UserAdminRemoveOutcome>>;
-  revokeUserSessions(input: {
-    userId: UserId;
-    headers: Headers;
-  }): Promise<ApplicationResult<UserAdminRevokeSessionsOutcome>>;
 }

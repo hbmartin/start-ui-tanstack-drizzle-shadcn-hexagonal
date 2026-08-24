@@ -63,8 +63,6 @@ const makeUserAuthGateway = (
   overrides: Partial<UserAuthGateway> = {}
 ): UserAuthGateway => ({
   removeUser: async () => Result.Ok({ type: 'user_auth_removed' }),
-  revokeUserSessions: async () =>
-    Result.Ok({ type: 'user_auth_sessions_revoked' }),
   ...overrides,
 });
 

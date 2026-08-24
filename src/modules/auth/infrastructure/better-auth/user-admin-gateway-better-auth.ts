@@ -57,49 +57,4 @@ export class UserAdminGatewayBetterAuth implements UserAdminGateway {
       }
     );
   }
-
-  async revokeUserSessions(
-    input: Parameters<UserAdminGateway['revokeUserSessions']>[0]
-  ): ReturnType<UserAdminGateway['revokeUserSessions']> {
-    return this.telemetry.startSpan(
-      {
-        attributes: {
-          'auth.provider': 'better-auth',
-          'operation.name': 'auth.revokeUserSessions',
-          'operation.type': 'provider_operation',
-        },
-        name: 'auth.revokeUserSessions',
-        op: 'auth.provider',
-      },
-      async () => {
-        try {
-          const response = await this.auth.api.revokeUserSessions({
-            body: { userId: input.userId },
-            headers: input.headers,
-          });
-          if (!response.success) {
-            return Result.Error(
-              new AppError({
-                code: 'AUTH_USER_SESSIONS_REVOKE_FAILED',
-                category: 'system',
-                status: 500,
-                message: 'Failed to revoke auth user sessions',
-              })
-            );
-          }
-          return Result.Ok({ type: 'auth_user_sessions_revoked' });
-        } catch (error) {
-          return Result.Error(
-            new AppError({
-              code: 'AUTH_USER_SESSIONS_REVOKE_FAILED',
-              category: 'system',
-              status: 500,
-              message: 'Failed to revoke auth user sessions',
-              cause: error,
-            })
-          );
-        }
-      }
-    );
-  }
 }

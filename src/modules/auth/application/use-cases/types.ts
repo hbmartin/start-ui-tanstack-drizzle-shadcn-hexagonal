@@ -15,7 +15,6 @@ import type {
 import type {
   UserAdminGateway,
   UserAdminRemoveOutcome,
-  UserAdminRevokeSessionsOutcome,
 } from '../ports/user-admin-gateway';
 
 export type AuthUseCaseDeps = {
@@ -32,7 +31,5 @@ export type AuthPermissionOutcome = AuthorizationGatewayOutcome;
 export type AuthSendSignInOtpOutcome = AuthEmailSendSignInOtpOutcome;
 
 export type AuthRemoveUserOutcome = UserAdminRemoveOutcome;
-
-export type AuthRevokeUserSessionsOutcome = UserAdminRevokeSessionsOutcome;
 
 export type AuthResult<TOutcome> = ApplicationResult<TOutcome>;

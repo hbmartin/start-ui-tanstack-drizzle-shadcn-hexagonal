@@ -1,7 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
 import { toAuditSubjectId } from '@/modules/audit';
-import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import type { CorrelationId, UserId } from '@/modules/kernel/domain/ids';
 
 import type {
@@ -14,6 +13,7 @@ import {
   rejectUnauthorizedUser,
   rejectUnauthorizedUserInTransaction,
 } from './authorize-user';
+import { recordRequiredAudit } from './record-required-audit';
 import { isSelfTarget } from '../../domain/user-policy';
 import type { UserSessionsRevokedRepositoryOutcome } from '../ports/user-security-repository';
 
@@ -58,7 +58,7 @@ export async function revokeUserSessions(
       const outcome = revoked.get();
       if (outcome.count === 0) return Result.Ok(outcome);
 
-      const recorded = await audit.record({
+      const recorded = await recordRequiredAudit(audit, {
         type: 'session.revoked',
         actor: { kind: 'user', userId: input.currentUserId },
         subject: { kind: 'user', id: subjectId.get() },
@@ -66,16 +66,6 @@ export async function revokeUserSessions(
         metadata: { reason: 'administrator', scope: 'all' },
       });
       if (recorded.isError()) return Result.Error(recorded.getError());
-      if (recorded.get().type !== 'audit_recorded') {
-        return Result.Error(
-          new AppError({
-            code: 'REQUIRED_AUDIT_EVENT_NOT_RECORDED',
-            category: 'system',
-            status: 500,
-            message: 'Required session revocation audit event was not recorded',
-          })
-        );
-      }
 
       return Result.Ok(outcome);
     }

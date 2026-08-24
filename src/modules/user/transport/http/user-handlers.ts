@@ -181,6 +181,7 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
   ) => {
     return unwrapApplicationResult(
       getUseCases(ctx).update({
+        correlationId: ctx.correlationId,
         currentUserId: ctx.scope.userId,
         id: data.id,
         user: {

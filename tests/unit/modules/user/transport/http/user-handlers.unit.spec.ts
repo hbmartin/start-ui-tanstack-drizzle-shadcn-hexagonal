@@ -53,6 +53,7 @@ describe('user HTTP transport handlers', () => {
     );
 
     expect(update).toHaveBeenCalledWith({
+      correlationId: ctx.correlationId,
       currentUserId: ctx.scope.userId,
       id: unwrapParseResult(toUserId('user-2')),
       user: {

@@ -1,11 +1,18 @@
 import type { ApplicationResult } from '@/modules/kernel/application/result';
 import type { SessionId, UserId } from '@/modules/kernel/domain/ids';
 
-import type { UserRole } from '../../domain/user';
+import type { UserRole, UserUpdateSnapshot } from '../../domain/user';
 
 export type UserSecurityPrincipalRepositoryOutcome =
   | Readonly<{ role: UserRole; type: 'user_security_principal_found' }>
   | Readonly<{ type: 'user_security_principal_not_found' }>;
+
+export type UserSecurityUpdateTargetRepositoryOutcome =
+  | Readonly<{
+      snapshot: UserUpdateSnapshot;
+      type: 'user_security_update_target_found';
+    }>
+  | Readonly<{ type: 'user_security_update_target_not_found' }>;
 
 export type UserSessionsRevokedRepositoryOutcome = Readonly<{
   count: number;
@@ -21,6 +28,9 @@ export interface UserSecurityRepository {
   lockAuthorizationPrincipal(
     userId: UserId
   ): Promise<ApplicationResult<UserSecurityPrincipalRepositoryOutcome>>;
+  lockUserForUpdate(
+    userId: UserId
+  ): Promise<ApplicationResult<UserSecurityUpdateTargetRepositoryOutcome>>;
   revokeSessions(
     userId: UserId
   ): Promise<ApplicationResult<UserSessionsRevokedRepositoryOutcome>>;
