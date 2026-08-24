@@ -59,8 +59,11 @@ Cross-module imports must use one of these public files:
 | `client.ts` | Client-only public API, query options, client facades. |
 | `presentation.ts` | React components and presentation exports. |
 | `testing.ts` | Test-only public gate for owner internals. |
+| `manifest.ts` | Static capability metadata for composition and lifecycle tooling only. |
+| `persistence.ts` | Named schema exports for schema aggregation and owner persistence wiring only. |
 
 Do not deep-import another module's `domain/`, `application/`, `infrastructure/`, `transport/`, or `presentation/` internals. `kernel` internals are the practical exception for cross-cutting primitives.
+Routes, app code, presentation, and ordinary module code must not import `persistence.ts`. Cross-capability schema references use the focused persistence gate and remain confined to schema composition.
 
 ## Module Rules
 
@@ -110,7 +113,7 @@ Keep files named by concrete concern. Avoid catch-all `utils.ts`, broad `service
 - `src/modules` must not import `src/app`; routes/app containers compose app shell/support UI around module presentation.
 - `src/modules/*/testing.ts` and platform testing gates are test-only and must not be imported by production source.
 - Module internals must not import `@/composition`; dependencies are injected through factories or public server barrels.
-- Routes import modules only through `index.ts`, `server.ts`, `backend.ts`, `client.ts`, or `presentation.ts`.
+- Routes import modules only through `index.ts`, `server.ts`, `backend.ts`, `client.ts`, or `presentation.ts`; they never import `manifest.ts` or `persistence.ts`.
 - `src/modules/*/presentation/schema.ts` must emit static error keys, not import `i18next` or `react-i18next`; `src/platform/components/form/form-field-error.tsx` translates at render time.
 - Better Auth server APIs are confined to `src/modules/auth` and `src/composition/auth.ts`.
 - Provider-specific auth tokens stay server-side and do not cross client/public boundaries.

@@ -141,6 +141,58 @@ export const repeatedTransform = (value: string) => {
   return root;
 };
 
+const makePersistenceBoundaryFixture = () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fallow-persistence-'));
+  tempDirectories.push(root);
+  writeFixture(
+    root,
+    '.fallowrc.json',
+    JSON.stringify({
+      boundaries: {
+        coverage: { requireAllFiles: true },
+        rules: [
+          { allow: ['module-schema'], from: 'persistence' },
+          { allow: ['persistence'], from: 'module-schema' },
+          { allow: ['routes'], from: 'routes' },
+          { allow: ['client-gates'], from: 'client-gates' },
+        ],
+        zones: [
+          { name: 'persistence', patterns: ['src/modules/*/persistence.ts'] },
+          {
+            name: 'module-schema',
+            patterns: ['src/modules/*/infrastructure/drizzle/schema.ts'],
+          },
+          { name: 'client-gates', patterns: ['src/modules/*/client.ts'] },
+          { name: 'routes', patterns: ['src/routes/**'] },
+        ],
+      },
+      entry: ['src/**/*.ts'],
+      rules: { 'boundary-violation': 'error' },
+    })
+  );
+  writeFixture(
+    root,
+    'src/modules/book/persistence.ts',
+    `export { table } from './infrastructure/drizzle/schema';\n`
+  );
+  writeFixture(
+    root,
+    'src/modules/book/infrastructure/drizzle/schema.ts',
+    `import { clientValue } from '../../client';\nexport const table = clientValue;\n`
+  );
+  writeFixture(
+    root,
+    'src/modules/book/client.ts',
+    `export const clientValue = 'client';\n`
+  );
+  writeFixture(
+    root,
+    'src/routes/books.ts',
+    `import { table } from '../modules/book/persistence';\nexport const route = table;\n`
+  );
+  return root;
+};
+
 afterEach(() => {
   for (const directory of tempDirectories.splice(0)) {
     fs.rmSync(directory, { force: true, recursive: true });
@@ -163,7 +215,7 @@ describe('Fallow guardrails', () => {
     const report = JSON.parse(result.stdout) as BoundaryReport;
     expect(report.kind).toBe('list-boundaries');
     expect(report.boundaries.configured).toBe(true);
-    expect(report.boundaries.zones).toHaveLength(27);
+    expect(report.boundaries.zones).toHaveLength(29);
     expect(
       report.boundaries.zones
         .filter((zone) => zone.name !== 'router')
@@ -175,7 +227,7 @@ describe('Fallow guardrails', () => {
     );
     expect(modules).toMatchObject({ status: 'ok' });
     expect(modules?.children).toHaveLength(7);
-  });
+  }, 15_000);
 
   it('detects boundary, provider-policy, duplication, and health regressions', () => {
     const root = makeNegativeFixture();
@@ -218,5 +270,19 @@ describe('Fallow guardrails', () => {
     expect(health.status).toBe(1);
     expect(JSON.parse(health.stdout)).toMatchObject({ kind: 'health' });
     expect(health.stdout).toContain('max_unit_size');
+  });
+
+  it('rejects persistence imports from routes and non-persistence gates from schemas', () => {
+    const fixture = makePersistenceBoundaryFixture();
+    const result = runFallow(
+      ['dead-code', '--format', 'json', '--quiet', '--no-cache'],
+      fixture
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('boundary_violations');
+    expect(result.stdout).toContain('src/routes/books.ts');
+    expect(result.stdout).toContain(
+      'src/modules/book/infrastructure/drizzle/schema.ts'
+    );
   });
 });

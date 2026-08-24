@@ -14,7 +14,7 @@ export const permissionStatements = {
     'delete',
   ],
   session: ['list', 'revoke', 'delete'],
-  profile: ['read', 'update'],
+  profile: ['update'],
   apps: ['app', 'manager'],
   book: ['read', 'create', 'update', 'delete'],
   genre: ['read'],

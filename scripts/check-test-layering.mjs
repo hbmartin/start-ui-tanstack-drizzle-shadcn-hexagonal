@@ -7,10 +7,14 @@ const sourceRoot = path.join(root, 'src');
 const testRoot = path.join(root, 'tests');
 const sourceFilePattern = /\.[cm]?[jt]sx?$/;
 const publicModuleFiles = new Set([
+  'backend',
+  'manifest',
+  'persistence',
   'index',
   'server',
   'client',
   'presentation',
+  'testing',
 ]);
 
 function listFiles(directory) {
@@ -107,7 +111,7 @@ function moduleImportViolation(resolvedImport) {
 
   if (isPublicFile) return null;
 
-  return `workflow integration tests must import ${moduleName} through index.ts, server.ts, client.ts, or presentation.ts`;
+  return `workflow integration tests must import ${moduleName} through a focused public gate`;
 }
 
 const failures = [];

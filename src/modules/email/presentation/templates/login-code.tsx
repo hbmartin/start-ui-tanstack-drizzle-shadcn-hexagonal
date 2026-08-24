@@ -2,12 +2,15 @@ import { Container, Heading, Section, Text } from 'react-email';
 
 import i18n from '@/platform/lib/i18n';
 
-import { AUTH_EMAIL_OTP_EXPIRATION_IN_MINUTES } from '@/modules/auth';
 import { EmailFooter } from '@/modules/email/presentation/components/email-footer';
 import { EmailLayout } from '@/modules/email/presentation/components/email-layout';
 import { styles } from '@/modules/email/presentation/styles';
 
-const TemplateLoginCode = (props: { language: string; code: string }) => {
+const TemplateLoginCode = (props: {
+  language: string;
+  code: string;
+  expirationMinutes: number | string;
+}) => {
   const t = i18n.getFixedT(props.language, 'emails');
 
   return (
@@ -19,7 +22,7 @@ const TemplateLoginCode = (props: { language: string; code: string }) => {
           <Text style={styles.code}>{props.code}</Text>
           <Text style={styles.textMuted}>
             {t('loginCode.validityTime', {
-              expiration: AUTH_EMAIL_OTP_EXPIRATION_IN_MINUTES,
+              expiration: props.expirationMinutes,
             })}
             <br />
             {t('loginCode.ignoreHelper')}

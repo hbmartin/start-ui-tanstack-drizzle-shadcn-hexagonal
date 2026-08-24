@@ -10,7 +10,7 @@
     "src/router.tsx",
     "src/routes/**/*.{ts,tsx}",
     "src/app/**/{index,presentation}.{ts,tsx}",
-    "src/modules/*/{index,server,backend,client,presentation,testing}.{ts,tsx}",
+    "src/modules/*/{index,server,backend,client,presentation,testing,manifest,persistence}.{ts,tsx}",
     "src/platform/components/**/*.{ts,tsx}",
     "src/platform/runtime-config/{client,presentation,testing}.ts",
     "tests/e2e/visual/screenshot.css",
@@ -33,7 +33,7 @@
 
   "ignoreExports": [
     {
-      "file": "src/modules/*/{index,server,backend,client,presentation,testing}.{ts,tsx}",
+      "file": "src/modules/*/{index,server,backend,client,presentation,testing,manifest,persistence}.{ts,tsx}",
       "exports": ["*"],
     },
     { "file": "src/platform/**/index.{ts,tsx}", "exports": ["*"] },
@@ -187,6 +187,14 @@
       { "name": "routes", "patterns": ["src/routes/**"] },
       { "name": "app", "patterns": ["src/app/**"] },
       {
+        "name": "manifest-gates",
+        "patterns": ["src/modules/*/manifest.ts"],
+      },
+      {
+        "name": "persistence-gates",
+        "patterns": ["src/modules/*/persistence.ts"],
+      },
+      {
         "name": "testing-gates",
         "patterns": ["src/modules/*/testing.{ts,tsx}"],
       },
@@ -287,6 +295,14 @@
       { "name": "types", "patterns": ["src/types/**"] },
     ],
     "rules": [
+      {
+        "from": "manifest-gates",
+        "allow": ["manifest-gates", "modules/kernel"],
+      },
+      {
+        "from": "persistence-gates",
+        "allow": ["module-db-schema"],
+      },
       {
         "from": "modules",
         "allow": [
@@ -412,6 +428,7 @@
       {
         "from": "module-db-schema",
         "allow": [
+          "persistence-gates",
           "modules/auth",
           "modules/kernel",
           "kernel-db-schema",
@@ -423,6 +440,7 @@
       {
         "from": "kernel-db-schema",
         "allow": [
+          "persistence-gates",
           "modules/kernel",
           "module-db-schema",
           "kernel-gates",
@@ -467,6 +485,7 @@
       {
         "from": "composition",
         "allow": [
+          "manifest-gates",
           "modules",
           "profile-gates",
           "auth-gates",

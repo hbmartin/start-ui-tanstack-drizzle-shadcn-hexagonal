@@ -6,8 +6,7 @@ import {
   isProductionSeedAllowed,
 } from '@/modules/kernel/backend';
 
-import { createBooks } from './book';
-import { createUsers } from './user';
+import { seedContributions } from './registry.generated';
 
 const SEED = 0x5eed;
 
@@ -28,8 +27,9 @@ function assertSeedAllowed() {
 async function main() {
   assertSeedAllowed();
   faker.seed(SEED);
-  await createBooks();
-  await createUsers();
+  for (const contribution of seedContributions) {
+    await contribution.run();
+  }
 }
 
 try {

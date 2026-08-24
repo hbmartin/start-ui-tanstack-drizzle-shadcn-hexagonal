@@ -19,7 +19,11 @@ describe('TemplateLoginCode', () => {
   it('uses a fixed translator instead of mutating global language state', async () => {
     const { TemplateLoginCode } = await loadTemplate();
 
-    TemplateLoginCode({ language: 'fr', code: '123456' });
+    TemplateLoginCode({
+      language: 'fr',
+      code: '123456',
+      expirationMinutes: 5,
+    });
 
     expect(i18nMock.getFixedT).toHaveBeenCalledWith('fr', 'emails');
     expect(i18nMock.changeLanguage).not.toHaveBeenCalled();

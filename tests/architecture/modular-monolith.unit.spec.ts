@@ -394,6 +394,7 @@ describe('strict modular monolith layout', () => {
       expect(fs.existsSync(path.join(moduleRoot, 'server.ts'))).toBe(true);
       expect(fs.existsSync(path.join(moduleRoot, 'client.ts'))).toBe(true);
       expect(fs.existsSync(path.join(moduleRoot, 'testing.ts'))).toBe(true);
+      expect(fs.existsSync(path.join(moduleRoot, 'manifest.ts'))).toBe(true);
     }
   });
 
@@ -414,6 +415,11 @@ describe('strict modular monolith layout', () => {
     }
 
     for (const moduleName of ['auth', 'book', 'email', 'genre']) {
+      expect(
+        fs.existsSync(
+          path.join(root, 'src/modules', moduleName, 'persistence.ts')
+        )
+      ).toBe(true);
       expect(
         fs.existsSync(
           path.join(

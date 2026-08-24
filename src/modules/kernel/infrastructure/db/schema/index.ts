@@ -1,9 +1,9 @@
 export * from './common';
 export * from './relations';
-export * from '@/modules/auth/infrastructure/drizzle/schema';
-export * from '@/modules/book/infrastructure/drizzle/schema';
-export * from '@/modules/email/infrastructure/drizzle/schema';
-export * from '@/modules/genre/infrastructure/drizzle/schema';
+export * from '@/modules/auth/persistence';
+export * from '@/modules/book/persistence';
+export * from '@/modules/email/persistence';
+export * from '@/modules/genre/persistence';
 
 import {
   account,
@@ -11,14 +11,10 @@ import {
   session,
   user,
   verification,
-} from '@/modules/auth/infrastructure/drizzle/schema';
-import {
-  author,
-  book,
-  publisher,
-} from '@/modules/book/infrastructure/drizzle/schema';
-import { emailStatus } from '@/modules/email/infrastructure/drizzle/schema';
-import { genre } from '@/modules/genre/infrastructure/drizzle/schema';
+} from '@/modules/auth/persistence';
+import { author, book, publisher } from '@/modules/book/persistence';
+import { emailStatus } from '@/modules/email/persistence';
+import { genre } from '@/modules/genre/persistence';
 
 export type User = typeof user.$inferSelect;
 export type NewUser = typeof user.$inferInsert;

@@ -6,7 +6,11 @@ import i18n from '@/platform/lib/i18n';
 import '@/app/i18n/setup';
 import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields';
 
-import type { AuthEmailPort, SendSignInOtpInput } from '@/modules/auth';
+import {
+  AUTH_EMAIL_OTP_EXPIRATION_IN_MINUTES,
+  type AuthEmailPort,
+  type SendSignInOtpInput,
+} from '@/modules/auth';
 import type { EmailGateway } from '@/modules/email';
 import { TemplateLoginCode } from '@/modules/email/presentation';
 import { isAppError, type Logger } from '@/modules/kernel';
@@ -105,7 +109,11 @@ export class AuthEmailPortEmailGateway implements AuthEmailPort {
       to: recipientList.get(),
       subject: t('loginCode.subject'),
       template: (
-        <TemplateLoginCode language={input.language} code={input.otp} />
+        <TemplateLoginCode
+          language={input.language}
+          code={input.otp}
+          expirationMinutes={AUTH_EMAIL_OTP_EXPIRATION_IN_MINUTES}
+        />
       ),
       idempotencyKey: idempotencyKey.get(),
       metadata,

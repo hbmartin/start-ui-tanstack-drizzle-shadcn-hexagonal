@@ -18,11 +18,9 @@ const { adminEmail, userEmail } = getSeedAccountEmails();
 
 const seedOnboardedAt = new Date('2024-01-01T00:00:00.000Z');
 
-export async function createUsers() {
-  console.log(`⏳ Seeding users`);
+export async function createDemoUsers() {
+  console.log(`⏳ Seeding demo users`);
   const db = getDefaultDbClient();
-
-  let createdCounter = 0;
   const [countRow] = await db
     .select({ count: sql<number>`cast(count(*) as integer)` })
     .from(user)
@@ -39,14 +37,23 @@ export async function createUsers() {
     })
   );
 
-  if (usersToSeed.length > 0) {
-    const inserted = await db
-      .insert(user)
-      .values(usersToSeed)
-      .onConflictDoNothing()
-      .returning({ id: user.id });
-    createdCounter += inserted.length;
-  }
+  const inserted =
+    usersToSeed.length === 0
+      ? []
+      : await db
+          .insert(user)
+          .values(usersToSeed)
+          .onConflictDoNothing()
+          .returning({ id: user.id });
+
+  console.log(
+    `✅ ${existingRandomUserCount} existing demo users 👉 ${inserted.length} users created`
+  );
+}
+
+export async function createLocalUsers() {
+  console.log(`⏳ Seeding local accounts`);
+  const db = getDefaultDbClient();
 
   const [insertedUser] = await db
     .insert(user)
@@ -59,9 +66,6 @@ export async function createUsers() {
     })
     .onConflictDoNothing()
     .returning({ id: user.id });
-  if (insertedUser) {
-    createdCounter += 1;
-  }
 
   const [insertedAdmin] = await db
     .insert(user)
@@ -74,12 +78,8 @@ export async function createUsers() {
     })
     .onConflictDoNothing()
     .returning({ id: user.id });
-  if (insertedAdmin) {
-    createdCounter += 1;
-  }
-
   console.log(
-    `✅ ${existingRandomUserCount} existing random users 👉 ${createdCounter} users created`
+    `✅ ${Number(Boolean(insertedUser)) + Number(Boolean(insertedAdmin))} local accounts created`
   );
 
   // Never disclose seeded credentials on a production runtime.
