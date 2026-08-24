@@ -1,8 +1,8 @@
 import {
+  mockDb,
   mockGetSession,
   mockSession,
   mockUser,
-  mockUserHasPermission,
 } from '@tests/server/test-utils';
 import { describe, expect, it } from 'vitest';
 
@@ -52,7 +52,9 @@ describe('protected server functions', () => {
         user: mockUser,
         session: mockSession,
       });
-      mockUserHasPermission.mockResolvedValue({ success: false, error: false });
+      mockDb.query.user.findFirst
+        .mockResolvedValueOnce(mockUser)
+        .mockResolvedValueOnce(null);
 
       await expect(serverFn({ data })).rejects.toMatchObject({
         code: 'FORBIDDEN',
@@ -84,7 +86,9 @@ describe('protected server functions', () => {
         user: mockUser,
         session: mockSession,
       });
-      mockUserHasPermission.mockResolvedValue({ success: false, error: false });
+      mockDb.query.user.findFirst
+        .mockResolvedValueOnce(mockUser)
+        .mockResolvedValueOnce(null);
 
       await expect(
         profileUpdateInfo({ data: { name: 'User' } })

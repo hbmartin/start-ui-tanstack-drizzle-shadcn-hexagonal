@@ -20,7 +20,11 @@ import type { TelemetryAdapter } from '@/platform/telemetry';
 
 import type { Auth } from './auth';
 import { getDefaultAuth } from './auth';
-import { authIdentity, user as userTable } from '../drizzle/schema';
+import {
+  authIdentity,
+  session as sessionTable,
+  user as userTable,
+} from '../drizzle/schema';
 import type { SessionGateway } from '../../application/ports/session-gateway';
 import { zRole } from '../../domain/permissions';
 import type {
@@ -151,13 +155,30 @@ export class SessionGatewayBetterAuth implements SessionGateway {
         })
         .onConflictDoNothing();
     }
-    if (userId === providerUser.id) return Option.Some(providerUser);
 
+    // Better Auth may return the user snapshot stored beside a cached session.
+    // Always reload the app principal so deletion and role changes take effect
+    // without trusting that stale snapshot.
     const appUser = await this.db.query.user.findFirst({
       where: eq(userTable.id, userId),
     });
 
     return Option.fromNullable(appUser);
+  }
+
+  private async isPersistedSession(input: {
+    providerUserId: string;
+    sessionId: string;
+  }) {
+    const persisted = await this.db.query.session.findFirst({
+      where: and(
+        eq(sessionTable.id, input.sessionId),
+        eq(sessionTable.userId, input.providerUserId)
+      ),
+      columns: { id: true },
+    });
+
+    return persisted !== undefined && persisted !== null;
   }
 
   async getSession(input: {
@@ -182,6 +203,14 @@ export class SessionGatewayBetterAuth implements SessionGateway {
             return Result.Ok({ type: 'auth_session_missing' });
           }
           if (this.isPastAbsoluteMax(session.session.createdAt)) {
+            return Result.Ok({ type: 'auth_session_missing' });
+          }
+          if (
+            !(await this.isPersistedSession({
+              providerUserId: session.user.id,
+              sessionId: session.session.id,
+            }))
+          ) {
             return Result.Ok({ type: 'auth_session_missing' });
           }
           return (await this.resolveAppUser(session.user)).match({

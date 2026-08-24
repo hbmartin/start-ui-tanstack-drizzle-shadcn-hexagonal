@@ -81,6 +81,10 @@ export function createAuth(input?: Database | CreateAuthOptions) {
       expiresIn: authConfig.sessionExpirationInSeconds,
       updateAge: authConfig.sessionUpdateAgeInSeconds,
       freshAge: authConfig.sessionFreshAgeInSeconds,
+      // PostgreSQL is the authorization source of truth. Secondary storage is
+      // only a cache: app session resolution independently requires this
+      // durable row, so a stale cache entry cannot survive a committed revoke.
+      storeSessionInDatabase: true,
     },
     advanced: createAuthCookieSecurityOptions(envClient.VITE_BASE_URL, {
       isProduction: isProdRuntimeEnvironment(),

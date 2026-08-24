@@ -145,7 +145,7 @@ const buildAuthUseCases = (overrides?: AuthOverrides) => {
       ),
     authorizationGateway:
       overrides?.authorizationGateway ??
-      new AuthorizationGatewayBetterAuth(authInstance, telemetry),
+      new AuthorizationGatewayBetterAuth(undefined, telemetry),
     authEmailPort,
     userAdminGateway:
       overrides?.userAdminGateway ??

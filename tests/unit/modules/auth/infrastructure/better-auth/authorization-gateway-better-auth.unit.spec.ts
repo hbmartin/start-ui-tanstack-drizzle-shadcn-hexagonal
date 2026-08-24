@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Auth } from '@/modules/auth/infrastructure/better-auth/auth';
 import { AuthorizationGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/authorization-gateway-better-auth';
+import type { Database } from '@/modules/kernel/infrastructure/db/client';
 import { toUserId } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 import type { TelemetryAdapter } from '@/platform/telemetry';
@@ -12,16 +12,14 @@ const telemetry = { startSpan } as unknown as Pick<
   'startSpan'
 >;
 
-const makeAuth = (userHasPermission: ReturnType<typeof vi.fn>): Auth =>
+const makeDb = (findFirst: ReturnType<typeof vi.fn>) =>
   ({
-    api: {
-      userHasPermission,
-    },
-  }) as unknown as Auth;
+    query: { user: { findFirst } },
+  }) as unknown as Database;
 
 const makeInput = () => ({
   userId: unwrapParseResult(toUserId('user-1')),
-  permissions: { book: ['read'] },
+  permissions: { book: ['delete'] },
   headers: new Headers(),
 });
 
@@ -30,26 +28,20 @@ describe('AuthorizationGatewayBetterAuth', () => {
     vi.clearAllMocks();
   });
 
-  it('maps granted provider responses to application outcomes', async () => {
-    const userHasPermission = vi.fn(async () => ({ success: true }));
-    const auth = makeAuth(userHasPermission);
-    const gateway = new AuthorizationGatewayBetterAuth(auth, telemetry);
-    const input = makeInput();
+  it('grants permissions from the durable app-user role', async () => {
+    const findFirst = vi.fn(async () => ({ role: 'admin' }));
+    const gateway = new AuthorizationGatewayBetterAuth(
+      makeDb(findFirst),
+      telemetry
+    );
 
-    const result = await gateway.userHasPermission(input);
+    const result = await gateway.userHasPermission(makeInput());
 
-    expect(result.isOk()).toBe(true);
     expect(result).toMatchObject({
       tag: 'Ok',
       value: { type: 'auth_permission_granted' },
     });
-    expect(userHasPermission).toHaveBeenCalledWith({
-      body: {
-        userId: 'user-1',
-        permissions: { book: ['read'] },
-      },
-      headers: input.headers,
-    });
+    expect(findFirst).toHaveBeenCalledOnce();
     expect(startSpan).toHaveBeenCalledWith(
       expect.objectContaining({
         attributes: expect.objectContaining({
@@ -63,29 +55,37 @@ describe('AuthorizationGatewayBetterAuth', () => {
     );
   });
 
-  it('maps denied provider responses to application outcomes', async () => {
-    const auth = makeAuth(vi.fn(async () => ({ success: false })));
-    const gateway = new AuthorizationGatewayBetterAuth(auth, telemetry);
+  it.each([
+    { name: 'least-privileged role', row: { role: 'user' } },
+    { name: 'missing principal', row: null },
+    { name: 'invalid durable role', row: { role: 'owner' } },
+  ])('denies permissions for a $name', async ({ row }) => {
+    const gateway = new AuthorizationGatewayBetterAuth(
+      makeDb(vi.fn(async () => row)),
+      telemetry
+    );
 
     const result = await gateway.userHasPermission(makeInput());
 
-    expect(result.isOk()).toBe(true);
     expect(result).toMatchObject({
       tag: 'Ok',
       value: { type: 'auth_permission_denied' },
     });
   });
 
-  it('maps provider error payloads to AppError results', async () => {
-    const providerError = new Error('permission provider failed');
-    const auth = makeAuth(
-      vi.fn(async () => ({ error: providerError, success: false }))
+  it('maps durable-role lookup failures to AppError results', async () => {
+    const databaseError = new Error('permission database failed');
+    const gateway = new AuthorizationGatewayBetterAuth(
+      makeDb(
+        vi.fn(async () => {
+          throw databaseError;
+        })
+      ),
+      telemetry
     );
-    const gateway = new AuthorizationGatewayBetterAuth(auth, telemetry);
 
     const result = await gateway.userHasPermission(makeInput());
 
-    expect(result.isError()).toBe(true);
     expect(result).toMatchObject({
       tag: 'Error',
       error: {
@@ -94,29 +94,6 @@ describe('AuthorizationGatewayBetterAuth', () => {
         status: 500,
       },
     });
-    expect(result).toHaveProperty('error.cause', providerError);
-  });
-
-  it('maps thrown provider failures to AppError results', async () => {
-    const providerError = new Error('permission provider threw');
-    const auth = makeAuth(
-      vi.fn(async () => {
-        throw providerError;
-      })
-    );
-    const gateway = new AuthorizationGatewayBetterAuth(auth, telemetry);
-
-    const result = await gateway.userHasPermission(makeInput());
-
-    expect(result.isError()).toBe(true);
-    expect(result).toMatchObject({
-      tag: 'Error',
-      error: {
-        category: 'system',
-        code: 'AUTH_PERMISSION_CHECK_FAILED',
-        status: 500,
-      },
-    });
-    expect(result).toHaveProperty('error.cause', providerError);
+    expect(result).toHaveProperty('error.cause', databaseError);
   });
 });

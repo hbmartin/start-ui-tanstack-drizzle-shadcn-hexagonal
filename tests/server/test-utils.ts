@@ -141,6 +141,10 @@ export function setupAuthenticatedUser() {
     session: mockSession,
   });
   mockUserHasPermission.mockResolvedValue({ success: true, error: false });
+  // Production session resolution treats PostgreSQL as authoritative even
+  // when Better Auth returns a secondary-storage cache hit.
+  mockDb.query.session.findFirst.mockResolvedValue({ id: mockSession.id });
+  mockDb.query.user.findFirst.mockResolvedValue(mockUser);
 }
 
 export const mockLogger = {

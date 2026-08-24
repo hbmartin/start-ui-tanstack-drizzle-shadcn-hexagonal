@@ -144,6 +144,7 @@ describe('Better Auth security configuration', () => {
       expiresIn: 604_800,
       updateAge: 86_400,
       freshAge: 900,
+      storeSessionInDatabase: true,
     });
 
     const emailOtpOptions = mocks.emailOTP.mock.calls.at(
