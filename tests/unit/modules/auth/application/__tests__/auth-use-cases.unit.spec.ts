@@ -65,9 +65,6 @@ const makeDeps = (overrides?: {
     revokeUserSessions: vi.fn(async () =>
       Result.Ok({ type: 'auth_user_sessions_revoked' })
     ),
-    revokeUserSession: vi.fn(async () =>
-      Result.Ok({ type: 'auth_user_session_revoked' })
-    ),
     ...overrides?.userAdminGateway,
   } as UserAdminGateway,
 });
@@ -155,18 +152,9 @@ describe('auth use cases', () => {
       userId: unwrapParseResult(toUserId('user-1')),
       headers,
     });
-    const revokedSession = await useCases.revokeUserSession({
-      userId: unwrapParseResult(toUserId('user-1')),
-      sessionId: unwrapParseResult(toSessionId('session-1')),
-      headers,
-    });
-
     expect(getOk(removed)).toEqual({ type: 'auth_user_removed' });
     expect(getOk(revokedSessions)).toEqual({
       type: 'auth_user_sessions_revoked',
-    });
-    expect(getOk(revokedSession)).toEqual({
-      type: 'auth_user_session_revoked',
     });
     expect(deps.userAdminGateway.removeUser).toHaveBeenCalledWith({
       userId: unwrapParseResult(toUserId('user-1')),
@@ -174,11 +162,6 @@ describe('auth use cases', () => {
     });
     expect(deps.userAdminGateway.revokeUserSessions).toHaveBeenCalledWith({
       userId: unwrapParseResult(toUserId('user-1')),
-      headers,
-    });
-    expect(deps.userAdminGateway.revokeUserSession).toHaveBeenCalledWith({
-      userId: unwrapParseResult(toUserId('user-1')),
-      sessionId: unwrapParseResult(toSessionId('session-1')),
       headers,
     });
   });

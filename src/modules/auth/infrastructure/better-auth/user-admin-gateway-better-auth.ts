@@ -1,23 +1,16 @@
 import { Result } from '@bloodyowl/boxed';
-import { and, eq } from 'drizzle-orm';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
-import {
-  type Database,
-  getDefaultDbClient,
-} from '@/modules/kernel/infrastructure/db/client';
 import type { TelemetryAdapter } from '@/platform/telemetry';
 
 import type { Auth } from './auth';
 import { getDefaultAuth } from './auth';
-import { authIdentity, session as sessionTable } from '../drizzle/schema';
 import type { UserAdminGateway } from '../../application/ports/user-admin-gateway';
 
 export class UserAdminGatewayBetterAuth implements UserAdminGateway {
   constructor(
-    private readonly auth: Auth = getDefaultAuth(),
-    private readonly db: Database = getDefaultDbClient(),
-    private readonly telemetry: Pick<TelemetryAdapter, 'startSpan'>
+    private readonly telemetry: Pick<TelemetryAdapter, 'startSpan'>,
+    private readonly auth: Auth = getDefaultAuth()
   ) {}
 
   async removeUser(
@@ -102,85 +95,6 @@ export class UserAdminGatewayBetterAuth implements UserAdminGateway {
               category: 'system',
               status: 500,
               message: 'Failed to revoke auth user sessions',
-              cause: error,
-            })
-          );
-        }
-      }
-    );
-  }
-
-  async revokeUserSession(
-    input: Parameters<UserAdminGateway['revokeUserSession']>[0]
-  ): ReturnType<UserAdminGateway['revokeUserSession']> {
-    return this.telemetry.startSpan(
-      {
-        attributes: {
-          'auth.provider': 'better-auth',
-          'operation.name': 'auth.revokeUserSession',
-          'operation.type': 'provider_operation',
-        },
-        name: 'auth.revokeUserSession',
-        op: 'auth.provider',
-      },
-      async () => {
-        try {
-          const session = await this.db.query.session.findFirst({
-            where: eq(sessionTable.id, input.sessionId),
-            columns: { token: true, userId: true },
-          });
-          if (!session) {
-            return Result.Error(
-              new AppError({
-                code: 'AUTH_USER_SESSION_TOKEN_NOT_FOUND',
-                category: 'not_found',
-                status: 404,
-                message: 'Auth user session token was not found',
-              })
-            );
-          }
-
-          const identity = await this.db.query.authIdentity.findFirst({
-            where: and(
-              eq(authIdentity.provider, 'better-auth'),
-              eq(authIdentity.providerUserId, session.userId)
-            ),
-            columns: { userId: true },
-          });
-          const appUserId = identity?.userId ?? session.userId;
-          if (appUserId !== input.userId) {
-            return Result.Error(
-              new AppError({
-                code: 'AUTH_USER_SESSION_OWNER_MISMATCH',
-                category: 'forbidden',
-                status: 403,
-                message: 'Auth user session owner did not match',
-              })
-            );
-          }
-
-          const response = await this.auth.api.revokeUserSession({
-            body: { sessionToken: session.token },
-            headers: input.headers,
-          });
-          if (!response.success) {
-            return Result.Error(
-              new AppError({
-                code: 'AUTH_USER_SESSION_REVOKE_FAILED',
-                category: 'system',
-                status: 500,
-                message: 'Failed to revoke auth user session',
-              })
-            );
-          }
-          return Result.Ok({ type: 'auth_user_session_revoked' });
-        } catch (error) {
-          return Result.Error(
-            new AppError({
-              code: 'AUTH_USER_SESSION_REVOKE_FAILED',
-              category: 'system',
-              status: 500,
-              message: 'Failed to revoke auth user session',
               cause: error,
             })
           );

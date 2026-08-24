@@ -2,13 +2,16 @@ import { Result } from '@bloodyowl/boxed';
 import { testUserDisplayName } from '@tests/support/branded-values';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { AuditPort } from '@/modules/audit';
 import type {
   Logger,
   PermissionChecker,
   PermissionRequest,
+  ResultTransactionRunner,
 } from '@/modules/kernel';
 import {
   AppError,
+  toCorrelationId,
   toEmailAddress,
   toSessionId,
   toUserId,
@@ -20,6 +23,8 @@ import {
   type User,
   type UserAuthGateway,
   type UserRepository,
+  type UserSecurityRepository,
+  type UserTransactionContext,
 } from '@/modules/user/testing';
 
 const now = new Date('2026-01-01T00:00:00.000Z');
@@ -27,6 +32,7 @@ const userId = unwrapParseResult(toUserId('user-1'));
 const adminId = unwrapParseResult(toUserId('admin-1'));
 const targetSessionId = unwrapParseResult(toSessionId('session-2'));
 const currentSessionId = unwrapParseResult(toSessionId('current-session'));
+const correlationId = unwrapParseResult(toCorrelationId('correlation-1'));
 const user: User = {
   id: userId,
   name: testUserDisplayName('User'),
@@ -170,13 +176,6 @@ function makeRepo(overrides: Partial<UserRepository> = {}) {
         },
       })
     ),
-    findSessionForRevocation: vi.fn<UserRepository['findSessionForRevocation']>(
-      async () =>
-        Result.Ok({
-          type: 'user_session_revocation_target_found',
-          target: { id: targetSessionId },
-        })
-    ),
   };
 
   return Object.assign(repo, overrides);
@@ -190,12 +189,43 @@ function makeAuthGateway(overrides: Partial<UserAuthGateway> = {}) {
     revokeUserSessions: vi.fn<UserAuthGateway['revokeUserSessions']>(async () =>
       Result.Ok({ type: 'user_auth_sessions_revoked' })
     ),
-    revokeUserSession: vi.fn<UserAuthGateway['revokeUserSession']>(async () =>
-      Result.Ok({ type: 'user_auth_session_revoked' })
-    ),
   };
 
   return Object.assign(gateway, overrides);
+}
+
+function makeSecurityRepository(
+  overrides: Partial<UserSecurityRepository> = {}
+) {
+  const repository = {
+    lockAuthorizationPrincipal: vi.fn<
+      UserSecurityRepository['lockAuthorizationPrincipal']
+    >(async () =>
+      Result.Ok({ type: 'user_security_principal_found', role: 'admin' })
+    ),
+    revokeSessions: vi.fn<UserSecurityRepository['revokeSessions']>(async () =>
+      Result.Ok({ type: 'user_sessions_revoked', count: 1 })
+    ),
+    revokeSession: vi.fn<UserSecurityRepository['revokeSession']>(async () =>
+      Result.Ok({ type: 'user_session_revoked' })
+    ),
+  };
+
+  return Object.assign(repository, overrides);
+}
+
+function makeAudit(overrides: Partial<AuditPort> = {}) {
+  const audit = {
+    record: vi.fn<AuditPort['record']>(async () =>
+      Result.Ok({
+        type: 'audit_recorded',
+        eventId: 'audit-1' as never,
+        occurredAt: now,
+      })
+    ),
+  };
+
+  return Object.assign(audit, overrides);
 }
 
 function makeContext(
@@ -203,21 +233,45 @@ function makeContext(
     repo?: Partial<UserRepository>;
     permissionChecker?: PermissionChecker;
     auth?: Partial<UserAuthGateway>;
+    securityRepository?: Partial<UserSecurityRepository>;
+    audit?: Partial<AuditPort>;
+    transactionRunner?: ResultTransactionRunner<UserTransactionContext>;
   } = {}
 ) {
   const repo = makeRepo(overrides.repo);
   const auth = makeAuthGateway(overrides.auth);
+  const securityRepository = makeSecurityRepository(
+    overrides.securityRepository
+  );
+  const audit = makeAudit(overrides.audit);
   const permissionChecker =
     overrides.permissionChecker ?? makePermissionChecker();
   const logger = makeLogger();
+  const transactionRunner =
+    overrides.transactionRunner ??
+    ({
+      async run(work) {
+        return work({ audit, securityRepository, userRepository: repo });
+      },
+    } satisfies ResultTransactionRunner<UserTransactionContext>);
   const useCases = createUserUseCases({
     userRepository: repo,
     userAuthGateway: auth,
+    transactionRunner,
     permissionChecker,
     logger,
   });
 
-  return { useCases, repo, auth, permissionChecker, logger };
+  return {
+    useCases,
+    repo,
+    auth,
+    audit,
+    securityRepository,
+    transactionRunner,
+    permissionChecker,
+    logger,
+  };
 }
 
 function appError(code: string) {
@@ -1116,14 +1170,19 @@ describe('user use cases', () => {
   });
 
   describe('revokeSessions', () => {
-    it('revokes all sessions for another user after checking revoke permission', async () => {
-      const { useCases, auth, permissionChecker } = makeContext({
-        permissionChecker: makePermissionChecker(sessionRevokePermission),
-      });
+    it('revokes all durable sessions and records the required audit event', async () => {
+      const { useCases, audit, securityRepository, permissionChecker } =
+        makeContext({
+          permissionChecker: makePermissionChecker(sessionRevokePermission),
+        });
 
       await expect(
         expectOk(
-          useCases.revokeSessions({ currentUserId: adminId, id: userId })
+          useCases.revokeSessions({
+            correlationId,
+            currentUserId: adminId,
+            id: userId,
+          })
         )
       ).resolves.toEqual({ type: 'user_sessions_revoked' });
 
@@ -1131,40 +1190,112 @@ describe('user use cases', () => {
         adminId,
         sessionRevokePermission
       );
-      expect(auth.revokeUserSessions).toHaveBeenCalledWith(userId);
+      expect(securityRepository.revokeSessions).toHaveBeenCalledWith(userId);
+      expect(audit.record).toHaveBeenCalledWith({
+        type: 'session.revoked',
+        actor: { kind: 'user', userId: adminId },
+        subject: { kind: 'user', id: userId },
+        correlationId,
+        metadata: { reason: 'administrator', scope: 'all' },
+      });
+    });
+
+    it('does not emit a completion audit when there are no sessions', async () => {
+      const { useCases, audit } = makeContext({
+        permissionChecker: makePermissionChecker(sessionRevokePermission),
+        securityRepository: {
+          revokeSessions: vi.fn<UserSecurityRepository['revokeSessions']>(
+            async () => Result.Ok({ type: 'user_sessions_revoked', count: 0 })
+          ),
+        },
+      });
+
+      await expect(
+        expectOk(
+          useCases.revokeSessions({
+            correlationId,
+            currentUserId: adminId,
+            id: userId,
+          })
+        )
+      ).resolves.toEqual({ type: 'user_sessions_unchanged' });
+
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('does not revoke sessions without permission', async () => {
-      const { useCases, auth } = makeContext({
+      const { useCases, securityRepository } = makeContext({
         permissionChecker: makePermissionChecker(),
       });
 
       await expect(
         expectOk(
-          useCases.revokeSessions({ currentUserId: adminId, id: userId })
+          useCases.revokeSessions({
+            correlationId,
+            currentUserId: adminId,
+            id: userId,
+          })
         )
       ).resolves.toEqual({ type: 'user_forbidden' });
 
-      expect(auth.revokeUserSessions).not.toHaveBeenCalled();
+      expect(securityRepository.revokeSessions).not.toHaveBeenCalled();
+    });
+
+    it('rechecks the actor role under the mutation transaction lock', async () => {
+      const { useCases, audit, securityRepository } = makeContext({
+        permissionChecker: makePermissionChecker(sessionRevokePermission),
+        securityRepository: {
+          lockAuthorizationPrincipal: vi.fn<
+            UserSecurityRepository['lockAuthorizationPrincipal']
+          >(async () =>
+            Result.Ok({
+              type: 'user_security_principal_found',
+              role: 'user',
+            })
+          ),
+        },
+      });
+
+      await expect(
+        expectOk(
+          useCases.revokeSessions({
+            correlationId,
+            currentUserId: adminId,
+            id: userId,
+          })
+        )
+      ).resolves.toEqual({ type: 'user_forbidden' });
+
+      expect(
+        securityRepository.lockAuthorizationPrincipal
+      ).toHaveBeenCalledWith(adminId);
+      expect(securityRepository.revokeSessions).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('does not revoke the current user sessions through the admin flow', async () => {
-      const { useCases, auth } = makeContext({
+      const { useCases, securityRepository } = makeContext({
         permissionChecker: makePermissionChecker(sessionRevokePermission),
       });
 
       await expect(
-        expectOk(useCases.revokeSessions({ currentUserId: userId, id: userId }))
+        expectOk(
+          useCases.revokeSessions({
+            correlationId,
+            currentUserId: userId,
+            id: userId,
+          })
+        )
       ).resolves.toEqual({ type: 'user_self' });
 
-      expect(auth.revokeUserSessions).not.toHaveBeenCalled();
+      expect(securityRepository.revokeSessions).not.toHaveBeenCalled();
     });
 
-    it('returns auth provider revoke-all failures as app errors', async () => {
+    it('returns durable revoke-all failures as app errors', async () => {
       const { useCases } = makeContext({
         permissionChecker: makePermissionChecker(sessionRevokePermission),
-        auth: {
-          revokeUserSessions: vi.fn<UserAuthGateway['revokeUserSessions']>(
+        securityRepository: {
+          revokeSessions: vi.fn<UserSecurityRepository['revokeSessions']>(
             async () =>
               Result.Error(
                 new AppError({
@@ -1180,24 +1311,81 @@ describe('user use cases', () => {
 
       await expect(
         expectFailure(
-          useCases.revokeSessions({ currentUserId: adminId, id: userId })
+          useCases.revokeSessions({
+            correlationId,
+            currentUserId: adminId,
+            id: userId,
+          })
         )
       ).resolves.toMatchObject({
         code: 'USER_SESSIONS_REVOKE_FAILED',
         message: 'Failed to revoke user sessions',
       });
     });
+
+    it('fails closed when the required audit event cannot be recorded', async () => {
+      const auditError = new AppError({
+        code: 'AUDIT_RECORDING_FAILED',
+        category: 'system',
+        status: 500,
+      });
+      const { useCases } = makeContext({
+        permissionChecker: makePermissionChecker(sessionRevokePermission),
+        audit: {
+          record: vi.fn<AuditPort['record']>(async () =>
+            Result.Error(auditError)
+          ),
+        },
+      });
+
+      await expect(
+        expectFailure(
+          useCases.revokeSessions({
+            correlationId,
+            currentUserId: adminId,
+            id: userId,
+          })
+        )
+      ).resolves.toBe(auditError);
+    });
+
+    it('rejects an impossible best-effort outcome for a required event', async () => {
+      const { useCases } = makeContext({
+        permissionChecker: makePermissionChecker(sessionRevokePermission),
+        audit: {
+          record: vi.fn<AuditPort['record']>(async () =>
+            Result.Ok({
+              type: 'audit_best_effort_failed',
+              eventType: 'session.revoked',
+              operationalSignalAttempted: true,
+            })
+          ),
+        },
+      });
+
+      await expect(
+        expectFailure(
+          useCases.revokeSessions({
+            correlationId,
+            currentUserId: adminId,
+            id: userId,
+          })
+        )
+      ).resolves.toMatchObject({ code: 'REQUIRED_AUDIT_EVENT_NOT_RECORDED' });
+    });
   });
 
   describe('revokeSession', () => {
-    it('revokes one resolved session through the auth gateway', async () => {
-      const { useCases, repo, auth, permissionChecker } = makeContext({
-        permissionChecker: makePermissionChecker(sessionRevokePermission),
-      });
+    it('revokes one durable session and records the required audit event', async () => {
+      const { useCases, audit, securityRepository, permissionChecker } =
+        makeContext({
+          permissionChecker: makePermissionChecker(sessionRevokePermission),
+        });
 
       await expect(
         expectOk(
           useCases.revokeSession({
+            correlationId,
             currentUserId: adminId,
             currentSessionId,
             id: userId,
@@ -1210,24 +1398,28 @@ describe('user use cases', () => {
         adminId,
         sessionRevokePermission
       );
-      expect(repo.findSessionForRevocation).toHaveBeenCalledWith({
+      expect(securityRepository.revokeSession).toHaveBeenCalledWith({
         userId,
         sessionId: targetSessionId,
       });
-      expect(auth.revokeUserSession).toHaveBeenCalledWith({
-        userId,
-        sessionId: targetSessionId,
+      expect(audit.record).toHaveBeenCalledWith({
+        type: 'session.revoked',
+        actor: { kind: 'user', userId: adminId },
+        subject: { kind: 'session', id: targetSessionId },
+        correlationId,
+        metadata: { reason: 'administrator', scope: 'single' },
       });
     });
 
     it('does not revoke one session without permission', async () => {
-      const { useCases, repo, auth } = makeContext({
+      const { useCases, securityRepository } = makeContext({
         permissionChecker: makePermissionChecker(),
       });
 
       await expect(
         expectOk(
           useCases.revokeSession({
+            correlationId,
             currentUserId: adminId,
             currentSessionId,
             id: userId,
@@ -1236,23 +1428,23 @@ describe('user use cases', () => {
         )
       ).resolves.toEqual({ type: 'user_forbidden' });
 
-      expect(repo.findSessionForRevocation).not.toHaveBeenCalled();
-      expect(auth.revokeUserSession).not.toHaveBeenCalled();
+      expect(securityRepository.revokeSession).not.toHaveBeenCalled();
     });
 
-    it('returns not_found when the session cannot be resolved', async () => {
-      const { useCases, auth } = makeContext({
+    it('returns not_found without an audit when no durable session exists', async () => {
+      const { useCases, audit } = makeContext({
         permissionChecker: makePermissionChecker(sessionRevokePermission),
-        repo: {
-          findSessionForRevocation: vi.fn<
-            UserRepository['findSessionForRevocation']
-          >(async () => Result.Ok({ type: 'user_session_not_found' })),
+        securityRepository: {
+          revokeSession: vi.fn<UserSecurityRepository['revokeSession']>(
+            async () => Result.Ok({ type: 'user_session_not_found' })
+          ),
         },
       });
 
       await expect(
         expectOk(
           useCases.revokeSession({
+            correlationId,
             currentUserId: adminId,
             currentSessionId,
             id: userId,
@@ -1261,17 +1453,18 @@ describe('user use cases', () => {
         )
       ).resolves.toEqual({ type: 'user_session_not_found' });
 
-      expect(auth.revokeUserSession).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('does not revoke the current browser session', async () => {
-      const { useCases, auth } = makeContext({
+      const { useCases, securityRepository } = makeContext({
         permissionChecker: makePermissionChecker(sessionRevokePermission),
       });
 
       await expect(
         expectOk(
           useCases.revokeSession({
+            correlationId,
             currentUserId: adminId,
             currentSessionId: targetSessionId,
             id: userId,
@@ -1280,14 +1473,14 @@ describe('user use cases', () => {
         )
       ).resolves.toEqual({ type: 'user_self' });
 
-      expect(auth.revokeUserSession).not.toHaveBeenCalled();
+      expect(securityRepository.revokeSession).not.toHaveBeenCalled();
     });
 
-    it('returns auth provider revoke-one failures as app errors', async () => {
+    it('returns durable revoke-one failures as app errors', async () => {
       const { useCases } = makeContext({
         permissionChecker: makePermissionChecker(sessionRevokePermission),
-        auth: {
-          revokeUserSession: vi.fn<UserAuthGateway['revokeUserSession']>(
+        securityRepository: {
+          revokeSession: vi.fn<UserSecurityRepository['revokeSession']>(
             async () =>
               Result.Error(
                 new AppError({
@@ -1304,6 +1497,7 @@ describe('user use cases', () => {
       await expect(
         expectFailure(
           useCases.revokeSession({
+            correlationId,
             currentUserId: adminId,
             currentSessionId,
             id: userId,
@@ -1314,6 +1508,34 @@ describe('user use cases', () => {
         code: 'USER_SESSION_REVOKE_FAILED',
         message: 'Failed to revoke user session',
       });
+    });
+
+    it('fails closed when the single-session audit cannot be recorded', async () => {
+      const auditError = new AppError({
+        code: 'AUDIT_RECORDING_FAILED',
+        category: 'system',
+        status: 500,
+      });
+      const { useCases } = makeContext({
+        permissionChecker: makePermissionChecker(sessionRevokePermission),
+        audit: {
+          record: vi.fn<AuditPort['record']>(async () =>
+            Result.Error(auditError)
+          ),
+        },
+      });
+
+      await expect(
+        expectFailure(
+          useCases.revokeSession({
+            correlationId,
+            currentUserId: adminId,
+            currentSessionId,
+            id: userId,
+            sessionId: targetSessionId,
+          })
+        )
+      ).resolves.toBe(auditError);
     });
   });
 });

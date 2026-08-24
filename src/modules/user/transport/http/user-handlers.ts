@@ -134,6 +134,7 @@ const userRevokeSessionsConfig = (options?: { selfMessage?: string }) =>
   ({
     user_forbidden: 'FORBIDDEN',
     user_sessions_revoked: () => undefined,
+    user_sessions_unchanged: () => undefined,
     ...userSelfConfig(options),
   }) as const satisfies OutcomeHandlerConfig<UserRevokeSessionsOutcome, void>;
 
@@ -243,6 +244,7 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
   ) => {
     return unwrapApplicationResult(
       getUseCases(ctx).revokeSessions({
+        correlationId: ctx.correlationId,
         currentUserId: ctx.scope.userId,
         id: data.id,
       }),
@@ -258,6 +260,7 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
   ) => {
     return unwrapApplicationResult(
       getUseCases(ctx).revokeSession({
+        correlationId: ctx.correlationId,
         currentUserId: ctx.scope.userId,
         currentSessionId: ctx.session.id,
         id: data.id,

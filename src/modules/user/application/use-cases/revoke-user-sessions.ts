@@ -1,16 +1,24 @@
 import { Result } from '@bloodyowl/boxed';
-import { match, P } from 'ts-pattern';
 
-import type { UserId } from '@/modules/kernel/domain/ids';
+import { toAuditSubjectId } from '@/modules/audit';
+import { AppError } from '@/modules/kernel/domain/errors/app-error';
+import type { CorrelationId, UserId } from '@/modules/kernel/domain/ids';
 
 import type {
+  UserForbiddenOutcome,
   UserResult,
   UserRevokeSessionsOutcome,
   UserUseCaseDeps,
 } from './types';
+import {
+  rejectUnauthorizedUser,
+  rejectUnauthorizedUserInTransaction,
+} from './authorize-user';
 import { isSelfTarget } from '../../domain/user-policy';
+import type { UserSessionsRevokedRepositoryOutcome } from '../ports/user-security-repository';
 
 export type RevokeUserSessionsInput = {
+  correlationId: CorrelationId;
   currentUserId: UserId;
   id: UserId;
 };
@@ -19,29 +27,72 @@ export async function revokeUserSessions(
   deps: UserUseCaseDeps,
   input: RevokeUserSessionsInput
 ): Promise<UserResult<UserRevokeSessionsOutcome>> {
-  const allowed = await deps.permissionChecker.hasPermission(
+  const rejection = await rejectUnauthorizedUser(
+    deps.permissionChecker,
     input.currentUserId,
     { session: ['revoke'] }
   );
-  const permissionResult = match(allowed)
-    .with(Result.P.Error(P.select()), (error) => Result.Error(error))
-    .with(Result.P.Ok({ type: 'permission_denied' }), () =>
-      Result.Ok({ type: 'user_forbidden' as const })
-    )
-    .with(Result.P.Ok({ type: 'permission_granted' }), () => undefined)
-    .exhaustive();
-  if (permissionResult !== undefined) return permissionResult;
+  if (rejection) return rejection;
   if (isSelfTarget(input.currentUserId, input.id)) {
     return Result.Ok({ type: 'user_self' });
   }
 
-  const result = await deps.userAuthGateway.revokeUserSessions(input.id);
+  const subjectId = toAuditSubjectId('user', input.id);
+  if (subjectId.isError()) return Result.Error(subjectId.getError());
+  const result = await deps.transactionRunner.run(
+    async ({
+      audit,
+      securityRepository,
+    }): Promise<
+      UserResult<UserSessionsRevokedRepositoryOutcome | UserForbiddenOutcome>
+    > => {
+      const transactionRejection = await rejectUnauthorizedUserInTransaction(
+        securityRepository,
+        input.currentUserId,
+        { session: ['revoke'] }
+      );
+      if (transactionRejection) return transactionRejection;
+
+      const revoked = await securityRepository.revokeSessions(input.id);
+      if (revoked.isError()) return Result.Error(revoked.getError());
+      const outcome = revoked.get();
+      if (outcome.count === 0) return Result.Ok(outcome);
+
+      const recorded = await audit.record({
+        type: 'session.revoked',
+        actor: { kind: 'user', userId: input.currentUserId },
+        subject: { kind: 'user', id: subjectId.get() },
+        correlationId: input.correlationId,
+        metadata: { reason: 'administrator', scope: 'all' },
+      });
+      if (recorded.isError()) return Result.Error(recorded.getError());
+      if (recorded.get().type !== 'audit_recorded') {
+        return Result.Error(
+          new AppError({
+            code: 'REQUIRED_AUDIT_EVENT_NOT_RECORDED',
+            category: 'system',
+            status: 500,
+            message: 'Required session revocation audit event was not recorded',
+          })
+        );
+      }
+
+      return Result.Ok(outcome);
+    }
+  );
   if (result.isError()) return Result.Error(result.getError());
+  const outcome = result.get();
+  if (outcome.type === 'user_forbidden') return Result.Ok(outcome);
+  if (outcome.count === 0) {
+    return Result.Ok({ type: 'user_sessions_unchanged' });
+  }
   deps.logger.warn({
+    correlationId: input.correlationId,
     details: {
       mode: 'all',
       revokedByUserId: input.currentUserId,
       targetUserId: input.id,
+      count: outcome.count,
     },
     event: 'security.session_revoked',
   });

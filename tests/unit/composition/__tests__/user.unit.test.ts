@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { __resetUserComposition, getUserUseCases } from '@/composition/user';
 import {
+  toCorrelationId,
   toEmailAddress,
   toSessionId,
   toUserId,
@@ -55,11 +56,6 @@ const makeUserRepository = (
       type: 'user_sessions_listed',
       page: { items: [session], total: 1 },
     }),
-  findSessionForRevocation: async () =>
-    Result.Ok({
-      type: 'user_session_revocation_target_found',
-      target: { id: session.id },
-    }),
   ...overrides,
 });
 
@@ -69,8 +65,6 @@ const makeUserAuthGateway = (
   removeUser: async () => Result.Ok({ type: 'user_auth_removed' }),
   revokeUserSessions: async () =>
     Result.Ok({ type: 'user_auth_sessions_revoked' }),
-  revokeUserSession: async () =>
-    Result.Ok({ type: 'user_auth_session_revoked' }),
   ...overrides,
 });
 
@@ -135,6 +129,25 @@ describe('user composition', () => {
       cursor: undefined,
       limit: 20,
       searchTerm: 'user',
+    });
+  });
+
+  it('fails closed for transactional security work with only a repository override', async () => {
+    const useCases = getUserUseCases({
+      kernel: makeTestKernel(),
+      userRepository: makeUserRepository(),
+      userAuthGateway: makeUserAuthGateway(),
+    });
+
+    const result = await useCases.revokeSessions({
+      correlationId: unwrapParseResult(toCorrelationId('request-1')),
+      currentUserId: scope('admin-1').userId,
+      id: user.id,
+    });
+
+    expect(result).toMatchObject({
+      tag: 'Error',
+      error: { code: 'CONFIGURATION_ERROR' },
     });
   });
 });

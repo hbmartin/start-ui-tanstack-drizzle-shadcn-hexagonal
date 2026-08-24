@@ -15,6 +15,8 @@ import {
   createUserHandlers,
   zGetAllInput,
   zGetUserSessionsInput,
+  zRevokeUserSessionInput,
+  zRevokeUserSessionsInput,
   zUpdateByIdInput,
 } from '@/modules/user/transport/http/user-handlers';
 
@@ -87,6 +89,53 @@ describe('user HTTP transport handlers', () => {
       userId: unwrapParseResult(toUserId('user-2')),
       cursor: unwrapParseResult(toSessionId('session-2')),
       limit: 5,
+    });
+  });
+
+  it('passes trusted request correlation into revoke-all', async () => {
+    const ctx = createAuthenticatedContext();
+    const revokeSessions = vi.fn(async () =>
+      Result.Ok({ type: 'user_sessions_revoked' as const })
+    );
+    const handlers = createUserHandlers({
+      getUseCases: () => ({ revokeSessions }) as ExplicitAny,
+    });
+
+    await handlers.revokeUserSessions(
+      ctx,
+      zRevokeUserSessionsInput().parse({ id: 'user-2' })
+    );
+
+    expect(revokeSessions).toHaveBeenCalledWith({
+      correlationId: ctx.correlationId,
+      currentUserId: ctx.scope.userId,
+      id: unwrapParseResult(toUserId('user-2')),
+    });
+  });
+
+  it('passes trusted request and session identity into revoke-one', async () => {
+    const ctx = createAuthenticatedContext();
+    const revokeSession = vi.fn(async () =>
+      Result.Ok({ type: 'user_session_revoked' as const })
+    );
+    const handlers = createUserHandlers({
+      getUseCases: () => ({ revokeSession }) as ExplicitAny,
+    });
+
+    await handlers.revokeUserSession(
+      ctx,
+      zRevokeUserSessionInput().parse({
+        id: 'user-2',
+        sessionId: 'session-2',
+      })
+    );
+
+    expect(revokeSession).toHaveBeenCalledWith({
+      correlationId: ctx.correlationId,
+      currentUserId: ctx.scope.userId,
+      currentSessionId: ctx.session.id,
+      id: unwrapParseResult(toUserId('user-2')),
+      sessionId: unwrapParseResult(toSessionId('session-2')),
     });
   });
 

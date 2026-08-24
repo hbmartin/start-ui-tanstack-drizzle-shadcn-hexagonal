@@ -8,6 +8,9 @@ import type { Logger } from '@/modules/kernel';
 
 import { createServerContextTools } from './transport/tanstack/server-context';
 
+export { createUserRepository } from './infrastructure/drizzle/user-repository-drizzle';
+export { createUserSecurityRepository } from './infrastructure/drizzle/user-security-repository-drizzle';
+
 export type { AuthenticatedSession, AuthenticatedUser } from './domain/session';
 export {
   createServerContextTools,

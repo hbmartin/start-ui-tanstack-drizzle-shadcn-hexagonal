@@ -18,6 +18,8 @@ export {
   isAllowedBetterAuthHttpRequest,
   isBlockedBetterAuthHttpRequest,
 } from './infrastructure/better-auth/auth-http-exposure';
+export type { Auth } from './infrastructure/better-auth/auth';
+export { SessionGatewayBetterAuth } from './infrastructure/better-auth/session-gateway-better-auth';
 export {
   ProfileRepositoryDrizzle,
   createProfileRepository,
@@ -27,3 +29,4 @@ export {
   createUserRepository,
   UserRepositoryDrizzle,
 } from './infrastructure/drizzle/user-repository-drizzle';
+export { createUserSecurityRepository } from './infrastructure/drizzle/user-security-repository-drizzle';

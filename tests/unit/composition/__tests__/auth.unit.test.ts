@@ -35,9 +35,6 @@ const makeAuthOverrides = (): Required<AuthOverrides> => ({
     revokeUserSessions: vi.fn(async () =>
       Result.Ok({ type: 'auth_user_sessions_revoked' })
     ),
-    revokeUserSession: vi.fn(async () =>
-      Result.Ok({ type: 'auth_user_session_revoked' })
-    ),
   } as UserAdminGateway,
 });
 

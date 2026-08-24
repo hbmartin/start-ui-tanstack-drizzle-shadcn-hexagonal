@@ -4,6 +4,7 @@ import { match, P } from 'ts-pattern';
 import type { UserId } from '@/modules/kernel';
 
 import type { UserResult, UserUpdateOutcome, UserUseCaseDeps } from './types';
+import { rejectUnauthorizedUser } from './authorize-user';
 import type { UserUpdateInput } from '../../domain/user';
 import { emptyUserDisplayName, shouldUnverifyEmail } from '../../domain/user';
 import { canChangeRole } from '../../domain/user-policy';
@@ -18,18 +19,12 @@ export async function updateUser(
   deps: UserUseCaseDeps,
   input: UpdateUserInput
 ): Promise<UserResult<UserUpdateOutcome>> {
-  const allowed = await deps.permissionChecker.hasPermission(
+  const rejection = await rejectUnauthorizedUser(
+    deps.permissionChecker,
     input.currentUserId,
     { user: ['update'] }
   );
-  const permissionResult = match(allowed)
-    .with(Result.P.Error(P.select()), (error) => Result.Error(error))
-    .with(Result.P.Ok({ type: 'permission_denied' }), () =>
-      Result.Ok({ type: 'user_forbidden' as const })
-    )
-    .with(Result.P.Ok({ type: 'permission_granted' }), () => undefined)
-    .exhaustive();
-  if (permissionResult !== undefined) return permissionResult;
+  if (rejection) return rejection;
 
   const currentResult = await deps.userRepository.getUpdateSnapshot(input.id);
   const currentResultBranch = match(currentResult)
@@ -68,18 +63,12 @@ export async function updateUser(
   const roleWriteRequested = nextRole !== undefined;
 
   if (roleWriteRequested) {
-    const canSetRole = await deps.permissionChecker.hasPermission(
+    const roleRejection = await rejectUnauthorizedUser(
+      deps.permissionChecker,
       input.currentUserId,
       { user: ['set-role'] }
     );
-    const setRolePermissionResult = match(canSetRole)
-      .with(Result.P.Error(P.select()), (error) => Result.Error(error))
-      .with(Result.P.Ok({ type: 'permission_denied' }), () =>
-        Result.Ok({ type: 'user_forbidden' as const })
-      )
-      .with(Result.P.Ok({ type: 'permission_granted' }), () => undefined)
-      .exhaustive();
-    if (setRolePermissionResult !== undefined) return setRolePermissionResult;
+    if (roleRejection) return roleRejection;
   }
 
   deps.logger.info({

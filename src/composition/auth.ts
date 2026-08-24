@@ -149,7 +149,7 @@ const buildAuthUseCases = (overrides?: AuthOverrides) => {
     authEmailPort,
     userAdminGateway:
       overrides?.userAdminGateway ??
-      new UserAdminGatewayBetterAuth(authInstance, undefined, telemetry),
+      new UserAdminGatewayBetterAuth(telemetry, authInstance),
   });
 };
 

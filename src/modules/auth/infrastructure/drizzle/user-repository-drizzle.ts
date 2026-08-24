@@ -450,33 +450,6 @@ export class UserRepositoryDrizzle implements UserRepository {
       return Result.Error(mapDbError(error));
     }
   }
-
-  async findSessionForRevocation(input: {
-    userId: UserId;
-    sessionId: SessionId;
-  }): ReturnType<UserRepository['findSessionForRevocation']> {
-    try {
-      const row = await this.db.query.session.findFirst({
-        where: and(
-          eq(sessionTable.id, input.sessionId),
-          eq(sessionTable.userId, input.userId)
-        ),
-        columns: { id: true },
-      });
-
-      if (!row) return Result.Ok({ type: 'user_session_not_found' });
-
-      const id = parseUserRowValue(toSessionId(row.id));
-      if (id.isError()) return Result.Error(id.getError());
-
-      return Result.Ok({
-        type: 'user_session_revocation_target_found',
-        target: { id: id.get() },
-      });
-    } catch (error) {
-      return Result.Error(mapDbError(error));
-    }
-  }
 }
 
 export interface UserRepositoryDrizzleDependencies {

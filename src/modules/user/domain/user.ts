@@ -102,10 +102,6 @@ export type UserUpdateSnapshot = {
   role: UserRole;
 };
 
-export type SessionRevocationTarget = {
-  id: SessionId;
-};
-
 export function shouldUnverifyEmail(
   currentEmail: EmailAddress,
   nextEmail: EmailAddress

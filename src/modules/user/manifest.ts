@@ -14,7 +14,7 @@ export const userCapabilityManifest = defineCapabilityManifest({
   ],
   preset: 'core',
   removable: false,
-  dependsOn: ['auth'],
+  dependsOn: ['audit', 'auth'],
   publicRoutes: [
     {
       routeId: '/manager/users/',

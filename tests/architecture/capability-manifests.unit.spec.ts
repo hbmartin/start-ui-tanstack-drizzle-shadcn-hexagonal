@@ -171,6 +171,19 @@ describe('capability manifest registry', () => {
     }
   });
 
+  it('provides the auth-owned user security adapter without a reverse capability edge', () => {
+    const adapterSource = readProjectFile(
+      'src/modules/auth/infrastructure/drizzle/user-security-repository-drizzle.ts'
+    );
+    const compositionSource = readProjectFile('src/composition/user.ts');
+
+    expect(adapterSource).not.toMatch(/from\s+['"]@\/modules\/user/u);
+    expect(compositionSource).toContain("from '@/modules/auth/backend'");
+    expect(compositionSource).not.toMatch(
+      /from\s+['"]@\/modules\/auth\/infrastructure/u
+    );
+  });
+
   it('matches permission and locale registries during generated-file transition', () => {
     const compiled = compileCapabilityPermissions(capabilityRegistry);
     expect(compiled.statements).toEqual(permissionStatements);
