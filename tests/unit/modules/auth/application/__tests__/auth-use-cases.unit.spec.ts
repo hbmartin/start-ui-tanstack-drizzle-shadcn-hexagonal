@@ -7,7 +7,6 @@ import {
   type AuthSession,
   createAuthUseCases,
   type SessionGateway,
-  type UserAdminGateway,
 } from '@/modules/auth/testing';
 import {
   toEmailAddress,
@@ -40,7 +39,6 @@ const makeDeps = (overrides?: {
   sessionGateway?: Partial<SessionGateway>;
   authorizationGateway?: Partial<AuthorizationGateway>;
   authEmailPort?: Partial<AuthEmailPort>;
-  userAdminGateway?: Partial<UserAdminGateway>;
 }) => ({
   sessionGateway: {
     getSession: vi.fn(async () =>
@@ -60,10 +58,6 @@ const makeDeps = (overrides?: {
     ),
     ...overrides?.authEmailPort,
   } as AuthEmailPort,
-  userAdminGateway: {
-    removeUser: vi.fn(async () => Result.Ok({ type: 'auth_user_removed' })),
-    ...overrides?.userAdminGateway,
-  } as UserAdminGateway,
 });
 
 function getOk<TOutcome extends { type: string }>(
@@ -133,22 +127,6 @@ describe('auth use cases', () => {
       email: unwrapParseResult(toEmailAddress('a@b.com')),
       otp: unwrapParseResult(toOtpCode('123456')),
       language: unwrapParseResult(toLanguageCode('en')),
-    });
-  });
-
-  it('delegates user-admin operations to the gateway', async () => {
-    const deps = makeDeps();
-    const useCases = createAuthUseCases(deps);
-    const headers = new Headers();
-
-    const removed = await useCases.removeUser({
-      userId: unwrapParseResult(toUserId('user-1')),
-      headers,
-    });
-    expect(getOk(removed)).toEqual({ type: 'auth_user_removed' });
-    expect(deps.userAdminGateway.removeUser).toHaveBeenCalledWith({
-      userId: unwrapParseResult(toUserId('user-1')),
-      headers,
     });
   });
 });

@@ -11,7 +11,6 @@ import type {
   AuthEmailPort,
   AuthorizationGateway,
   SessionGateway,
-  UserAdminGateway,
 } from '@/modules/auth';
 import { toUserId } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
@@ -30,9 +29,6 @@ const makeAuthOverrides = (): Required<AuthOverrides> => ({
       Result.Ok({ type: 'auth_sign_in_otp_sent' })
     ),
   } as AuthEmailPort,
-  userAdminGateway: {
-    removeUser: vi.fn(async () => Result.Ok({ type: 'auth_user_removed' })),
-  } as UserAdminGateway,
 });
 
 describe('auth composition', () => {

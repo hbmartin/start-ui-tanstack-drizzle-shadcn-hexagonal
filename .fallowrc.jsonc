@@ -183,6 +183,10 @@
         "name": "router",
         "patterns": ["src/router.tsx", "src/routeTree.gen.ts"],
       },
+      {
+        "name": "user-composition",
+        "patterns": ["src/composition/user.ts"],
+      },
       { "name": "composition", "patterns": ["src/composition/**"] },
       { "name": "routes", "patterns": ["src/routes/**"] },
       { "name": "app", "patterns": ["src/app/**"] },
@@ -215,6 +219,10 @@
           "src/modules/profile/client.ts",
           "src/modules/profile/presentation.ts",
         ],
+      },
+      {
+        "name": "auth-administration-gate",
+        "patterns": ["src/modules/auth/administration.ts"],
       },
       {
         "name": "auth-gates",
@@ -257,11 +265,14 @@
         ],
       },
       {
+        "name": "user-backend-gate",
+        "patterns": ["src/modules/user/backend.ts"],
+      },
+      {
         "name": "user-gates",
         "patterns": [
           "src/modules/user/index.ts",
           "src/modules/user/server.ts",
-          "src/modules/user/backend.ts",
           "src/modules/user/client.ts",
           "src/modules/user/presentation.ts",
         ],
@@ -374,6 +385,10 @@
         ],
       },
       {
+        "from": "auth-administration-gate",
+        "allow": ["modules/auth"],
+      },
+      {
         "from": "auth-gates",
         "allow": [
           "modules/auth",
@@ -407,6 +422,10 @@
           "platform",
           "types",
         ],
+      },
+      {
+        "from": "user-backend-gate",
+        "allow": ["composition"],
       },
       {
         "from": "user-gates",
@@ -453,6 +472,7 @@
           "user-gates",
           "kernel-gates",
           "composition",
+          "user-composition",
           "platform",
           "platform-telemetry",
           "types",
@@ -533,8 +553,22 @@
           "email-gates",
           "genre-gates",
           "user-gates",
+          "user-backend-gate",
           "kernel-gates",
           "composition",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "user-composition",
+        "allow": [
+          "auth-administration-gate",
+          "composition",
+          "modules",
+          "user-gates",
+          "kernel-gates",
           "platform",
           "platform-telemetry",
           "types",
@@ -553,6 +587,7 @@
           "email-gates",
           "genre-gates",
           "user-gates",
+          "user-composition",
           "kernel-gates",
           "module-db-schema",
           "kernel-db-schema",

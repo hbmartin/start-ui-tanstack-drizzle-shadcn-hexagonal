@@ -3,7 +3,7 @@ import { Result } from '@bloodyowl/boxed';
 import {
   createUserRepository,
   createUserSecurityRepository,
-} from '@/modules/auth/backend';
+} from '@/modules/auth/administration';
 import {
   ConfigurationError,
   type ResultTransactionRunner,
@@ -11,7 +11,6 @@ import {
 import { createResultTransactionRunner } from '@/modules/kernel/backend';
 import {
   createUserUseCases,
-  type UserAuthGateway,
   type UserRepository,
   type UserTransactionContext,
 } from '@/modules/user';
@@ -20,26 +19,10 @@ import { createTransactionAuditRecorder } from './audit';
 import { getKernel, type Kernel } from './kernel';
 import { createCachedFactory } from './shared/singleton';
 
-const createProductionUserAuthGateway = (): UserAuthGateway => ({
-  async removeUser(userId) {
-    const [{ getRequestHeaders }, { getAuthUseCases }] = await Promise.all([
-      import('@tanstack/react-start/server'),
-      import('./auth'),
-    ]);
-    const result = await getAuthUseCases().removeUser({
-      userId,
-      headers: getRequestHeaders(),
-    });
-    if (result.isError()) return Result.Error(result.getError());
-    return Result.Ok({ type: 'user_auth_removed' });
-  },
-});
-
 export type UserOverrides = {
   kernel?: Kernel;
   userRepository?: UserRepository;
   transactionRunner?: ResultTransactionRunner<UserTransactionContext>;
-  userAuthGateway?: UserAuthGateway;
 };
 
 const createUserTransactionRunner = (
@@ -83,8 +66,6 @@ const buildUserUseCases = (overrides?: UserOverrides) => {
       // User-admin persistence intentionally reads the auth-owned identity store.
       // Keep the Drizzle adapter with auth until the identity store ownership changes.
       overrides?.userRepository ?? createUserRepository({ db: kernel.db }),
-    userAuthGateway:
-      overrides?.userAuthGateway ?? createProductionUserAuthGateway(),
     transactionRunner: resolveUserTransactionRunner(kernel, overrides),
     permissionChecker: kernel.permissionChecker,
     logger: kernel.logger,

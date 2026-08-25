@@ -13,7 +13,6 @@ const authBackendMocks = vi.hoisted(() => {
       handle: vi.fn(),
     },
     logger,
-    signOut: vi.fn(),
     telemetry: {
       startSpan: vi.fn((_options: unknown, fn: () => unknown) => fn()),
     },
@@ -21,11 +20,6 @@ const authBackendMocks = vi.hoisted(() => {
 });
 
 vi.mock('@/composition/auth', () => ({
-  getAuth: vi.fn(() => ({
-    api: {
-      signOut: authBackendMocks.signOut,
-    },
-  })),
   getAuthHttpGateway: vi.fn(() => authBackendMocks.authHttpGateway),
   getAuthUseCases: vi.fn(() => ({
     getCurrentSession: vi.fn(),
@@ -84,35 +78,5 @@ describe('auth backend handlers', () => {
     expect(authBackendMocks.authHttpGateway.handle).toHaveBeenCalledWith(
       request
     );
-  });
-
-  it('wraps logout requests in a telemetry span', async () => {
-    const response = new Response(null, { status: 204 });
-    authBackendMocks.signOut.mockResolvedValueOnce(response);
-    const { handleLogoutRequest } = await import('@/modules/auth/backend');
-    const request = new Request('https://app.example/logout', {
-      headers: { cookie: 'session=abc' },
-      method: 'POST',
-    });
-
-    await expect(handleLogoutRequest(request)).resolves.toBe(response);
-
-    expect(authBackendMocks.telemetry.startSpan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attributes: expect.objectContaining({
-          'auth.provider': 'better-auth',
-          'http.request.method': 'POST',
-          'operation.name': 'auth.signOut',
-          'operation.type': 'provider_operation',
-        }),
-        name: 'auth.signOut',
-        op: 'auth.provider',
-      }),
-      expect.any(Function)
-    );
-    expect(authBackendMocks.signOut).toHaveBeenCalledWith({
-      asResponse: true,
-      headers: request.headers,
-    });
   });
 });

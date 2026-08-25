@@ -86,6 +86,45 @@ describe('getClientIp', () => {
     expect(ip).toBe('198.51.100.1');
   });
 
+  it('canonicalizes equivalent IPv6 spellings into one identity', () => {
+    expect(
+      getClientIp(requestWith({ 'X-Forwarded-For': '2001:0DB8:0:0:0:0:0:1' }))
+    ).toBe('2001:db8::1');
+    expect(getClientIp(requestWith({ 'X-Forwarded-For': '2001:db8::1' }))).toBe(
+      '2001:db8::1'
+    );
+  });
+
+  it('collapses IPv4-mapped IPv6 into the canonical IPv4 identity', () => {
+    expect(
+      getClientIp(requestWith({ 'X-Forwarded-For': '::ffff:192.0.2.1' }))
+    ).toBe('192.0.2.1');
+    expect(getClientIp(requestWith({ 'X-Forwarded-For': '192.0.2.1' }))).toBe(
+      '192.0.2.1'
+    );
+  });
+
+  it('normalizes supported IP-with-port forms', () => {
+    expect(
+      getClientIp(requestWith({ 'X-Real-IP': '198.051.100.007:443' }))
+    ).toBe('198.51.100.7');
+    expect(
+      getClientIp(requestWith({ 'CF-Connecting-IP': '[2001:db8::1]:8443' }))
+    ).toBe('2001:db8::1');
+  });
+
+  it('rejects junk and hostnames instead of fragmenting network buckets', () => {
+    expect(
+      getClientIp(
+        requestWith({
+          'CF-Connecting-IP': 'also.invalid',
+          'X-Forwarded-For': 'not-an-ip',
+          'X-Real-IP': 'edge.invalid',
+        })
+      )
+    ).toBeUndefined();
+  });
+
   it('returns undefined when no proxy headers are present', () => {
     expect(getClientIp(requestWith({}))).toBeUndefined();
   });

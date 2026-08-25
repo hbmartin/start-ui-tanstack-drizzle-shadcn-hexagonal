@@ -7,6 +7,7 @@ const sourceRoot = path.join(root, 'src');
 const testRoot = path.join(root, 'tests');
 const sourceFilePattern = /\.[cm]?[jt]sx?$/;
 const publicModuleFiles = new Set([
+  'administration',
   'backend',
   'manifest',
   'persistence',

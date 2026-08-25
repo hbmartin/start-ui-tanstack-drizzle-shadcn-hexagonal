@@ -54,6 +54,13 @@ const publicExports: Readonly<
 const readProjectFile = (file: string) =>
   fs.readFileSync(path.join(root, file), 'utf8');
 
+const listSourceFiles = (directory: string): string[] =>
+  fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) return listSourceFiles(file);
+    return /\.[cm]?[jt]sx?$/u.test(entry.name) ? [file] : [];
+  });
+
 const getRouteId = (file: string) => {
   const match = /createFileRoute\(\s*['"]([^'"]+)['"]\s*\)/u.exec(
     readProjectFile(file)
@@ -178,9 +185,29 @@ describe('capability manifest registry', () => {
     const compositionSource = readProjectFile('src/composition/user.ts');
 
     expect(adapterSource).not.toMatch(/from\s+['"]@\/modules\/user/u);
-    expect(compositionSource).toContain("from '@/modules/auth/backend'");
+    expect(compositionSource).toContain("from '@/modules/auth/administration'");
     expect(compositionSource).not.toMatch(
       /from\s+['"]@\/modules\/auth\/infrastructure/u
+    );
+    const consumers = listSourceFiles(path.join(root, 'src'))
+      .filter((file) =>
+        fs
+          .readFileSync(file, 'utf8')
+          .includes("from '@/modules/auth/administration'")
+      )
+      .map((file) => path.relative(root, file));
+    expect(consumers).toEqual(['src/composition/user.ts']);
+  });
+
+  it('publishes the user-owned audited logout route through the user backend gate', () => {
+    expect(readProjectFile('src/routes/logout.tsx')).toContain(
+      "import('@/modules/user/backend')"
+    );
+    expect(readProjectFile('src/modules/user/backend.ts')).toContain(
+      "from '@/composition/auth-sign-out'"
+    );
+    expect(readProjectFile('src/modules/auth/backend.ts')).not.toContain(
+      'handleLogoutRequest'
     );
   });
 

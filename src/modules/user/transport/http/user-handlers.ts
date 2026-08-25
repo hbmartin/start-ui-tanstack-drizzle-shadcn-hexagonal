@@ -119,6 +119,7 @@ const userDeleteConfig = (options?: { selfMessage?: string }) =>
   ({
     user_deleted: () => undefined,
     user_forbidden: 'FORBIDDEN',
+    user_not_found: 'NOT_FOUND',
     ...userSelfConfig(options),
   }) as const satisfies OutcomeHandlerConfig<UserDeleteOutcome, void>;
 
@@ -217,6 +218,7 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
   ) => {
     return unwrapApplicationResult(
       getUseCases(ctx).delete({
+        correlationId: ctx.correlationId,
         currentUserId: ctx.scope.userId,
         id: data.id,
       }),

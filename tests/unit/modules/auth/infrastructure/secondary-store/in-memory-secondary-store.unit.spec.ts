@@ -25,6 +25,38 @@ const entryKeys = (store: InMemorySecondaryStore) => [
 ];
 
 describe('InMemorySecondaryStore', () => {
+  it('atomically consumes a fixed-window rate limit', async () => {
+    let nowMs = 1_000;
+    const store = new InMemorySecondaryStore({ now: () => nowMs });
+
+    await expect(
+      store.consumeRateLimit('rate-key', { max: 2, window: 10 })
+    ).resolves.toMatchObject({
+      tag: 'Ok',
+      value: { allowed: true, retryAfter: null },
+    });
+    await expect(
+      store.consumeRateLimit('rate-key', { max: 2, window: 10 })
+    ).resolves.toMatchObject({
+      tag: 'Ok',
+      value: { allowed: true, retryAfter: null },
+    });
+    await expect(
+      store.consumeRateLimit('rate-key', { max: 2, window: 10 })
+    ).resolves.toMatchObject({
+      tag: 'Ok',
+      value: { allowed: false, retryAfter: 10 },
+    });
+
+    nowMs += 10_000;
+    await expect(
+      store.consumeRateLimit('rate-key', { max: 2, window: 10 })
+    ).resolves.toMatchObject({
+      tag: 'Ok',
+      value: { allowed: true, retryAfter: null },
+    });
+  });
+
   it('round-trips values and deletes them', async () => {
     const store = new InMemorySecondaryStore();
 

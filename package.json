@@ -62,6 +62,7 @@
     "security:tanstack": "node scripts/check-tanstack-security.mjs",
     "security:licenses": "node scripts/check-license-compliance.mjs",
     "security:risk-register": "node scripts/check-risk-register.mjs",
+    "auth:purge-legacy-session-cache": "dotenv -- node scripts/purge-legacy-better-auth-session-cache.mjs",
     "gen:build-info": "dotenv -- node ./run-jiti ./src/app/build-info/infrastructure/generate-build-info.ts",
     "gen:icons": "svgr --config-file src/platform/components/icons/svgr.config.cjs src/platform/components/icons/svg-sources && oxfmt src/platform/components/icons/generated",
     "test": "run-s test:unit test:browser test:integration",

@@ -7,7 +7,6 @@ export type {
   AuthorizationPermission,
 } from './application/ports/authorization-gateway';
 export type { SessionGateway } from './application/ports/session-gateway';
-export type { UserAdminGateway } from './application/ports/user-admin-gateway';
 export {
   hasScopePermission,
   scopeUserId,

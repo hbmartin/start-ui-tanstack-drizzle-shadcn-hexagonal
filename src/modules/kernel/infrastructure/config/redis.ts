@@ -1,7 +1,15 @@
 import { z } from 'zod';
 
-import { baseEnvSchema, parseEnv, zNonEmptyEnvString } from './env-schema';
-import { assertSecureUrlInProduction } from './url-security';
+import {
+  baseEnvSchema,
+  isProdRuntimeEnvironment,
+  parseEnv,
+  zNonEmptyEnvString,
+} from './env-schema';
+import {
+  assertSecureUrlInProduction,
+  assertUrlHasNoCredentials,
+} from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
 const redisEnvSchema = baseEnvSchema.extend({
@@ -36,12 +44,18 @@ export function getRedisConfig(): RedisConfig | null {
   const env = parseEnv(redisEnvSchema);
   const restUrl = env.UPSTASH_REDIS_REST_URL;
   const restToken = env.UPSTASH_REDIS_REST_TOKEN;
+  assertUrlHasNoCredentials({ name: 'UPSTASH_REDIS_REST_URL', value: restUrl });
   assertSecureUrlInProduction({
     name: 'UPSTASH_REDIS_REST_URL',
     value: restUrl,
     env,
   });
   if (!restUrl && !restToken) {
+    if (isProdRuntimeEnvironment(env)) {
+      throw new ConfigurationError(
+        'Production startup requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for distributed authentication rate limiting.'
+      );
+    }
     cachedRedisConfig = null;
     return cachedRedisConfig;
   }

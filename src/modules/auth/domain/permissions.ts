@@ -4,16 +4,8 @@ export const rolesNames = ['admin', 'user'] as const;
 type UserRole = (typeof rolesNames)[number];
 
 export const permissionStatements = {
-  user: [
-    'create',
-    'list',
-    'update',
-    'set-role',
-    'ban',
-    'impersonate',
-    'delete',
-  ],
-  session: ['list', 'revoke', 'delete'],
+  user: ['create', 'list', 'update', 'set-role', 'delete'],
+  session: ['list', 'revoke'],
   profile: ['update'],
   apps: ['app', 'manager'],
   book: ['read', 'create', 'update', 'delete'],
@@ -36,16 +28,8 @@ export const rolePermissions = {
     genre: ['read'],
   },
   admin: {
-    user: [
-      'create',
-      'list',
-      'update',
-      'set-role',
-      'ban',
-      'impersonate',
-      'delete',
-    ],
-    session: ['list', 'revoke', 'delete'],
+    user: ['create', 'list', 'update', 'set-role', 'delete'],
+    session: ['list', 'revoke'],
     profile: ['update'],
     apps: ['app', 'manager'],
     book: ['read', 'create', 'update', 'delete'],

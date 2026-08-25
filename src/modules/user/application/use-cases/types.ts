@@ -4,7 +4,6 @@ import type { ResultTransactionRunner } from '@/modules/kernel/application/ports
 import type { ApplicationResult } from '@/modules/kernel/application/result';
 import type { AuditPort } from '@/modules/audit';
 
-import type { UserAuthGateway } from '../ports/user-auth-gateway';
 import type {
   UserCreateRepositoryOutcome,
   UserGetRepositoryOutcome,
@@ -26,7 +25,6 @@ export type UserTransactionContext = {
 
 export type UserUseCaseDeps = {
   userRepository: UserRepository;
-  userAuthGateway: UserAuthGateway;
   transactionRunner: ResultTransactionRunner<UserTransactionContext>;
   permissionChecker: PermissionChecker;
   logger: Logger;
@@ -49,6 +47,7 @@ export type UserUpdateOutcome =
 
 export type UserDeleteOutcome =
   | { type: 'user_deleted' }
+  | { type: 'user_not_found' }
   | UserForbiddenOutcome
   | UserSelfOutcome;
 
@@ -70,5 +69,12 @@ export type UserRevokeSessionOutcome =
     >
   | UserForbiddenOutcome
   | UserSelfOutcome;
+
+export type UserSignOutOutcome =
+  | { type: 'user_signed_out' }
+  | Extract<
+      UserSessionRevokedRepositoryOutcome,
+      { type: 'user_session_not_found' }
+    >;
 
 export type UserResult<TOutcome> = ApplicationResult<TOutcome>;

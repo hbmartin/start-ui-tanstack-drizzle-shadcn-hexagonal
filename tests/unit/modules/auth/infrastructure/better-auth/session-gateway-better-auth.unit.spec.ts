@@ -68,6 +68,8 @@ const makeDb = (
       emailVerified: boolean;
       role: string;
       onboardedAt: Date | null;
+      banned?: boolean | null;
+      banExpires?: Date | string | null;
     } | null;
   } = {}
 ) => {
@@ -251,6 +253,68 @@ describe('SessionGatewayBetterAuth', () => {
     expect(session).toMatchObject({
       tag: 'Ok',
       value: { type: 'auth_session_missing' },
+    });
+  });
+
+  it.each([
+    { label: 'permanent', banExpires: null },
+    { label: 'active', banExpires: new Date('2026-07-01T00:00:00.000Z') },
+    { label: 'invalid', banExpires: 'not-a-date' },
+  ])('rejects an existing session for a $label durable ban', async (ban) => {
+    const { SessionGatewayBetterAuth } = await loadGateway();
+    const gateway = new SessionGatewayBetterAuth(
+      makeAuth('admin'),
+      makeDb({
+        appUser: {
+          id: 'user-1',
+          email: 'user@example.com',
+          name: 'Test User',
+          image: null,
+          emailVerified: true,
+          role: 'admin',
+          onboardedAt: null,
+          banned: true,
+          banExpires: ban.banExpires,
+        },
+      }),
+      { now: () => new Date('2026-06-01T00:00:00.000Z') },
+      telemetry
+    );
+
+    const session = await gateway.getSession({ headers: new Headers() });
+
+    expect(session).toMatchObject({
+      tag: 'Ok',
+      value: { type: 'auth_session_missing' },
+    });
+  });
+
+  it('allows an existing session after its durable ban expires', async () => {
+    const { SessionGatewayBetterAuth } = await loadGateway();
+    const gateway = new SessionGatewayBetterAuth(
+      makeAuth('admin'),
+      makeDb({
+        appUser: {
+          id: 'user-1',
+          email: 'user@example.com',
+          name: 'Test User',
+          image: null,
+          emailVerified: true,
+          role: 'admin',
+          onboardedAt: null,
+          banned: true,
+          banExpires: new Date('2026-05-01T00:00:00.000Z'),
+        },
+      }),
+      { now: () => new Date('2026-06-01T00:00:00.000Z') },
+      telemetry
+    );
+
+    const session = await gateway.getSession({ headers: new Headers() });
+
+    expect(session).toMatchObject({
+      tag: 'Ok',
+      value: { type: 'auth_session_found' },
     });
   });
 

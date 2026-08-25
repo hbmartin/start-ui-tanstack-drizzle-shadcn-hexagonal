@@ -12,10 +12,16 @@ export type SecondaryStoreTakeOutcome =
   | { type: 'secondary_store_taken'; value: string }
   | { type: 'secondary_store_miss' };
 
+export type SecondaryStoreRateLimitOutcome = {
+  allowed: boolean;
+  retryAfter: number | null;
+  type: 'secondary_store_rate_limit_consumed';
+};
+
 /**
- * Durable key/value port used for Better Auth's secondary storage and
- * rate-limit counters. Implementations decide the backend (in-process map,
- * Upstash Redis, …) so the auth wiring stays provider-neutral.
+ * Durable key/value port used for idempotency records and atomic rate-limit
+ * counters. Implementations decide the backend (in-process map, Upstash
+ * Redis, …) so the auth wiring stays provider-neutral.
  *
  * Values are opaque strings; callers serialize/deserialize. `ttlSeconds` is an
  * optional expiry hint — when omitted the entry persists until deleted.
@@ -32,4 +38,8 @@ export interface SecondaryStore {
     expectedValue: string
   ): Promise<ApplicationResult<SecondaryStoreTakeOutcome>>;
   delete(key: string): Promise<ApplicationResult<SecondaryStoreDeleteOutcome>>;
+  consumeRateLimit(
+    key: string,
+    rule: { max: number; window: number }
+  ): Promise<ApplicationResult<SecondaryStoreRateLimitOutcome>>;
 }

@@ -215,7 +215,18 @@ describe('Fallow guardrails', () => {
     const report = JSON.parse(result.stdout) as BoundaryReport;
     expect(report.kind).toBe('list-boundaries');
     expect(report.boundaries.configured).toBe(true);
-    expect(report.boundaries.zones).toHaveLength(34);
+    expect(report.boundaries.zones).toHaveLength(37);
+    expect(
+      report.boundaries.zones.find(
+        ({ name }) => name === 'auth-administration-gate'
+      )
+    ).toMatchObject({ file_count: 1 });
+    expect(
+      report.boundaries.zones.find(({ name }) => name === 'user-composition')
+    ).toMatchObject({ file_count: 1 });
+    expect(
+      report.boundaries.zones.find(({ name }) => name === 'user-backend-gate')
+    ).toMatchObject({ file_count: 1 });
     expect(
       report.boundaries.zones
         .map(({ name }) => name)

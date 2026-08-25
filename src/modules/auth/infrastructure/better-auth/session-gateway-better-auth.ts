@@ -48,6 +48,8 @@ type AuthenticatedUserSource = {
   emailVerified?: boolean;
   role?: unknown;
   onboardedAt?: Date | string | null;
+  banned?: boolean | null;
+  banExpires?: Date | string | null;
 };
 
 const toAuthenticatedRole = (role: unknown): AuthenticatedUser['role'] => {
@@ -134,6 +136,14 @@ export class SessionGatewayBetterAuth implements SessionGateway {
     return ageSeconds > getBetterAuthConfig().sessionAbsoluteMaxInSeconds;
   }
 
+  private isDurablyBanned(user: AuthenticatedUserSource) {
+    if (user.banned !== true) return false;
+    if (user.banExpires === null || user.banExpires === undefined) return true;
+
+    const expiresAt = new Date(user.banExpires).getTime();
+    return Number.isNaN(expiresAt) || expiresAt >= this.clock.now().getTime();
+  }
+
   private async resolveAppUser(
     providerUser: AuthenticatedUserSource
   ): Promise<Option<AuthenticatedUserSource>> {
@@ -216,6 +226,9 @@ export class SessionGatewayBetterAuth implements SessionGateway {
           return (await this.resolveAppUser(session.user)).match({
             None: () => Result.Ok({ type: 'auth_session_missing' as const }),
             Some: (user) => {
+              if (this.isDurablyBanned(user)) {
+                return Result.Ok({ type: 'auth_session_missing' as const });
+              }
               const parsedUser = toAuthenticatedUser(user);
               if (parsedUser.isError())
                 return Result.Error(parsedUser.getError());

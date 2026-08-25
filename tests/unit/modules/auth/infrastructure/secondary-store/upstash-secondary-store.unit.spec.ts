@@ -21,6 +21,11 @@ const jsonResponse = (body: unknown) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+const setDeleteFetch = async (_url: RequestInfo | URL, init?: RequestInit) => {
+  const command = JSON.parse(String(init?.body)) as unknown[];
+  return jsonResponse({ result: command[0] === 'DEL' ? 1 : 'OK' });
+};
+
 const expectOk = async <TOutcome extends { type: string }>(
   value: Promise<ApplicationResult<TOutcome>>,
   expected: TOutcome
@@ -44,6 +49,75 @@ const expectErrorCode = async <TOutcome extends { type: string }>(
 describe('UpstashSecondaryStore', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('rejects injected URL credentials before issuing a request', () => {
+    const fetchFn = vi.fn();
+
+    expect(
+      () =>
+        new UpstashSecondaryStore({
+          config: {
+            restToken: 'token',
+            restUrl: 'https://user:secret@redis.example.com',
+          },
+          fetchFn,
+          telemetry,
+        })
+    ).toThrow('must not contain URL credentials');
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('consumes rate limits with one atomic EVAL command', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ result: [1, -1] }));
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+
+    await expectOk(store.consumeRateLimit('rate-key', { max: 3, window: 60 }), {
+      type: 'secondary_store_rate_limit_consumed',
+      allowed: true,
+      retryAfter: null,
+    });
+    expect(fetchFn).toHaveBeenCalledWith(
+      config.restUrl,
+      expect.objectContaining({
+        body: expect.stringContaining('"EVAL"'),
+      })
+    );
+    expect(fetchFn).toHaveBeenCalledWith(
+      config.restUrl,
+      expect.objectContaining({
+        body: expect.stringContaining('"rate-key"'),
+      })
+    );
+    expect(fetchFn).toHaveBeenCalledWith(
+      config.restUrl,
+      expect.objectContaining({
+        body: expect.stringContaining('data.count < 0'),
+      })
+    );
+  });
+
+  it('returns bounded retry metadata for an exhausted rate limit', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ result: [0, 17] }));
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+
+    await expectOk(store.consumeRateLimit('rate-key', { max: 3, window: 60 }), {
+      type: 'secondary_store_rate_limit_consumed',
+      allowed: false,
+      retryAfter: 17,
+    });
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed and reports malformed rate-limit decisions', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ result: [1, 30] }));
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+
+    await expectErrorCode(
+      store.consumeRateLimit('rate-key', { max: 3, window: 60 }),
+      'AUTH_SECONDARY_STORE_UPSTASH_ERROR'
+    );
+    expect(captureException).toHaveBeenCalledOnce();
   });
 
   it('issues a GET command and returns the stored value', async () => {
@@ -76,7 +150,7 @@ describe('UpstashSecondaryStore', () => {
   });
 
   it('sends SET with an EX ttl and DEL commands', async () => {
-    const fetchFn = vi.fn(async () => jsonResponse({ result: 'OK' }));
+    const fetchFn = vi.fn(setDeleteFetch);
     const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
 
     await expectOk(store.set('key-1', 'value-1', 60), {
@@ -151,6 +225,30 @@ describe('UpstashSecondaryStore', () => {
     });
   });
 
+  it('fails closed when the take script returns a different value', async () => {
+    const fetchFn = vi.fn(async () =>
+      jsonResponse({ result: 'attacker-controlled-value' })
+    );
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+
+    await expectErrorCode(
+      store.take('key-1', 'value-1'),
+      'AUTH_SECONDARY_STORE_UPSTASH_ERROR'
+    );
+    expect(captureException).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when single-key deletion reports more than one key', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ result: 2 }));
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+
+    await expectErrorCode(
+      store.delete('key-1'),
+      'AUTH_SECONDARY_STORE_UPSTASH_ERROR'
+    );
+    expect(captureException).toHaveBeenCalledOnce();
+  });
+
   it('returns and reports read failures on transport errors', async () => {
     const fetchFn = vi.fn(async () => {
       throw new Error('network down');
@@ -177,6 +275,41 @@ describe('UpstashSecondaryStore', () => {
       'AUTH_SECONDARY_STORE_UPSTASH_ERROR'
     );
     expect(captureException).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['get', (store: UpstashSecondaryStore) => store.get('key-1'), 42],
+    [
+      'set',
+      (store: UpstashSecondaryStore) => store.set('key-1', 'value'),
+      null,
+    ],
+    ['take', (store: UpstashSecondaryStore) => store.take('key-1', 'value'), 1],
+    ['delete', (store: UpstashSecondaryStore) => store.delete('key-1'), -1],
+  ] as const)(
+    'fails closed and reports an invalid %s command response',
+    async (_operation, execute, result) => {
+      const fetchFn = vi.fn(async () => jsonResponse({ result }));
+      const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+
+      const outcome = await execute(store);
+      expect(outcome).toMatchObject({
+        tag: 'Error',
+        error: { code: 'AUTH_SECONDARY_STORE_UPSTASH_ERROR' },
+      });
+      expect(captureException).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('rejects a successful HTTP response without an Upstash result envelope', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({}));
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+
+    await expectErrorCode(
+      store.get('key-1'),
+      'AUTH_SECONDARY_STORE_UPSTASH_ERROR'
+    );
+    expect(captureException).toHaveBeenCalledOnce();
   });
 
   it('aborts slow Upstash requests', async () => {

@@ -302,6 +302,19 @@ describe('server config accessors', () => {
     expect(getRedisConfig()).toBeNull();
   });
 
+  it('requires distributed Redis rate limiting at production startup', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', undefined);
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
+
+    expect(() => getRedisConfig()).toThrow(ConfigurationError);
+    expect(() => getRedisConfig()).toThrow('Production startup requires');
+  });
+
   it('throws ConfigurationError for partial optional Redis config', async () => {
     vi.stubEnv('UPSTASH_REDIS_REST_URL', 'https://redis.example.com');
     vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
@@ -312,6 +325,25 @@ describe('server config accessors', () => {
 
     expect(() => getRedisConfig()).toThrow(ConfigurationError);
     expect(() => getRedisConfig()).toThrow('UPSTASH_REDIS_REST_TOKEN');
+  });
+
+  it('rejects Redis URL credentials without exposing them', async () => {
+    vi.stubEnv(
+      'UPSTASH_REDIS_REST_URL',
+      'https://embedded-user:embedded-secret@redis.example.com'
+    );
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', makeTestSecret('redis'));
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+
+    let caught: unknown;
+    try {
+      getRedisConfig();
+    } catch (error) {
+      caught = error;
+    }
+    expect(String(caught)).toContain('must not contain URL credentials');
+    expect(String(caught)).not.toContain('embedded-secret');
   });
 
   it('throws ConfigurationError when Redis token is present without URL', async () => {
@@ -741,14 +773,12 @@ describe('server config accessors', () => {
     expect(getHttpConfig().trustedProxyDepth).toBe(1);
   });
 
-  it('rejects zero as a trusted proxy depth', async () => {
+  it('accepts zero to disable proxy-header trust at a direct origin', async () => {
     vi.stubEnv('TRUSTED_PROXY_DEPTH', '0');
     const { getHttpConfig } =
       await import('@/modules/kernel/infrastructure/config/http');
-    const { ConfigurationError } =
-      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(() => getHttpConfig()).toThrow(ConfigurationError);
+    expect(getHttpConfig().trustedProxyDepth).toBe(0);
   });
 
   it('rejects a negative trusted proxy depth', async () => {

@@ -1,15 +1,8 @@
-import {
-  getAuth,
-  getAuthHttpGateway,
-  getAuthUseCases,
-} from '@/composition/auth';
+import { getAuthHttpGateway, getAuthUseCases } from '@/composition/auth';
 import { getKernel } from '@/composition/kernel';
 import type { Logger } from '@/modules/kernel';
 
 import { createServerContextTools } from './transport/tanstack/server-context';
-
-export { createUserRepository } from './infrastructure/drizzle/user-repository-drizzle';
-export { createUserSecurityRepository } from './infrastructure/drizzle/user-security-repository-drizzle';
 
 export type { AuthenticatedSession, AuthenticatedUser } from './domain/session';
 export {
@@ -46,24 +39,6 @@ export const handleAuthRequest = (request: Request) =>
       op: 'auth.http',
     },
     () => getAuthHttpGateway().handle(request)
-  );
-export const handleLogoutRequest = (request: Request) =>
-  getKernel().telemetry.startSpan(
-    {
-      attributes: {
-        'auth.provider': 'better-auth',
-        'http.request.method': request.method,
-        'operation.name': 'auth.signOut',
-        'operation.type': 'provider_operation',
-      },
-      name: 'auth.signOut',
-      op: 'auth.provider',
-    },
-    () =>
-      getAuth().api.signOut({
-        asResponse: true,
-        headers: request.headers,
-      })
   );
 export const assertPermission = serverContextTools.assertPermission;
 export const withFreshProtectedMutation =

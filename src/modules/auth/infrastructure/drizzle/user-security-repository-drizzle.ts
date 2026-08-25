@@ -1,14 +1,9 @@
 import { Result } from '@bloodyowl/boxed';
-import { and, eq, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, or } from 'drizzle-orm';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import type { ApplicationResult } from '@/modules/kernel/application/result';
-import {
-  type EmailAddress,
-  type SessionId,
-  toEmailAddress,
-  type UserId,
-} from '@/modules/kernel/domain/ids';
+import type { SessionId, UserId } from '@/modules/kernel/domain/ids';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 
 import {
@@ -99,37 +94,76 @@ class UserSecurityRepositoryDrizzle {
     }
   }
 
-  async lockUserForUpdate(userId: UserId): Promise<
+  async lockMutationPrincipals(input: {
+    actorId: UserId;
+    targetId: UserId;
+  }): Promise<
     ApplicationResult<
-      | Readonly<{
-          snapshot: { email: EmailAddress; role: 'admin' | 'user' };
-          type: 'user_security_update_target_found';
-        }>
-      | Readonly<{ type: 'user_security_update_target_not_found' }>
+      Readonly<{
+        actor:
+          | Readonly<{
+              role: 'admin' | 'user';
+              type: 'user_security_principal_found';
+            }>
+          | Readonly<{ type: 'user_security_principal_not_found' }>;
+        target:
+          | Readonly<{
+              role: 'admin' | 'user';
+              type: 'user_security_principal_found';
+            }>
+          | Readonly<{ type: 'user_security_principal_not_found' }>;
+        type: 'user_security_mutation_principals_locked';
+      }>
     >
   > {
     try {
-      const [target] = await this.db
-        .select({ email: userTable.email, role: userTable.role })
+      const principals = await this.db
+        .select({ id: userTable.id, role: userTable.role })
         .from(userTable)
-        .where(eq(userTable.id, userId))
+        .where(inArray(userTable.id, [input.actorId, input.targetId]))
+        .orderBy(asc(userTable.id))
         .for('update');
-      if (!target) {
-        return Result.Ok({ type: 'user_security_update_target_not_found' });
-      }
-      const email = toEmailAddress(target.email);
-      if (email.isError()) {
-        return Result.Error(
-          persistenceError('update target row validation', email.getError())
-        );
-      }
+      const actor = principals.find(
+        (principal) => principal.id === input.actorId
+      );
+      const target = principals.find(
+        (principal) => principal.id === input.targetId
+      );
 
       return Result.Ok({
-        type: 'user_security_update_target_found',
-        snapshot: { email: email.get(), role: target.role },
+        type: 'user_security_mutation_principals_locked',
+        actor: actor
+          ? { type: 'user_security_principal_found', role: actor.role }
+          : { type: 'user_security_principal_not_found' },
+        target: target
+          ? { type: 'user_security_principal_found', role: target.role }
+          : { type: 'user_security_principal_not_found' },
       });
     } catch (error) {
-      return Result.Error(persistenceError('update target lock', error));
+      return Result.Error(persistenceError('mutation principal locks', error));
+    }
+  }
+
+  async deleteUser(
+    userId: UserId
+  ): Promise<
+    ApplicationResult<
+      Readonly<{ type: 'user_deleted' }> | Readonly<{ type: 'user_not_found' }>
+    >
+  > {
+    try {
+      const providerUserId = await this.resolveLocalProviderUserId(userId);
+      if (providerUserId.isError()) {
+        return Result.Error(providerUserId.getError());
+      }
+      const [deleted] = await this.db
+        .delete(userTable)
+        .where(eq(userTable.id, providerUserId.get()))
+        .returning({ id: userTable.id });
+
+      return Result.Ok({ type: deleted ? 'user_deleted' : 'user_not_found' });
+    } catch (error) {
+      return Result.Error(persistenceError('user deletion', error));
     }
   }
 

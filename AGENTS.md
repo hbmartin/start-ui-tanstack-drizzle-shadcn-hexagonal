@@ -53,6 +53,7 @@ Cross-module imports must use one of these public files:
 
 | File | Contents |
 |---|---|
+| `administration.ts` | Auth-owned destructive persistence adapters; production imports are restricted to `src/composition/user.ts`. |
 | `index.ts` | Domain types, application ports, factories, stable constants. |
 | `server.ts` | TanStack `createServerFn` exports only. |
 | `backend.ts` | Server-only non-server-function APIs, protected runners, HTTP route handlers. |
@@ -64,6 +65,7 @@ Cross-module imports must use one of these public files:
 
 Do not deep-import another module's `domain/`, `application/`, `infrastructure/`, `transport/`, or `presentation/` internals. `kernel` internals are the practical exception for cross-cutting primitives.
 Routes, app code, presentation, and ordinary module code must not import `persistence.ts`. Cross-capability schema references use the focused persistence gate and remain confined to schema composition.
+Only `src/composition/user.ts` may import the auth `administration.ts` gate; all callers use the resulting audited user use cases.
 
 ## Module Rules
 
@@ -128,9 +130,12 @@ Auth is provider-neutral above infrastructure. Application code depends on focus
 - `SessionGateway`
 - `AuthorizationGateway`
 - `AuthEmailPort`
-- `UserAdminGateway`
 
 Better Auth is the current adapter under `src/modules/auth/infrastructure/better-auth`. A future provider should implement the same ports and be selected in `src/composition/auth.ts`.
+Destructive user administration is app-owned, uses durable repositories under
+`src/modules/user`, and must commit its required audit event in the same
+transaction. Do not expose or install Better Auth's admin plugin as an
+alternative mutation path.
 
 ## Tests
 

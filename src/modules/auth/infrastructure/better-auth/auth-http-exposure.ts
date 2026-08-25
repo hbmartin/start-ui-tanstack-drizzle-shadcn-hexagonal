@@ -5,11 +5,25 @@
  * begin and complete authentication. Account administration, session
  * revocation, sign-out, signup, password reset, and other mutations remain
  * unexposed until app-owned use cases can enforce authorization and durable
- * audit policy. Better Auth's in-process `auth.api.*` calls are unaffected.
+ * audit policy. Focused in-process provider adapters remain separately scoped.
  */
+
+import { getClientIp } from '@/platform/http/get-client-ip';
 
 const BETTER_AUTH_BASE_PATH = '/api/auth';
 const MAX_AUTH_HTTP_BODY_BYTES = 8 * 1024;
+export const TRUSTED_AUTH_CLIENT_IP_HEADER = 'x-start-ui-client-ip';
+
+export const withTrustedAuthClientIp = (
+  request: Request,
+  options: { trustedProxyDepth: number }
+) => {
+  const headers = new Headers(request.headers);
+  headers.delete(TRUSTED_AUTH_CLIENT_IP_HEADER);
+  const clientIp = getClientIp(request, options);
+  if (clientIp) headers.set(TRUSTED_AUTH_CLIENT_IP_HEADER, clientIp);
+  return new Request(request, { headers });
+};
 
 type JsonRecord = Record<string, unknown>;
 

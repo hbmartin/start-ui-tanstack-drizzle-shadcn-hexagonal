@@ -17,6 +17,12 @@ export const userCapabilityManifest = defineCapabilityManifest({
   dependsOn: ['audit', 'auth'],
   publicRoutes: [
     {
+      routeId: '/logout',
+      file: 'src/routes/logout.tsx',
+      kind: 'page',
+      access: { kind: 'authenticated' },
+    },
+    {
       routeId: '/manager/users/',
       file: 'src/routes/manager/users/index.tsx',
       kind: 'page',
@@ -52,15 +58,7 @@ export const userCapabilityManifest = defineCapabilityManifest({
     resources: [
       {
         resource: 'user',
-        actions: [
-          'create',
-          'list',
-          'update',
-          'set-role',
-          'ban',
-          'impersonate',
-          'delete',
-        ],
+        actions: ['create', 'list', 'update', 'set-role', 'delete'],
       },
     ],
     presetRoleGrants: [
@@ -68,15 +66,7 @@ export const userCapabilityManifest = defineCapabilityManifest({
       {
         role: 'admin',
         resource: 'user',
-        actions: [
-          'create',
-          'list',
-          'update',
-          'set-role',
-          'ban',
-          'impersonate',
-          'delete',
-        ],
+        actions: ['create', 'list', 'update', 'set-role', 'delete'],
       },
     ],
   },
@@ -127,6 +117,8 @@ export const userCapabilityManifest = defineCapabilityManifest({
     'src/app/i18n/fr/user.json',
     'src/app/i18n/sw/user.json',
     'src/composition/user.ts',
+    'src/composition/auth-sign-out.ts',
+    'src/routes/logout.tsx',
     'src/routes/manager/users/$id.index.tsx',
     'src/routes/manager/users/$id.update.index.tsx',
     'src/routes/manager/users/index.tsx',

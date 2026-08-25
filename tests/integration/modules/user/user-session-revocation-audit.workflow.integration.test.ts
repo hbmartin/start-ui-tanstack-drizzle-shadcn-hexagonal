@@ -39,6 +39,7 @@ import {
   createTransactionRunner,
 } from '@/modules/kernel/backend';
 import {
+  account as accountTable,
   authIdentity,
   session as sessionTable,
   user as userTable,
@@ -152,9 +153,6 @@ describe('user session revocation audit transaction', () => {
   ) =>
     createUserUseCases({
       userRepository: createUserRepository({ db: database.db }),
-      userAuthGateway: {
-        removeUser: async () => Result.Ok({ type: 'user_auth_removed' }),
-      },
       transactionRunner: createResultTransactionRunner({
         transactionRunner: createTransactionRunner(database.db),
         bindContext: (transaction): UserTransactionContext => ({
@@ -203,6 +201,10 @@ describe('user session revocation audit transaction', () => {
     });
     await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
       3
+    );
+    await expect(database.db.select().from(userTable)).resolves.toHaveLength(3);
+    await expect(database.db.select().from(authIdentity)).resolves.toHaveLength(
+      1
     );
     await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
       []
@@ -309,6 +311,55 @@ describe('user session revocation audit transaction', () => {
     );
   });
 
+  it('commits current-session sign-out and its required audit together', async () => {
+    const outcome = getOk(
+      await createUseCases('audit-sign-out').signOutCurrentSession({
+        correlationId,
+        currentSessionId: targetSessionId,
+        currentUserId: userId,
+      })
+    );
+
+    expect(outcome).toEqual({ type: 'user_signed_out' });
+    await expect(database.db.select().from(sessionTable)).resolves.toEqual([
+      expect.objectContaining({ id: 'session-2' }),
+    ]);
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'audit-sign-out',
+        type: 'authentication.signed-out',
+        actorId: userId,
+        subjectId: targetSessionId,
+        subjectKind: 'session',
+        correlationId,
+        metadata: { scope: 'current-session' },
+      }),
+    ]);
+  });
+
+  it('rolls current-session sign-out back when required audit persistence fails', async () => {
+    const auditError = new AppError({
+      code: 'AUDIT_EVENT_PERSISTENCE_FAILED',
+      category: 'system',
+      status: 500,
+    });
+    const result = await createUseCases('unused', () => ({
+      record: async () => Result.Error(auditError),
+    })).signOutCurrentSession({
+      correlationId,
+      currentSessionId: targetSessionId,
+      currentUserId: userId,
+    });
+
+    expect(result.isError()).toBe(true);
+    await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
+      2
+    );
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      []
+    );
+  });
+
   it('reports a real zero-row revoke-all as unchanged without an audit', async () => {
     await database.db.delete(sessionTable);
 
@@ -378,6 +429,169 @@ describe('user session revocation audit transaction', () => {
     await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
       []
     );
+  });
+
+  it('commits user deletion, auth cascades, and its required audit together', async () => {
+    await database.db.insert(authIdentity).values({
+      provider: 'better-auth',
+      providerUserId: userId,
+      userId,
+    });
+    await database.db.insert(accountTable).values({
+      accountId: 'user-account',
+      providerId: 'credential',
+      userId,
+    });
+
+    const outcome = getOk(
+      await createUseCases('audit-user-delete').delete({
+        correlationId,
+        currentUserId: adminId,
+        id: userId,
+      })
+    );
+
+    expect(outcome).toEqual({ type: 'user_deleted' });
+    await expect(database.db.select().from(userTable)).resolves.toEqual([
+      expect.objectContaining({ id: adminId }),
+    ]);
+    await expect(database.db.select().from(sessionTable)).resolves.toEqual([]);
+    await expect(database.db.select().from(accountTable)).resolves.toEqual([]);
+    await expect(database.db.select().from(authIdentity)).resolves.toEqual([]);
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual([
+      expect.objectContaining({
+        id: 'audit-user-delete',
+        type: 'administration.user-deleted',
+        actorId: adminId,
+        subjectId: userId,
+        correlationId,
+        metadata: { reason: 'administrator' },
+      }),
+    ]);
+  });
+
+  it('rolls user and auth cascades back when deletion audit persistence fails', async () => {
+    await database.db.insert(authIdentity).values({
+      provider: 'better-auth',
+      providerUserId: userId,
+      userId,
+    });
+    await database.db.insert(accountTable).values({
+      accountId: 'rollback-account',
+      providerId: 'credential',
+      userId,
+    });
+    const auditError = new AppError({
+      code: 'AUDIT_EVENT_PERSISTENCE_FAILED',
+      category: 'system',
+      status: 500,
+    });
+    const result = await createUseCases('unused', () => ({
+      record: async () => Result.Error(auditError),
+    })).delete({
+      correlationId,
+      currentUserId: adminId,
+      id: userId,
+    });
+
+    expect(result.isError()).toBe(true);
+    await expect(database.db.select().from(userTable)).resolves.toHaveLength(2);
+    await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
+      2
+    );
+    await expect(database.db.select().from(accountTable)).resolves.toHaveLength(
+      1
+    );
+    await expect(database.db.select().from(authIdentity)).resolves.toHaveLength(
+      1
+    );
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      []
+    );
+  });
+
+  it('rejects user deletion when durable authorization was demoted', async () => {
+    await database.db
+      .update(userTable)
+      .set({ role: 'user' })
+      .where(eq(userTable.id, adminId));
+
+    const outcome = getOk(
+      await createUseCases('unused').delete({
+        correlationId,
+        currentUserId: adminId,
+        id: userId,
+      })
+    );
+
+    expect(outcome).toEqual({ type: 'user_forbidden' });
+    await expect(database.db.select().from(userTable)).resolves.toHaveLength(2);
+    await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
+      2
+    );
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      []
+    );
+  });
+
+  it('reports a missing durable deletion target without side effects', async () => {
+    const missingId = unwrapParseResult(toUserId('missing-user'));
+
+    const outcome = getOk(
+      await createUseCases('unused').delete({
+        correlationId,
+        currentUserId: adminId,
+        id: missingId,
+      })
+    );
+
+    expect(outcome).toEqual({ type: 'user_not_found' });
+    await expect(database.db.select().from(userTable)).resolves.toHaveLength(2);
+    await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
+      2
+    );
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      []
+    );
+  });
+
+  it('rolls user deletion back for divergent identity ownership', async () => {
+    await database.db.insert(authIdentity).values({
+      provider: 'better-auth',
+      providerUserId: 'different-provider-user',
+      userId,
+    });
+
+    const result = await createUseCases('unused').delete({
+      correlationId,
+      currentUserId: adminId,
+      id: userId,
+    });
+
+    expect(result).toMatchObject({
+      tag: 'Error',
+      error: { code: 'AUTH_IDENTITY_DESTRUCTIVE_MAPPING_UNSUPPORTED' },
+    });
+    await expect(database.db.select().from(userTable)).resolves.toHaveLength(2);
+    await expect(database.db.select().from(sessionTable)).resolves.toHaveLength(
+      2
+    );
+    await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
+      []
+    );
+  });
+
+  it('fails closed when deletion targets the reverse side of an identity alias', async () => {
+    const { aliasUserId } = await seedReverseIdentityAlias();
+
+    const result = await createUseCases('unused').delete({
+      correlationId,
+      currentUserId: adminId,
+      id: aliasUserId,
+    });
+
+    expect(result.isError()).toBe(true);
+    await expectReverseAliasRejected(result);
   });
 
   it('commits a role change, session invalidation, and both required audits together', async () => {
@@ -514,26 +728,6 @@ describe('user session revocation audit transaction', () => {
     await expect(database.db.select().from(auditEventTable)).resolves.toEqual(
       []
     );
-  });
-
-  it('maps corrupt durable target data to a bounded persistence failure', async () => {
-    await database.db
-      .update(userTable)
-      .set({ email: 'not-an-email-address' })
-      .where(eq(userTable.id, userId));
-
-    const result = await createUserSecurityRepository({
-      db: database.db,
-    }).lockUserForUpdate(userId);
-
-    expect(result).toMatchObject({
-      tag: 'Error',
-      error: {
-        category: 'system',
-        code: 'USER_SECURITY_PERSISTENCE_FAILED',
-        status: 500,
-      },
-    });
   });
 
   it('rolls role, sessions, and the first audit back when the second audit fails', async () => {

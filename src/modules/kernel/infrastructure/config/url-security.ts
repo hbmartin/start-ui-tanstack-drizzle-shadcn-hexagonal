@@ -65,6 +65,26 @@ export const assertSecureUrlInProduction = ({
   }
 };
 
+/** Reject credentials embedded in a URL before transport errors can log it. */
+export const assertUrlHasNoCredentials = ({
+  name,
+  value,
+}: {
+  name: string;
+  value: string | undefined;
+}): void => {
+  if (!value) return;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return;
+  }
+  if (parsed.username || parsed.password) {
+    throw new ConfigurationError(`${name} must not contain URL credentials.`);
+  }
+};
+
 /**
  * Rejects cleartext / unauthenticated-TLS database connections in production,
  * for every driver — no driver is blanket-exempt (CWE-183).

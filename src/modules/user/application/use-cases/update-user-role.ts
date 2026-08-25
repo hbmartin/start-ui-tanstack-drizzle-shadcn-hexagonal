@@ -18,10 +18,10 @@ import { recordRequiredAudit } from './record-required-audit';
 import { buildUserUpdatePersistenceInput } from './update-user-persistence-input';
 import type { UserUpdateRepositoryOutcome } from '../ports/user-repository';
 import type {
-  UserSecurityPrincipalRepositoryOutcome,
-  UserSecurityUpdateTargetRepositoryOutcome,
-} from '../ports/user-security-repository';
-import type { UserRole, UserUpdateInput } from '../../domain/user';
+  UserRole,
+  UserUpdateInput,
+  UserUpdateSnapshot,
+} from '../../domain/user';
 import { canChangeRole } from '../../domain/user-policy';
 
 type RoleChangeInput = Readonly<{
@@ -31,17 +31,6 @@ type RoleChangeInput = Readonly<{
   submittedRole: UserRole;
   user: UserUpdateInput;
 }>;
-
-type LockedRoleChangePrincipals = Readonly<{
-  actor: UserSecurityPrincipalRepositoryOutcome;
-  target: UserSecurityUpdateTargetRepositoryOutcome;
-}>;
-
-const compareUserIds = (left: UserId, right: UserId) => {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
-};
 
 export type RoleChangeCompleted = Readonly<{
   outcome: UserUpdateRepositoryOutcome;
@@ -89,13 +78,8 @@ const executeLockedMutation = async (
   context: UserTransactionContext,
   input: RoleChangeInput,
   subjectId: AuditSubjectId<'user'>,
-  target: UserSecurityUpdateTargetRepositoryOutcome
+  durableCurrent: UserUpdateSnapshot
 ): Promise<UserResult<RoleChangeCompleted>> => {
-  if (target.type === 'user_security_update_target_not_found') {
-    return Result.Ok(completed({ type: 'user_not_found' }));
-  }
-
-  const durableCurrent = target.snapshot;
   const durableNextRole = canChangeRole({
     currentUserId: input.currentUserId,
     userId: input.id,
@@ -131,47 +115,15 @@ const executeLockedMutation = async (
   return Result.Ok(completed(updateOutcome, revokedCount));
 };
 
-const lockRoleChangePrincipals = async (
-  context: UserTransactionContext,
-  input: RoleChangeInput
-): Promise<UserResult<LockedRoleChangePrincipals>> => {
-  let actor: UserSecurityPrincipalRepositoryOutcome = {
-    type: 'user_security_principal_not_found',
-  };
-  let target: UserSecurityUpdateTargetRepositoryOutcome = {
-    type: 'user_security_update_target_not_found',
-  };
-  const locks = [
-    { kind: 'actor' as const, userId: input.currentUserId },
-    { kind: 'target' as const, userId: input.id },
-  ].toSorted((left, right) => compareUserIds(left.userId, right.userId));
-
-  for (const lock of locks) {
-    if (lock.kind === 'actor') {
-      const locked =
-        await context.securityRepository.lockAuthorizationPrincipal(
-          lock.userId
-        );
-      if (locked.isError()) return Result.Error(locked.getError());
-      actor = locked.get();
-    } else {
-      const locked = await context.securityRepository.lockUserForUpdate(
-        lock.userId
-      );
-      if (locked.isError()) return Result.Error(locked.getError());
-      target = locked.get();
-    }
-  }
-
-  return Result.Ok({ actor, target });
-};
-
 const runRoleChange = async (
   context: UserTransactionContext,
   input: RoleChangeInput,
   subjectId: AuditSubjectId<'user'>
 ): Promise<UserResult<RoleChangeCompleted | UserForbiddenOutcome>> => {
-  const locked = await lockRoleChangePrincipals(context, input);
+  const locked = await context.securityRepository.lockMutationPrincipals({
+    actorId: input.currentUserId,
+    targetId: input.id,
+  });
   if (locked.isError()) return Result.Error(locked.getError());
   const { actor, target } = locked.get();
   if (
@@ -180,8 +132,23 @@ const runRoleChange = async (
   ) {
     return Result.Ok({ type: 'user_forbidden' });
   }
+  if (target.type === 'user_security_principal_not_found') {
+    return Result.Ok(completed({ type: 'user_not_found' }));
+  }
 
-  return executeLockedMutation(context, input, subjectId, target);
+  const current = await context.userRepository.getUpdateSnapshot(input.id);
+  if (current.isError()) return Result.Error(current.getError());
+  const currentOutcome = current.get();
+  if (currentOutcome.type === 'user_not_found') {
+    return Result.Ok(completed(currentOutcome));
+  }
+
+  return executeLockedMutation(
+    context,
+    input,
+    subjectId,
+    currentOutcome.snapshot
+  );
 };
 
 export async function updateUserRole(

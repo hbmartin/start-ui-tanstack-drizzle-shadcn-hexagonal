@@ -5,6 +5,7 @@ import { listUserSessions } from './application/use-cases/list-user-sessions';
 import { listUsers } from './application/use-cases/list-users';
 import { revokeUserSession } from './application/use-cases/revoke-user-session';
 import { revokeUserSessions } from './application/use-cases/revoke-user-sessions';
+import { signOutCurrentSession } from './application/use-cases/sign-out-current-session';
 import type { UserUseCaseDeps } from './application/use-cases/types';
 import { updateUser } from './application/use-cases/update-user';
 
@@ -24,6 +25,9 @@ export function createUserUseCases(deps: UserUseCaseDeps) {
       revokeUserSessions(deps, input),
     revokeSession: (input: Parameters<typeof revokeUserSession>[1]) =>
       revokeUserSession(deps, input),
+    signOutCurrentSession: (
+      input: Parameters<typeof signOutCurrentSession>[1]
+    ) => signOutCurrentSession(deps, input),
   };
 }
 

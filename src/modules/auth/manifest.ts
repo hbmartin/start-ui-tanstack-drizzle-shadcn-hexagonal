@@ -39,12 +39,6 @@ export const authCapabilityManifest = defineCapabilityManifest({
       access: { kind: 'public' },
     },
     {
-      routeId: '/logout',
-      file: 'src/routes/logout.tsx',
-      kind: 'page',
-      access: { kind: 'authenticated' },
-    },
-    {
       routeId: '/onboarding',
       file: 'src/routes/onboarding/route.tsx',
       kind: 'layout',
@@ -106,7 +100,7 @@ export const authCapabilityManifest = defineCapabilityManifest({
   },
   permissions: {
     resources: [
-      { resource: 'session', actions: ['list', 'revoke', 'delete'] },
+      { resource: 'session', actions: ['list', 'revoke'] },
       { resource: 'apps', actions: ['app', 'manager'] },
     ],
     presetRoleGrants: [
@@ -115,7 +109,7 @@ export const authCapabilityManifest = defineCapabilityManifest({
       {
         role: 'admin',
         resource: 'session',
-        actions: ['list', 'revoke', 'delete'],
+        actions: ['list', 'revoke'],
       },
       { role: 'admin', resource: 'apps', actions: ['app', 'manager'] },
     ],
@@ -159,7 +153,7 @@ export const authCapabilityManifest = defineCapabilityManifest({
     {
       key: 'rate-limiting',
       profiles: ['node', 'vercel', 'cloudflare'],
-      required: 'when-enabled',
+      required: 'always',
     },
   ],
   ownedPaths: [
@@ -174,7 +168,6 @@ export const authCapabilityManifest = defineCapabilityManifest({
     'src/routes/login/index.tsx',
     'src/routes/login/route.tsx',
     'src/routes/login/verify.index.tsx',
-    'src/routes/logout.tsx',
     'src/routes/onboarding/index.tsx',
     'src/routes/onboarding/route.tsx',
     'tsconfig.stryker.auth.json',
