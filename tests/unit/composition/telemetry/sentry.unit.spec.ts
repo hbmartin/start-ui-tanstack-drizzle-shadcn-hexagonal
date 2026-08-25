@@ -363,7 +363,9 @@ describe('Sentry telemetry composition', () => {
       exception: {
         values: [
           {
-            stacktrace: { frames: [{ debug_id: 'not-a-debug-id' }] },
+            stacktrace: {
+              frames: [{ debug_id: 'not-a-debug-id', filename: codeFile }],
+            },
             type: 'Error',
           },
         ],
@@ -404,6 +406,91 @@ describe('Sentry telemetry composition', () => {
     expect(
       sanitizeSentryEvent({ release: 'start-ui-web@v5.0.0-alpha.1+7308e9c2' })
     ).toHaveProperty('release', 'start-ui-web@v5.0.0-alpha.1+7308e9c2');
+  });
+
+  it('retains at most 50 unique source-map identities', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const codeFile = 'https://cdn.example/assets/app.js';
+    const debugId = (index: number) =>
+      `00000000-0000-0000-0000-${index.toString(16).padStart(12, '0')}`;
+
+    const sanitized = sanitizeSentryEvent({
+      debug_meta: {
+        images: Array.from({ length: 51 }, (_, index) => ({
+          code_file: codeFile,
+          debug_id: debugId(index),
+          type: 'sourcemap',
+        })),
+      },
+      exception: {
+        values: [
+          {
+            stacktrace: { frames: [{ filename: codeFile }] },
+            type: 'Error',
+          },
+        ],
+      },
+    }) as { debug_meta?: { images?: Array<{ debug_id: string }> } };
+
+    expect(sanitized.debug_meta?.images).toHaveLength(50);
+    expect(sanitized.debug_meta?.images?.at(-1)?.debug_id).toBe(debugId(49));
+    expect(sanitized.debug_meta?.images).not.toContainEqual(
+      expect.objectContaining({ debug_id: debugId(50) })
+    );
+  });
+
+  it('scans at most 1,000 source-map records', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const acceptedPath = 'https://cdn.example/assets/accepted.js';
+    const excludedPath = 'https://cdn.example/assets/excluded.js';
+    const acceptedId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const excludedId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const unmatched = Array.from({ length: 999 }, (_, index) => ({
+      code_file: `https://cdn.example/assets/unmatched-${index}.js`,
+      debug_id: `00000000-0000-0000-0000-${index
+        .toString(16)
+        .padStart(12, '0')}`,
+      type: 'sourcemap',
+    }));
+
+    const sanitized = sanitizeSentryEvent({
+      debug_meta: {
+        images: [
+          ...unmatched,
+          {
+            code_file: acceptedPath,
+            debug_id: acceptedId,
+            type: 'sourcemap',
+          },
+          {
+            code_file: excludedPath,
+            debug_id: excludedId,
+            type: 'sourcemap',
+          },
+        ],
+      },
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [{ filename: acceptedPath }, { filename: excludedPath }],
+            },
+            type: 'Error',
+          },
+        ],
+      },
+    });
+
+    expect(sanitized).toHaveProperty('debug_meta.images', [
+      {
+        code_file: '/assets/accepted.js',
+        debug_id: acceptedId,
+        type: 'sourcemap',
+      },
+    ]);
+    expect(JSON.stringify(sanitized)).not.toContain(excludedId);
   });
 
   it('never exports dynamic request path segments', async () => {

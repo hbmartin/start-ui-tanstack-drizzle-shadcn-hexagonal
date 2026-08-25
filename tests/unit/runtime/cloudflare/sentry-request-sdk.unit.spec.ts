@@ -19,9 +19,12 @@ describe('Cloudflare Sentry SDK lifecycle', () => {
         cwd: process.cwd(),
         encoding: 'utf8',
         env: { ...process.env, NODE_ENV: 'test' },
+        killSignal: 'SIGKILL',
+        timeout: 10_000,
       }
     );
 
+    expect(result.error).toBeUndefined();
     expect({ status: result.status, stderr: result.stderr }).toEqual({
       status: 0,
       stderr: '',

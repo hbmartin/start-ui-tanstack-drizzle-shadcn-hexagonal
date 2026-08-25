@@ -6,6 +6,7 @@ const resolve = (filePath: string) =>
   path.resolve(import.meta.dirname, filePath);
 
 export default defineConfig({
+  root: import.meta.dirname,
   plugins: [
     cloudflareTest({
       miniflare: {
@@ -17,12 +18,13 @@ export default defineConfig({
           {
             name: 'telemetry-tail-collector',
             modules: true,
-            scriptPath:
-              './tests/cloudflare/support/telemetry-tail-collector.mjs',
+            scriptPath: resolve(
+              './tests/cloudflare/support/telemetry-tail-collector.mjs'
+            ),
           },
         ],
       },
-      wrangler: { configPath: './wrangler.json' },
+      wrangler: { configPath: resolve('./wrangler.json') },
     }),
   ],
   resolve: {

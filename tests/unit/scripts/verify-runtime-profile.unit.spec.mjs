@@ -165,6 +165,46 @@ describe('runtime artifact verifier', () => {
     ).toThrow('must not contain .dev.vars');
   });
 
+  it.each([[], 'nodejs_compatibility'])(
+    'rejects malformed source AsyncLocalStorage compatibility flags: %j',
+    (compatibilityFlags) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const sourceConfig = JSON.parse(
+        fs.readFileSync(path.join(root, 'wrangler.json'), 'utf8')
+      );
+      writeJson(root, 'wrangler.json', {
+        ...sourceConfig,
+        compatibility_flags: compatibilityFlags,
+      });
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('Cloudflare Sentry AsyncLocalStorage compatibility');
+    }
+  );
+
+  it.each([[], 'nodejs_compatibility'])(
+    'rejects malformed generated AsyncLocalStorage compatibility flags: %j',
+    (compatibilityFlags) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const generatedConfig = JSON.parse(
+        fs.readFileSync(path.join(root, 'dist/server/wrangler.json'), 'utf8')
+      );
+      writeJson(root, 'dist/server/wrangler.json', {
+        ...generatedConfig,
+        compatibility_flags: compatibilityFlags,
+      });
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('Cloudflare generated AsyncLocalStorage compatibility');
+    }
+  );
+
   it('rejects runtime-specific provider leakage recursively', () => {
     const cloudflareRoot = fixture();
     createCloudflareArtifact(cloudflareRoot);

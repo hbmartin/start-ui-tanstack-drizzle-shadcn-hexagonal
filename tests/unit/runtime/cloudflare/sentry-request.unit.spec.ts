@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -7,6 +5,7 @@ import {
   takeRequestCompletions,
 } from '@/runtime/request-completion';
 import {
+  initializeCloudflareSentryApplication,
   initializeCloudflareSentryIsolation,
   runWithCloudflareSentry,
 } from '@/runtime/cloudflare/sentry-request';
@@ -16,32 +15,77 @@ beforeEach(() => {
 });
 
 const requestOptions = {
+  context: {
+    waitUntil() {},
+  } as never,
   options: {},
   request: new Request('https://app.example.test'),
-} as never;
+};
+
+const requestApi = (wrapRequestHandler: (...args: never[]) => unknown) => ({
+  withScope: <T>(callback: () => T) => callback(),
+  wrapRequestHandler,
+});
 
 describe('Cloudflare Sentry request isolation', () => {
-  it('installs request isolation once before application bootstrap', () => {
-    const source = readFileSync(
-      new URL(
-        '../../../../src/runtime/cloudflare/server-entry.ts',
-        import.meta.url
-      ),
-      'utf8'
-    );
-    const installIndex = source.indexOf(
-      'initializeCloudflareSentryIsolation(Sentry)'
-    );
-    const applicationIndex = source.indexOf(
-      "createApplicationServerEntry('cloudflare')"
+  it('installs request isolation before loading the application', async () => {
+    const calls: string[] = [];
+    const api = {
+      setAsyncLocalStorageAsyncContextStrategy: vi.fn(() => {
+        calls.push('isolation');
+      }),
+    };
+
+    const initialized = await initializeCloudflareSentryApplication(
+      api as never,
+      async () => {
+        calls.push('application');
+        return { fetch: vi.fn() };
+      }
     );
 
-    expect(installIndex).toBeGreaterThanOrEqual(0);
-    expect(applicationIndex).toBeGreaterThan(installIndex);
-    expect(
-      source.match(/initializeCloudflareSentryIsolation\(Sentry\)/gu)
-    ).toHaveLength(1);
+    expect(calls).toEqual(['isolation', 'application']);
+    expect(api.setAsyncLocalStorageAsyncContextStrategy).toHaveBeenCalledOnce();
+    expect(initialized).toEqual({
+      application: expect.objectContaining({ fetch: expect.any(Function) }),
+      sentryRequestIsolationReady: true,
+    });
   });
+
+  it.each(['HEAD', 'OPTIONS'])(
+    'uses a body-capable lifecycle request for %s without changing the application request',
+    async (method) => {
+      const request = new Request('https://app.example.test/resource', {
+        method,
+      });
+      const applicationResponse = new Response(null, { status: 204 });
+      const handle = vi.fn(async () => applicationResponse);
+      const api = requestApi(
+        vi.fn(async (_options, handler) => handler()) as never
+      );
+
+      await expect(
+        runWithCloudflareSentry({
+          api: api as never,
+          handle,
+          request,
+          requestOptions: { ...requestOptions, request } as never,
+        })
+      ).resolves.toBe(applicationResponse);
+
+      expect(handle).toHaveBeenCalledOnce();
+      const wrappedRequest = (
+        vi.mocked(api.wrapRequestHandler).mock.calls[0]?.[0] as
+          | { request: Request }
+          | undefined
+      )?.request;
+      expect(wrappedRequest).toBeInstanceOf(Request);
+      expect(wrappedRequest).not.toBe(request);
+      expect(wrappedRequest?.method).toBe('GET');
+      expect(wrappedRequest?.url).toBe(request.url);
+      expect(request.method).toBe(method);
+    }
+  );
 
   it('disables Sentry safely when async-context installation fails', () => {
     const report = vi.spyOn(globalThis.console, 'error');
@@ -64,12 +108,12 @@ describe('Cloudflare Sentry request isolation', () => {
     const request = new Request('https://app.example.test');
     const body = new ReadableStream();
     const applicationResponse = new Response(body);
-    const api = {
-      wrapRequestHandler: vi.fn(async (_options, handler) => {
+    const api = requestApi(
+      vi.fn(async (_options, handler) => {
         const sentinel = await handler();
         return new Response(sentinel.body, sentinel);
-      }),
-    };
+      }) as never
+    );
 
     const returned = await runWithCloudflareSentry({
       api: api as never,
@@ -86,11 +130,11 @@ describe('Cloudflare Sentry request isolation', () => {
     const request = new Request('https://app.example.test');
     const applicationResponse = new Response('available');
     const handle = vi.fn(async () => applicationResponse);
-    const api = {
-      wrapRequestHandler: vi.fn(async () => {
+    const api = requestApi(
+      vi.fn(async () => {
         throw new Error('provider unavailable');
-      }),
-    };
+      }) as never
+    );
 
     await expect(
       runWithCloudflareSentry({
@@ -109,9 +153,9 @@ describe('Cloudflare Sentry request isolation', () => {
     const handle = vi.fn(async () => {
       throw applicationFailure;
     });
-    const api = {
-      wrapRequestHandler: vi.fn(async (_options, handler) => handler()),
-    };
+    const api = requestApi(
+      vi.fn(async (_options, handler) => handler()) as never
+    );
 
     await expect(
       runWithCloudflareSentry({
@@ -128,12 +172,12 @@ describe('Cloudflare Sentry request isolation', () => {
     const request = new Request('https://app.example.test');
     const applicationResponse = new Response('available');
     const handle = vi.fn(async () => applicationResponse);
-    const api = {
-      wrapRequestHandler: vi.fn(async (_options, handler) => {
+    const api = requestApi(
+      vi.fn(async (_options, handler) => {
         await handler();
         return handler();
-      }),
-    };
+      }) as never
+    );
 
     await expect(
       runWithCloudflareSentry({
@@ -154,8 +198,8 @@ describe('Cloudflare Sentry request isolation', () => {
     });
     registerRequestCompletion(request, streamReady);
     let disposed = false;
-    const api = {
-      wrapRequestHandler: vi.fn(async (_options, handler) => {
+    const api = requestApi(
+      vi.fn(async (_options, handler) => {
         const sentinel = await handler();
         const transform = new TransformStream({
           flush() {
@@ -166,8 +210,8 @@ describe('Cloudflare Sentry request isolation', () => {
           headers: sentinel.headers,
           status: sentinel.status,
         });
-      }),
-    };
+      }) as never
+    );
 
     await runWithCloudflareSentry({
       api: api as never,

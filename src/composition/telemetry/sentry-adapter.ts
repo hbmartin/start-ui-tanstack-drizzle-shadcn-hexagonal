@@ -172,11 +172,6 @@ const projectSentryFrame = (frame: unknown): Record<string, unknown> => {
 
   assignDefined(projected, 'abs_path', toRequestPathname(record.abs_path));
   assignDefined(projected, 'colno', finiteNumber(record.colno));
-  assignDefined(
-    projected,
-    'debug_id',
-    matchingSafeValue(record.debug_id, DEBUG_ID)
-  );
   assignDefined(projected, 'filename', toRequestPathname(record.filename));
   assignDefined(projected, 'function', boundedSafeLabel(record.function));
   assignDefined(

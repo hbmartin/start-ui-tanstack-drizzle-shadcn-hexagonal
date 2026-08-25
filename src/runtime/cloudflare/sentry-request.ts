@@ -7,7 +7,7 @@ import {
 
 type CloudflareSentryRequestApi = Pick<
   typeof import('@sentry/cloudflare'),
-  'wrapRequestHandler'
+  'withScope' | 'wrapRequestHandler'
 >;
 type CloudflareSentryIsolationApi = Pick<
   typeof import('@sentry/cloudflare'),
@@ -58,6 +58,36 @@ export const initializeCloudflareSentryIsolation = (
 };
 
 /**
+ * Enforces the import boundary: request isolation is installed before any
+ * application/TanStack module supplied by `loadApplication` is evaluated.
+ * The SDK itself requires the verified Worker `nodejs_compat` flag so that its
+ * static `node:async_hooks` import can load before this function is reached.
+ */
+export const initializeCloudflareSentryApplication = async <TApplication>(
+  api: CloudflareSentryIsolationApi,
+  loadApplication: () => Promise<TApplication>
+): Promise<{
+  application: TApplication;
+  sentryRequestIsolationReady: boolean;
+}> => {
+  const sentryRequestIsolationReady = initializeCloudflareSentryIsolation(api);
+  const application = await loadApplication();
+  return { application, sentryRequestIsolationReady };
+};
+
+const sentryLifecycleRequest = (request: Request): Request => {
+  if (request.method !== 'HEAD' && request.method !== 'OPTIONS') return request;
+
+  // The SDK disposes its client immediately for HEAD/OPTIONS instead of
+  // waiting for the response body. A bodyless GET is used only by Sentry's
+  // lifecycle wrapper; the application still receives the original request.
+  return new Request(request.url, {
+    headers: request.headers,
+    method: 'GET',
+  });
+};
+
+/**
  * Gives Sentry a request-isolated client without letting its streaming wrapper
  * consume or replace the application's Response/body. The wrapper sees only a
  * bodyless sentinel; the original application outcome is returned verbatim.
@@ -90,18 +120,23 @@ export const runWithCloudflareSentry = async ({
   };
 
   try {
-    const sentryResponse = await api.wrapRequestHandler(
-      requestOptions,
-      async () => {
-        applicationOutcome = await runApplicationOnce();
-        if (applicationOutcome.type === 'failed') {
-          throw applicationOutcome.failure;
+    const sentryResponse = await api.withScope(() =>
+      api.wrapRequestHandler(
+        {
+          ...requestOptions,
+          request: sentryLifecycleRequest(request) as never,
+        },
+        async () => {
+          applicationOutcome = await runApplicationOnce();
+          if (applicationOutcome.type === 'failed') {
+            throw applicationOutcome.failure;
+          }
+          const applicationCompletion = Promise.allSettled(
+            snapshotRequestCompletions(request)
+          );
+          return sentrySentinelResponse(applicationCompletion);
         }
-        const applicationCompletion = Promise.allSettled(
-          snapshotRequestCompletions(request)
-        );
-        return sentrySentinelResponse(applicationCompletion);
-      }
+      )
     );
     if (sentryResponse.body) {
       const sentryCompletion = sentryResponse

@@ -1,4 +1,12 @@
 let records = [];
+const MAX_RECORDS = 5_000;
+
+const appendRecord = (record) => {
+  records.push(record);
+  if (records.length > MAX_RECORDS) {
+    records.splice(0, records.length - MAX_RECORDS);
+  }
+};
 
 const eventName = (event) =>
   event.event.type === 'spanOpen' ? event.event.name : null;
@@ -28,9 +36,9 @@ export default {
     return Response.json(records);
   },
   tailStream(onset) {
-    records.push(projectEvent(onset));
+    appendRecord(projectEvent(onset));
     return (event) => {
-      records.push(projectEvent(event));
+      appendRecord(projectEvent(event));
     };
   },
 };

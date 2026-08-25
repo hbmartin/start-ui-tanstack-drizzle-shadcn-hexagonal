@@ -55,6 +55,10 @@ const assertDirectory = (directoryPath) =>
     directoryPath
   );
 
+const hasCompatibilityFlag = (config, flag) =>
+  Array.isArray(config.compatibility_flags) &&
+  config.compatibility_flags.includes(flag);
+
 const readJson = (filePath) => {
   assertFile(filePath);
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -159,7 +163,7 @@ const verifyCloudflare = (root, expectedAppSlug) => {
   const generatedConfig = readJson(path.join(output, 'server/wrangler.json'));
   assert(sourceConfig.main === 'src/server.ts', 'Cloudflare source entry');
   assert(
-    sourceConfig.compatibility_flags?.includes('nodejs_compat'),
+    hasCompatibilityFlag(sourceConfig, 'nodejs_compat'),
     'Cloudflare Sentry AsyncLocalStorage compatibility'
   );
   assert(
@@ -177,7 +181,7 @@ const verifyCloudflare = (root, expectedAppSlug) => {
     'Cloudflare generated compatibility date'
   );
   assert(
-    generatedConfig.compatibility_flags?.includes('nodejs_compat'),
+    hasCompatibilityFlag(generatedConfig, 'nodejs_compat'),
     'Cloudflare generated AsyncLocalStorage compatibility'
   );
   assert(
