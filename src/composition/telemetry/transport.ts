@@ -11,10 +11,10 @@ import {
 import { getClientIp } from '@/platform/http/get-client-ip';
 import { defaultRateLimiter } from '@/platform/http/rate-limiter';
 import type { TelemetryAdapter, TelemetryLogLevel } from '@/platform/telemetry';
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 import { telemetrySignalUrl } from './collector-url';
-import { recordLocalTelemetrySummary } from './local-sqlite-sink';
+import { recordLocalTelemetrySummary } from './local-summary';
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -514,7 +514,7 @@ export const handleFrontendLogsRequest = async (request: Request) => {
   if (!batch.ok) return withTelemetryVary(batch.response);
 
   const logger = getKernel().logger;
-  const telemetry = getTelemetry();
+  const telemetry = telemetryProxy;
 
   for (const record of batch.records) {
     recordFrontendLog({ logger, record, telemetry });

@@ -1,29 +1,18 @@
 import { mockLogger } from '@tests/server/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 
-const sentryMiddleware = vi.hoisted(() => ({
-  function: { type: 'sentry-function' },
-  request: { type: 'sentry-request' },
-}));
-
-vi.mock('@sentry/tanstackstart-react', () => ({
-  sentryGlobalFunctionMiddleware: sentryMiddleware.function,
-  sentryGlobalRequestMiddleware: sentryMiddleware.request,
-}));
-
 describe('TanStack Start instance', () => {
-  it('adds Sentry, telemetry, security headers, auth context, browser mutation guard, server-function body limit, and server-function CSRF middleware', async () => {
+  it('adds telemetry, security headers, auth context, browser mutation guard, server-function body limit, and server-function CSRF middleware', async () => {
     const { startInstance } = await import('@/start');
     const options = (startInstance as ExplicitAny).options;
-    const telemetry = options.requestMiddleware[1] as ExplicitAny;
-    const securityHeaders = options.requestMiddleware[2] as ExplicitAny;
-    const authContext = options.requestMiddleware[3] as ExplicitAny;
-    const browserMutationGuard = options.requestMiddleware[4] as ExplicitAny;
-    const serverFnBodyLimit = options.requestMiddleware[5] as ExplicitAny;
-    const csrf = options.requestMiddleware[6] as ExplicitAny;
+    const telemetry = options.requestMiddleware[0] as ExplicitAny;
+    const securityHeaders = options.requestMiddleware[1] as ExplicitAny;
+    const authContext = options.requestMiddleware[2] as ExplicitAny;
+    const browserMutationGuard = options.requestMiddleware[3] as ExplicitAny;
+    const serverFnBodyLimit = options.requestMiddleware[4] as ExplicitAny;
+    const csrf = options.requestMiddleware[5] as ExplicitAny;
 
-    expect(options.requestMiddleware[0]).toBe(sentryMiddleware.request);
-    expect(options.functionMiddleware).toEqual([sentryMiddleware.function]);
+    expect(options.functionMiddleware).toEqual([]);
     expect(telemetry.type).toBe('request');
     expect(securityHeaders.type).toBe('request');
     expect(authContext.type).toBe('request');

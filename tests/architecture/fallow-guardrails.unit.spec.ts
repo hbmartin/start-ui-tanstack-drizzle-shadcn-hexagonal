@@ -22,6 +22,19 @@ type BoundaryReport = {
   kind: 'list-boundaries';
 };
 
+type GuardReport = {
+  files: Array<{
+    boundary: {
+      unrestricted: boolean;
+      allowed_zones: string[];
+    };
+    path: string;
+    policy_rules: Array<{ rule_id: string }>;
+    zone: { name: string } | null;
+  }>;
+  kind: 'guard';
+};
+
 const projectRoot = process.cwd();
 const fallowBin = path.join(projectRoot, 'node_modules', '.bin', 'fallow');
 const tempDirectories: string[] = [];
@@ -193,6 +206,79 @@ const makePersistenceBoundaryFixture = () => {
   return root;
 };
 
+const makeRuntimeTelemetryBoundaryFixture = () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fallow-runtime-'));
+  tempDirectories.push(root);
+  writeFixture(
+    root,
+    '.fallowrc.json',
+    JSON.stringify({
+      boundaries: {
+        coverage: { requireAllFiles: true },
+        rules: [
+          {
+            allow: ['runtime-cloudflare', 'composition-telemetry-shared'],
+            from: 'runtime-cloudflare',
+          },
+          {
+            allow: ['runtime-vercel', 'composition-telemetry-shared'],
+            from: 'runtime-vercel',
+          },
+          {
+            allow: ['composition-telemetry-node'],
+            from: 'composition-telemetry-node',
+          },
+          {
+            allow: ['composition-telemetry-shared'],
+            from: 'composition-telemetry-shared',
+          },
+        ],
+        zones: [
+          {
+            name: 'runtime-cloudflare',
+            patterns: ['src/runtime/cloudflare/**'],
+          },
+          {
+            name: 'runtime-vercel',
+            patterns: ['src/runtime/vercel/**'],
+          },
+          {
+            name: 'composition-telemetry-node',
+            patterns: ['src/composition/telemetry/otel.server.ts'],
+          },
+          {
+            name: 'composition-telemetry-shared',
+            patterns: ['src/composition/telemetry/shared.ts'],
+          },
+        ],
+      },
+      entry: ['src/**/*.ts'],
+      rules: { 'boundary-violation': 'error' },
+    })
+  );
+  writeFixture(
+    root,
+    'src/runtime/cloudflare/telemetry.ts',
+    `import { nodeTelemetry } from '../../composition/telemetry/otel.server';\nexport const telemetry = nodeTelemetry;\n`
+  );
+  writeFixture(
+    root,
+    'src/runtime/vercel/telemetry.ts',
+    `import { nodeTelemetry } from '../../composition/telemetry/otel.server';\nexport const telemetry = nodeTelemetry;\n`
+  );
+  writeFixture(
+    root,
+    'src/composition/telemetry/otel.server.ts',
+    `export const nodeTelemetry = 'node-only';\n`
+  );
+  writeFixture(
+    root,
+    'src/composition/telemetry/shared.ts',
+    `export const sharedTelemetry = 'shared';\n`
+  );
+  return root;
+};
+
 afterEach(() => {
   for (const directory of tempDirectories.splice(0)) {
     fs.rmSync(directory, { force: true, recursive: true });
@@ -215,7 +301,20 @@ describe('Fallow guardrails', () => {
     const report = JSON.parse(result.stdout) as BoundaryReport;
     expect(report.kind).toBe('list-boundaries');
     expect(report.boundaries.configured).toBe(true);
-    expect(report.boundaries.zones).toHaveLength(37);
+    expect(report.boundaries.zones).toHaveLength(44);
+    for (const runtimeZone of [
+      'runtime-cloudflare',
+      'runtime-node',
+      'runtime-node-platform',
+      'runtime-shared',
+      'runtime-vercel',
+      'composition-telemetry-node',
+      'composition-telemetry-server',
+    ]) {
+      expect(
+        report.boundaries.zones.find(({ name }) => name === runtimeZone)
+      ).toMatchObject({ file_count: expect.any(Number) });
+    }
     expect(
       report.boundaries.zones.find(
         ({ name }) => name === 'auth-administration-gate'
@@ -250,6 +349,52 @@ describe('Fallow guardrails', () => {
     expect(modules).toMatchObject({ status: 'ok' });
     expect(modules?.children).toHaveLength(8);
   }, 15_000);
+
+  it('guards runtime bootstrap files while keeping generic entries vendor-free', () => {
+    const result = runFallow([
+      'guard',
+      'src/runtime/cloudflare/server-entry.ts',
+      'src/runtime/create-application-server-entry.ts',
+      'src/start.ts',
+      'src/server.ts',
+      '--format',
+      'json',
+      '--quiet',
+      '--no-cache',
+      '--no-type-aware',
+    ]);
+
+    expect(result.status).toBe(0);
+    const report = JSON.parse(result.stdout) as GuardReport;
+    expect(report.kind).toBe('guard');
+    const runtimeFiles = report.files.filter((file) =>
+      file.path.startsWith('src/runtime/')
+    );
+    expect(runtimeFiles).toHaveLength(2);
+    expect(runtimeFiles).toMatchObject([
+      {
+        boundary: {
+          allowed_zones: expect.arrayContaining(['runtime-cloudflare']),
+          unrestricted: false,
+        },
+        zone: { name: 'runtime-cloudflare' },
+      },
+      {
+        boundary: {
+          allowed_zones: expect.arrayContaining(['runtime-shared']),
+          unrestricted: false,
+        },
+        zone: { name: 'runtime-shared' },
+      },
+    ]);
+    for (const path of ['src/start.ts', 'src/server.ts']) {
+      expect(
+        report.files
+          .find((file) => file.path === path)
+          ?.policy_rules.map(({ rule_id }) => rule_id)
+      ).toContain('sentry-owned-by-entrypoints-and-telemetry');
+    }
+  });
 
   it('detects boundary, provider-policy, duplication, and health regressions', () => {
     const root = makeNegativeFixture();
@@ -306,5 +451,19 @@ describe('Fallow guardrails', () => {
     expect(result.stdout).toContain(
       'src/modules/book/infrastructure/drizzle/schema.ts'
     );
+  });
+
+  it('rejects edge and serverless imports from Node-only telemetry composition', () => {
+    const fixture = makeRuntimeTelemetryBoundaryFixture();
+    const result = runFallow(
+      ['dead-code', '--format', 'json', '--quiet', '--no-cache'],
+      fixture
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('boundary_violations');
+    expect(result.stdout).toContain('src/runtime/cloudflare/telemetry.ts');
+    expect(result.stdout).toContain('src/runtime/vercel/telemetry.ts');
+    expect(result.stdout).toContain('src/composition/telemetry/otel.server.ts');
   });
 });

@@ -2,7 +2,7 @@ import * as Sentry from '@sentry/tanstackstart-react';
 
 import { envClient } from '@/platform/env/client';
 import {
-  createNoOpTelemetry,
+  reportTelemetryFailure,
   type TelemetryAdapter,
 } from '@/platform/telemetry';
 
@@ -34,7 +34,13 @@ export const initTelemetryClient = (_router?: unknown) => {
   if (initialized) return;
   initialized = true;
 
-  const adapters = [initOpenTelemetryClient()].filter(isTelemetryAdapter);
+  let otelAdapter: TelemetryAdapter | undefined;
+  try {
+    otelAdapter = initOpenTelemetryClient();
+  } catch (failure) {
+    reportTelemetryFailure('otel.client.initialize', failure);
+  }
+  const adapters = [otelAdapter].filter(isTelemetryAdapter);
 
   if (!envClient.VITE_SENTRY_DSN) {
     if (adapters.length > 0) {
@@ -43,20 +49,27 @@ export const initTelemetryClient = (_router?: unknown) => {
     return;
   }
 
-  Sentry.init({
-    dsn: envClient.VITE_SENTRY_DSN,
-    environment: envClient.VITE_SENTRY_ENVIRONMENT,
-    tracesSampleRate: SENTRY_ERROR_ONLY_TRACES_SAMPLE_RATE,
-    sendDefaultPii: false,
-    tunnel: envClient.VITE_SENTRY_TUNNEL_PATH,
-    beforeSend: sanitizeSentryEvent,
-    integrations: [],
-  });
+  try {
+    Sentry.init({
+      dsn: envClient.VITE_SENTRY_DSN,
+      enableLogs: false,
+      environment: envClient.VITE_SENTRY_ENVIRONMENT,
+      tracesSampleRate: SENTRY_ERROR_ONLY_TRACES_SAMPLE_RATE,
+      sendDefaultPii: false,
+      tunnel: envClient.VITE_SENTRY_TUNNEL_PATH,
+      beforeSend: sanitizeSentryEvent,
+      integrations: [],
+    });
 
-  adapters.push(createSentryTelemetryAdapter(Sentry));
-  setTelemetry(
-    createTelemetryAdapterChain(
-      adapters.length > 0 ? adapters : [createNoOpTelemetry()]
-    )
-  );
+    adapters.push(
+      createSentryTelemetryAdapter(Sentry, {
+        currentCorrelation: () => otelAdapter?.currentCorrelation() ?? {},
+      })
+    );
+  } catch (failure) {
+    reportTelemetryFailure('sentry.client.initialize', failure);
+  }
+  if (adapters.length > 0) {
+    setTelemetry(createTelemetryAdapterChain(adapters));
+  }
 };

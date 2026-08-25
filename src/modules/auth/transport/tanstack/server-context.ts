@@ -41,8 +41,15 @@ import {
 } from '@/modules/kernel/server';
 import { timingStore } from '@/modules/kernel/transport/tanstack/timing-store';
 import { cachePrivateNoStore } from '@/platform/http/cache-control';
-import type { TelemetryAdapter } from '@/platform/telemetry';
-import { createNoOpTelemetry } from '@/platform/telemetry';
+import type {
+  RequestExceptionCaptureState,
+  TelemetryAdapter,
+} from '@/platform/telemetry';
+import {
+  claimRequestException,
+  createNoOpTelemetry,
+  isRequestExceptionCaptureState,
+} from '@/platform/telemetry';
 
 type ServerTimingEntry = { name: string; durationMs: number };
 
@@ -83,6 +90,7 @@ type ServerContextDeps = {
 
 type AppStartRequestContextLike = {
   requestId?: unknown;
+  telemetryCaptureState?: unknown;
   auth?: {
     getSession?: () => Promise<AuthSession | null>;
   };
@@ -139,7 +147,11 @@ const handleError = (error: unknown, procedureLogger: ProcedureLogger) => {
     mappedError.message === 'Unhandled error' &&
     mappedError !== error;
 
-  if (shouldLogOriginalError) {
+  const captureState = getStartRequestExceptionCaptureState();
+  if (
+    shouldLogOriginalError &&
+    (!captureState || claimRequestException(captureState, error))
+  ) {
     procedureLogger.error({
       event: 'server_fn.error.unhandled',
       direction: 'inbound',
@@ -237,6 +249,13 @@ const getStartRequestContext = (): AppStartRequestContextLike | undefined => {
   } catch {
     return undefined;
   }
+};
+
+const getStartRequestExceptionCaptureState = ():
+  | RequestExceptionCaptureState
+  | undefined => {
+  const state = getStartRequestContext()?.telemetryCaptureState;
+  return isRequestExceptionCaptureState(state) ? state : undefined;
 };
 
 const getStartRequestId = () => {

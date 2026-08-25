@@ -16,6 +16,10 @@ export {
 export { getHttpConfig } from './infrastructure/config/http';
 export { getRedisConfig } from './infrastructure/config/redis';
 export {
+  getTelemetryConfig,
+  type TelemetryConfig,
+} from './infrastructure/config/telemetry';
+export {
   validateServerBuildConfig,
   validateServerConfig,
 } from './infrastructure/config/server';

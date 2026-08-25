@@ -1,6 +1,23 @@
+export { forceFlushTelemetry } from './flush';
+export type { TelemetryFlushOutcome } from './flush';
 export { createNoOpTelemetry } from './no-op';
-export { getTelemetry, setTelemetry, telemetryProxy } from './runtime';
+export { reportTelemetryFailure } from './report-failure';
+export {
+  bindRequestExceptionState,
+  claimRequestException,
+  createRequestExceptionCaptureState,
+  getRequestExceptionState,
+  isRequestExceptionCaptureState,
+} from './request-exception-state';
+export type { RequestExceptionCaptureState } from './request-exception-state';
+export {
+  getTelemetry,
+  isTelemetryAvailable,
+  setTelemetry,
+  telemetryProxy,
+} from './runtime';
 export { toTelemetryStringTags } from './tags';
+export { writeStructuredConsoleLog } from './structured-console';
 export type {
   TelemetryAdapter,
   TelemetryAttributes,

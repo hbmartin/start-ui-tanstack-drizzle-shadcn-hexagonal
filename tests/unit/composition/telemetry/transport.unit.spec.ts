@@ -45,9 +45,10 @@ vi.mock('@/composition/kernel', () => ({
 
 vi.mock('@/platform/telemetry', () => ({
   getTelemetry: () => telemetryMock,
+  telemetryProxy: telemetryMock,
 }));
 
-vi.mock('@/composition/telemetry/local-sqlite-sink', () => ({
+vi.mock('@/composition/telemetry/local-summary', () => ({
   recordLocalTelemetrySummary: localSummaryMock,
 }));
 

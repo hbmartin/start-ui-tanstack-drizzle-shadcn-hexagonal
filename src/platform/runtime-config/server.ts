@@ -1,6 +1,6 @@
 import { createServerFn, createServerOnlyFn } from '@tanstack/react-start';
 
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 import {
   type ConfigHandlers,
@@ -26,7 +26,7 @@ const getDeps = createServerOnlyFn(
 
 export const configEnv = createServerFn({ method: 'GET' }).handler(async () => {
   const { handlers } = await getDeps();
-  return getTelemetry().startSpan(
+  return telemetryProxy.startSpan(
     {
       attributes: {
         'operation.name': 'config.env',

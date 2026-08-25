@@ -6,6 +6,7 @@
   // even when the demo preset does not consume every export.
   "entry": [
     "instrument.server.mjs",
+    "src/entry-server.ts",
     "src/server.ts",
     "src/start.ts",
     "src/router.tsx",
@@ -185,6 +186,26 @@
   // permissive module zone.
   "boundaries": {
     "zones": [
+      {
+        "name": "runtime-node-platform",
+        "patterns": ["instrument.server.mjs"],
+      },
+      {
+        "name": "runtime-node",
+        "patterns": ["src/runtime/node/**"],
+      },
+      {
+        "name": "runtime-vercel",
+        "patterns": ["src/runtime/vercel/**"],
+      },
+      {
+        "name": "runtime-cloudflare",
+        "patterns": ["src/runtime/cloudflare/**"],
+      },
+      {
+        "name": "runtime-shared",
+        "patterns": ["src/entry-server.ts", "src/runtime/*.ts"],
+      },
       { "name": "start", "patterns": ["src/start.ts"] },
       { "name": "server-entry", "patterns": ["src/server.ts"] },
       {
@@ -194,6 +215,17 @@
       {
         "name": "user-composition",
         "patterns": ["src/composition/user.ts"],
+      },
+      {
+        "name": "composition-telemetry-node",
+        "patterns": [
+          "src/composition/telemetry/local-sqlite-sink.ts",
+          "src/composition/telemetry/otel.server.ts",
+        ],
+      },
+      {
+        "name": "composition-telemetry-server",
+        "patterns": ["src/composition/telemetry/sentry.server.ts"],
       },
       { "name": "composition", "patterns": ["src/composition/**"] },
       { "name": "routes", "patterns": ["src/routes/**"] },
@@ -330,6 +362,82 @@
       { "name": "types", "patterns": ["src/types/**"] },
     ],
     "rules": [
+      {
+        "from": "runtime-node-platform",
+        "allow": [
+          "runtime-node-platform",
+          "composition",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "runtime-node",
+        "allow": [
+          "runtime-node",
+          "runtime-node-platform",
+          "runtime-shared",
+          "composition",
+          "composition-telemetry-node",
+          "composition-telemetry-server",
+          "kernel-gates",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "runtime-vercel",
+        "allow": [
+          "runtime-vercel",
+          "runtime-node-platform",
+          "runtime-shared",
+          "composition",
+          "composition-telemetry-server",
+          "kernel-gates",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "runtime-cloudflare",
+        "allow": [
+          "runtime-cloudflare",
+          "runtime-shared",
+          "composition",
+          "kernel-gates",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "runtime-shared",
+        "allow": [
+          "runtime-shared",
+          "composition",
+          "kernel-gates",
+          "platform",
+          "platform-telemetry",
+          "types",
+        ],
+        "allowTypeOnly": ["start"],
+      },
+      {
+        "from": "composition-telemetry-node",
+        "allow": [
+          "composition",
+          "modules/kernel",
+          "platform-telemetry",
+          "types",
+        ],
+      },
+      {
+        "from": "composition-telemetry-server",
+        "allow": ["composition", "platform-telemetry", "types"],
+      },
       {
         "from": "manifest-gates",
         "allow": ["manifest-gates", "modules/kernel"],
@@ -634,6 +742,7 @@
       {
         "from": "server-entry",
         "allow": [
+          "runtime-shared",
           "start",
           "router",
           "composition",

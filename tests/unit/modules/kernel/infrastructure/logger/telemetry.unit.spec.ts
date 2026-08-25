@@ -102,20 +102,7 @@ describe('createTelemetryLogger', () => {
       },
     });
 
-    const emittedLog = vi.mocked(telemetry.emitLog).mock.calls[0]?.[0];
-    expect(emittedLog).toEqual(
-      expect.objectContaining({
-        attributes: expect.objectContaining({
-          correlationId: 'correlation-1',
-          requestId: 'request-1',
-          spanId: 'span-1',
-          traceId: 'trace-1',
-        }),
-        error: 'Provider rejected [REDACTED]',
-        event: 'email.send.failed',
-      })
-    );
-    expect(emittedLog).not.toHaveProperty('exception');
+    expect(telemetry.emitLog).not.toHaveBeenCalled();
     expect(telemetry.captureException).toHaveBeenCalledTimes(1);
     expect(telemetry.captureException).toHaveBeenCalledWith(exception, {
       tags: {
@@ -209,14 +196,7 @@ describe('createTelemetryLogger', () => {
       telemetryTags: { provider: 'better-auth' },
     });
 
-    const emittedLog = vi.mocked(telemetry.emitLog).mock.calls[0]?.[0];
-    expect(emittedLog).toEqual(
-      expect.objectContaining({
-        event: 'provider.failed',
-        level: 'error',
-      })
-    );
-    expect(emittedLog).not.toHaveProperty('exception');
+    expect(telemetry.emitLog).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(telemetry.captureException).toHaveBeenCalledTimes(1);
     expect(telemetry.captureException).toHaveBeenCalledWith(exception, {
@@ -294,6 +274,41 @@ describe('createTelemetryLogger', () => {
         },
       })
     );
+  });
+
+  it('does not let correlation, redaction, or exporter failures escape logging', () => {
+    vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    const telemetry = makeTelemetry();
+    vi.mocked(telemetry.currentCorrelation).mockImplementation(() => {
+      throw new Error('correlation failed');
+    });
+    const correlationLogger = createTelemetryLogger({
+      telemetry,
+      consoleMirror: false,
+    });
+    const redactionLogger = createTelemetryLogger({
+      telemetry: makeTelemetry(),
+      consoleMirror: false,
+      redactor: () => {
+        throw new Error('redaction failed');
+      },
+    });
+    const exporterTelemetry = makeTelemetry();
+    vi.mocked(exporterTelemetry.emitLog).mockImplementation(() => {
+      throw new Error('exporter failed');
+    });
+    const exporterLogger = createTelemetryLogger({
+      telemetry: exporterTelemetry,
+      consoleMirror: false,
+    });
+
+    expect(() =>
+      correlationLogger.info({ event: 'correlation.test' })
+    ).not.toThrow();
+    expect(() =>
+      redactionLogger.info({ event: 'redaction.test' })
+    ).not.toThrow();
+    expect(() => exporterLogger.info({ event: 'exporter.test' })).not.toThrow();
   });
 
   it('adds request context and prevents caller fields from overriding it', () => {

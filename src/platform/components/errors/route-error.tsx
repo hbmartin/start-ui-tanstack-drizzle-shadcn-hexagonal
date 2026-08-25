@@ -10,7 +10,7 @@ import {
 } from '@/platform/components/errors/page-error';
 import { Button } from '@/platform/components/ui/button';
 
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 import { frontendLogger } from '@/platform/telemetry/frontend-logger';
 
 import {
@@ -55,20 +55,14 @@ export const RouteError = ({ error, routeId }: RouteErrorProps) => {
   useEffect(() => {
     if (error === undefined) return;
 
-    const message = error instanceof Error ? error.message : 'Route error';
     const details = routeId ? { routeId } : undefined;
-    getTelemetry().captureException(error, {
+    telemetryProxy.captureException(error, {
       extra: details,
       level: 'error',
       tags: {
         event: 'route.error_boundary',
         ...(routeId ? { routeId } : {}),
       },
-    });
-    frontendLogger.error('route.error_boundary', {
-      error,
-      message,
-      ...(details ? { details } : {}),
     });
   }, [error, routeId]);
 

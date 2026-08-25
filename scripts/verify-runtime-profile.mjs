@@ -4,6 +4,39 @@ import { pathToFileURL } from 'node:url';
 
 const profileNames = ['node', 'vercel', 'cloudflare'];
 const profiles = new Set(profileNames);
+const forbiddenRuntimeTokens = {
+  cloudflare: [
+    '@sentry/node',
+    '@vercel/functions',
+    '@vercel/otel',
+    'AsyncLocalStorageContextManager',
+    'NodeTracerProvider',
+    '@opentelemetry/context-async-hooks',
+    '@opentelemetry/sdk-trace-node',
+    'telemetry_summary',
+  ],
+  node: [
+    '@sentry/cloudflare',
+    '@vercel/functions',
+    '@vercel/otel',
+    'cloudflare:workers',
+    'START_UI_TELEMETRY_METRICS',
+  ],
+  vercel: [
+    '@sentry/cloudflare',
+    'cloudflare:workers',
+    'initOpenTelemetryServer',
+    'otel.node.initialize',
+    'otel.server.shutdown',
+    'START_UI_TELEMETRY_METRICS',
+    'telemetry_summary',
+  ],
+};
+const requiredRuntimeTokens = {
+  cloudflare: ['cloudflare:workers', 'START_UI_TELEMETRY_METRICS'],
+  node: ['NodeTracerProvider', '@opentelemetry/context-async-hooks'],
+  vercel: ['@vercel/functions', '@vercel/otel'],
+};
 
 const fail = (message) => {
   throw new Error(`Runtime profile verification failed: ${message}`);
@@ -31,11 +64,12 @@ const assertOnlyProfileMarker = (filePath, expectedProfile) => {
   assertFile(filePath);
   const source = fs.readFileSync(filePath, 'utf8');
   for (const profile of profileNames) {
-    const marker = `createApplicationServerEntry("${profile}")`;
+    const marker = new RegExp(
+      `createApplicationServerEntry\\(["']${profile}["'](?:\\s*[,\\)])`,
+      'u'
+    );
     assert(
-      profile === expectedProfile
-        ? source.includes(marker)
-        : !source.includes(marker),
+      profile === expectedProfile ? marker.test(source) : !marker.test(source),
       `${filePath} must contain only the ${expectedProfile} profile marker`
     );
   }
@@ -48,6 +82,33 @@ const findFilesNamedLike = (directoryPath, predicate) => {
     .map((entry) => path.join(entry.parentPath, entry.name));
 };
 
+const assertNoForbiddenRuntimeTokens = (directoryPath, profile) => {
+  const files = findFilesNamedLike(directoryPath, (name) =>
+    /\.(?:cjs|js|json|mjs)$/u.test(name)
+  );
+  for (const filePath of files) {
+    const source = fs.readFileSync(filePath, 'utf8');
+    for (const token of forbiddenRuntimeTokens[profile]) {
+      assert(
+        !source.includes(token),
+        `${filePath} contains forbidden ${profile} runtime token ${token}`
+      );
+    }
+  }
+};
+
+const assertRequiredRuntimeTokens = (directoryPath, profile) => {
+  const sources = findFilesNamedLike(directoryPath, (name) =>
+    /\.(?:cjs|js|json|mjs)$/u.test(name)
+  ).map((filePath) => fs.readFileSync(filePath, 'utf8'));
+  for (const token of requiredRuntimeTokens[profile]) {
+    assert(
+      sources.some((source) => source.includes(token)),
+      `${directoryPath} must contain ${profile} runtime owner ${token}`
+    );
+  }
+};
+
 const verifyNode = (root) => {
   const output = path.join(root, '.output/node');
   const manifest = readJson(path.join(output, 'nitro.json'));
@@ -57,6 +118,8 @@ const verifyNode = (root) => {
   assertFile(path.join(output, manifest.serverEntry));
   assertDirectory(path.join(output, manifest.publicDir));
   assertOnlyProfileMarker(path.join(output, 'server/_ssr/ssr.mjs'), 'node');
+  assertRequiredRuntimeTokens(path.join(output, 'server'), 'node');
+  assertNoForbiddenRuntimeTokens(path.join(output, 'server'), 'node');
 };
 
 const verifyVercel = (root) => {
@@ -78,6 +141,14 @@ const verifyVercel = (root) => {
   assertDirectory(path.join(output, manifest.publicDir));
   assertOnlyProfileMarker(
     path.join(output, 'functions/__server.func/_ssr/ssr.mjs'),
+    'vercel'
+  );
+  assertRequiredRuntimeTokens(
+    path.join(output, 'functions/__server.func'),
+    'vercel'
+  );
+  assertNoForbiddenRuntimeTokens(
+    path.join(output, 'functions/__server.func'),
     'vercel'
   );
 };
@@ -114,6 +185,8 @@ const verifyCloudflare = (root, expectedAppSlug) => {
   );
   assertDirectory(path.join(output, 'client'));
   assertOnlyProfileMarker(path.join(output, 'server/index.js'), 'cloudflare');
+  assertRequiredRuntimeTokens(path.join(output, 'server'), 'cloudflare');
+  assertNoForbiddenRuntimeTokens(path.join(output, 'server'), 'cloudflare');
 };
 
 export const verifyRuntimeProfile = (

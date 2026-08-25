@@ -20,7 +20,6 @@ describe('database observability', () => {
     const span: TelemetrySpanHandle = {
       addEvent: vi.fn(),
       end: vi.fn(),
-      recordException: vi.fn(),
       setAttributes: vi.fn(),
       setStatus: vi.fn(),
     };
@@ -87,7 +86,6 @@ describe('database observability', () => {
     const span: TelemetrySpanHandle = {
       addEvent: vi.fn(),
       end: vi.fn(),
-      recordException: vi.fn(),
       setAttributes: vi.fn(),
       setStatus: vi.fn(),
     };
@@ -130,9 +128,6 @@ describe('database observability', () => {
       }),
       end: vi.fn(() => {
         throw new Error('span end failed');
-      }),
-      recordException: vi.fn(() => {
-        throw new Error('span exception failed');
       }),
       setAttributes: vi.fn(() => {
         throw new Error('span attributes failed');
@@ -192,9 +187,6 @@ describe('database observability', () => {
       addEvent: vi.fn(),
       end: vi.fn(() => {
         throw new Error('span end failed');
-      }),
-      recordException: vi.fn(() => {
-        throw new Error('span exception failed');
       }),
       setAttributes: vi.fn(),
       setStatus: vi.fn(() => {

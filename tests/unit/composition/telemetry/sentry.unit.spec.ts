@@ -6,6 +6,10 @@ const sentryMocks = vi.hoisted(() => ({
   tanstackRouterBrowserTracingIntegration: vi.fn(() => 'router-tracing'),
 }));
 
+const otelMocks = vi.hoisted(() => ({
+  initOpenTelemetryClient: vi.fn(),
+}));
+
 const envClientMock = vi.hoisted(() => ({
   VITE_OTEL_BROWSER_ENABLED: false,
   VITE_SENTRY_DSN: '',
@@ -26,6 +30,10 @@ vi.mock('@/platform/env/client', () => ({
   getEnvClient: () => envClientMock,
 }));
 
+vi.mock('@/composition/telemetry/otel.client', () => ({
+  initOpenTelemetryClient: otelMocks.initOpenTelemetryClient,
+}));
+
 describe('Sentry telemetry composition', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -34,6 +42,7 @@ describe('Sentry telemetry composition', () => {
     envClientMock.VITE_SENTRY_ENVIRONMENT = undefined;
     envClientMock.VITE_SENTRY_TUNNEL_PATH = '/api/telemetry/sentry-tunnel';
     envClientMock.VITE_SENTRY_TRACES_SAMPLE_RATE = 0;
+    otelMocks.initOpenTelemetryClient.mockReturnValue(undefined);
   });
 
   it('is a no-op when no client DSN is configured', async () => {
@@ -62,6 +71,7 @@ describe('Sentry telemetry composition', () => {
     expect(sentryMocks.init).toHaveBeenCalledWith(
       expect.objectContaining({
         beforeSend: expect.any(Function),
+        enableLogs: false,
         integrations: [],
         sendDefaultPii: false,
         tracesSampleRate: 0,
@@ -70,16 +80,63 @@ describe('Sentry telemetry composition', () => {
     );
   });
 
-  it('passes capture context through to Sentry with primitive tags stringified', async () => {
+  it('does not abort optional browser bootstrap when Sentry initialization fails', async () => {
+    vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    envClientMock.VITE_SENTRY_DSN = 'https://example.com/1';
+    sentryMocks.init.mockImplementationOnce(() => {
+      throw new Error('Sentry unavailable');
+    });
+    const { initTelemetryClient } =
+      await import('@/composition/telemetry/sentry.client');
+
+    expect(() => initTelemetryClient()).not.toThrow();
+    expect(globalThis.console.error).toHaveBeenCalledWith(
+      'telemetry.report_failure',
+      expect.objectContaining({
+        errorType: 'Error',
+        source: 'sentry.client.initialize',
+      })
+    );
+  });
+
+  it('keeps browser Sentry available when optional OTel initialization fails', async () => {
+    vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    envClientMock.VITE_SENTRY_DSN = 'https://example.com/1';
+    otelMocks.initOpenTelemetryClient.mockImplementationOnce(() => {
+      throw new Error('OTel unavailable');
+    });
+    const { initTelemetryClient } =
+      await import('@/composition/telemetry/sentry.client');
+
+    expect(() => initTelemetryClient()).not.toThrow();
+    expect(sentryMocks.init).toHaveBeenCalledOnce();
+    expect(globalThis.console.error).toHaveBeenCalledWith(
+      'telemetry.report_failure',
+      expect.objectContaining({
+        errorType: 'Error',
+        source: 'otel.client.initialize',
+      })
+    );
+  });
+
+  it('passes allowlisted tags and active OTel correlation to Sentry', async () => {
     const { createSentryTelemetryAdapter } =
       await import('@/composition/telemetry/sentry-adapter');
     const captureException = vi.fn(() => 'event-id');
-    const adapter = createSentryTelemetryAdapter({
-      captureException,
-      setUser: vi.fn(),
-      setTag: vi.fn(),
-      startSpan: vi.fn((_options, fn) => fn()),
-    });
+    const adapter = createSentryTelemetryAdapter(
+      {
+        captureException,
+        setUser: vi.fn(),
+        setTag: vi.fn(),
+        startSpan: vi.fn((_options, fn) => fn()),
+      },
+      {
+        currentCorrelation: () => ({
+          spanId: 'b'.repeat(16),
+          traceId: 'a'.repeat(32),
+        }),
+      }
+    );
     const error = new Error('boom');
 
     adapter.captureException(error, {
@@ -90,18 +147,18 @@ describe('Sentry telemetry composition', () => {
     });
 
     expect(captureException).toHaveBeenCalledWith(error, {
-      fingerprint: ['email-send'],
       level: 'error',
       tags: {
         attempt: '2',
         event: 'email.send.failed',
+        'otel.span_id': 'b'.repeat(16),
+        'otel.trace_id': 'a'.repeat(32),
         retryable: 'false',
       },
-      extra: { statusCode: 401 },
     });
   });
 
-  it('sanitizes Sentry event tags, extras, and contexts before send', async () => {
+  it('projects Sentry events onto closed tags and trace context', async () => {
     const { sanitizeSentryEvent } =
       await import('@/composition/telemetry/sentry-adapter');
 
@@ -110,6 +167,12 @@ describe('Sentry telemetry composition', () => {
         contexts: {
           request: {
             authorization: 'Bearer token',
+          },
+          trace: {
+            data: { payload: 'confidential diagnosis' },
+            op: 'http.server',
+            span_id: 'b'.repeat(16),
+            trace_id: 'a'.repeat(32),
           },
         },
         extra: {
@@ -124,23 +187,165 @@ describe('Sentry telemetry composition', () => {
       })
     ).toEqual({
       contexts: {
-        request: {
-          authorization: '[REDACTED]',
+        trace: {
+          op: 'http.server',
+          span_id: 'b'.repeat(16),
+          trace_id: 'a'.repeat(32),
         },
-      },
-      extra: {
-        email: '[REDACTED]',
       },
       tags: {
         attempt: '2',
-        email: '[REDACTED]',
         event: 'email.send.failed',
         retryable: 'false',
       },
     });
   });
 
-  it('drops unsupported Sentry event tag values after sanitizing', async () => {
+  it('drops request secrets and sanitizes full exception events', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+
+    const sanitized = sanitizeSentryEvent({
+      breadcrumbs: [
+        {
+          category: 'fetch',
+          data: { authorization: 'Bearer breadcrumb-token' },
+          level: 'error',
+          message: 'person@example.com signed in with breadcrumb-token',
+          type: 'http',
+        },
+      ],
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                {
+                  filename: 'https://cdn.example/app.js?token=frame-token',
+                  lineno: 42,
+                  vars: {
+                    medicalNote: 'confidential diagnosis',
+                    token: 'frame-token',
+                  },
+                },
+              ],
+            },
+            type: 'Error',
+            value: 'Bearer exception-token for person@example.com',
+          },
+        ],
+      },
+      message: 'Bearer message-token for person@example.com',
+      platform: 'confidential diagnosis',
+      request: {
+        cookies: { session: 'cookie-token' },
+        data: { password: 'password-value' },
+        headers: { authorization: 'Bearer request-token' },
+        method: 'POST',
+        query_string: 'token=query-token',
+        url: 'https://app.example/account?token=query-token',
+      },
+      user: {
+        email: 'person@example.com',
+        id: 'user-1',
+        ip_address: '203.0.113.2',
+      },
+      transaction: 'confidential diagnosis',
+    });
+
+    expect(sanitized).toEqual(
+      expect.objectContaining({
+        breadcrumbs: [{ category: 'fetch', level: 'error', type: 'http' }],
+        exception: {
+          values: [
+            expect.objectContaining({
+              stacktrace: {
+                frames: [{ filename: '/app.js', lineno: 42 }],
+              },
+              type: 'Error',
+              value: 'Unexpected application error',
+            }),
+          ],
+        },
+        message: 'Unexpected application error',
+        request: { method: 'POST' },
+      })
+    );
+    expect(JSON.stringify(sanitized)).not.toMatch(
+      /breadcrumb-token|confidential diagnosis|exception-token|frame-token|message-token|request-token|query-token|cookie-token|password-value|person@example.com|user-1/u
+    );
+  });
+
+  it('never exports dynamic request path segments', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+
+    const sanitized = sanitizeSentryEvent({
+      request: {
+        method: 'GET',
+        url: 'https://app.example/manager/users/person@example.com/reset/query-secret',
+      },
+    });
+
+    expect(sanitized).toEqual({ request: { method: 'GET' } });
+    expect(JSON.stringify(sanitized)).not.toMatch(
+      /person@example\.com|query-secret|manager\/users/u
+    );
+  });
+
+  it('drops transaction query data and malformed trace correlation IDs', async () => {
+    const { createSentryTelemetryAdapter, sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const captureException = vi.fn(() => 'event-id');
+    const adapter = createSentryTelemetryAdapter(
+      {
+        captureException,
+        setUser: vi.fn(),
+      },
+      {
+        currentCorrelation: () => ({
+          spanId: 'span-secret',
+          traceId: 'trace-secret',
+        }),
+      }
+    );
+
+    adapter.captureException(new Error('failed'));
+
+    expect(captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: undefined })
+    );
+    expect(
+      sanitizeSentryEvent({
+        contexts: {
+          trace: { span_id: 'span-secret', trace_id: 'trace-secret' },
+        },
+        transaction: 'GET /reset?token=query-secret',
+      })
+    ).toEqual({});
+  });
+
+  it('returns a safe event when hostile event inspection fails', async () => {
+    vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const hostile = new Proxy(
+      { message: 'Bearer hostile-secret' },
+      {
+        ownKeys: () => {
+          throw new Error('inspection failed');
+        },
+      }
+    );
+
+    expect(() => sanitizeSentryEvent(hostile)).not.toThrow();
+    expect(sanitizeSentryEvent(hostile)).toEqual({
+      message: 'Unexpected application error',
+    });
+  });
+
+  it('drops unsupported and non-allowlisted Sentry event tags', async () => {
     const { sanitizeSentryEvent } =
       await import('@/composition/telemetry/sentry-adapter');
 
@@ -153,14 +358,12 @@ describe('Sentry telemetry composition', () => {
           optional: undefined,
           sequence: ['array'],
           zero: 0,
+          event: 'application.failed',
         },
       })
     ).toEqual({
-      contexts: {},
-      extra: {},
       tags: {
-        empty: '',
-        zero: '0',
+        event: 'application.failed',
       },
     });
   });
@@ -189,11 +392,7 @@ describe('Sentry telemetry composition', () => {
     const sanitized: SpecificSentryEvent = sanitizeSentryEvent(event);
 
     expect(sanitized).toEqual({
-      contexts: {},
       event_id: 'event-1',
-      extra: {
-        authorization: '[REDACTED]',
-      },
       tags: {
         event: 'auth.failure',
       },

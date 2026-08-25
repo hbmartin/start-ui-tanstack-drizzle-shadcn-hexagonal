@@ -11,8 +11,12 @@ import {
 } from '@/modules/kernel/infrastructure/config/logger';
 import {
   type TelemetryAdapter,
+  type TelemetryAttributes,
   type TelemetryCaptureContext,
+  type TelemetryLogRecord,
+  reportTelemetryFailure,
   toTelemetryStringTags,
+  writeStructuredConsoleLog,
 } from '@/platform/telemetry';
 
 type LogRedactor = (fields: Record<string, unknown>) => Record<string, unknown>;
@@ -48,13 +52,6 @@ const CONFIG_LEVEL_RANK = {
   // The public Logger has no fatal method, so fatal is an error-only threshold.
   fatal: 4,
 } as const satisfies Record<LoggerConfig['level'], number>;
-
-const CONSOLE_METHOD_BY_LOG_LEVEL = {
-  debug: 'debug',
-  error: 'error',
-  info: 'info',
-  warn: 'warn',
-} as const satisfies Record<LogLevel, keyof Pick<Console, LogLevel>>;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -149,23 +146,76 @@ const buildTelemetryCaptureContext = ({
   };
 };
 
-const writeConsoleMirror = ({
+const telemetryAttributesFromFields = (
+  fields: LogFields
+): TelemetryAttributes => ({
+  ...(fields.correlationId ? { correlationId: fields.correlationId } : {}),
+  ...(fields.requestId ? { requestId: fields.requestId } : {}),
+  ...(fields.scopeKey ? { scopeKey: fields.scopeKey } : {}),
+  ...(fields.sessionId ? { sessionId: fields.sessionId } : {}),
+  ...(fields.spanId ? { spanId: fields.spanId } : {}),
+  ...(fields.traceId ? { traceId: fields.traceId } : {}),
+  ...(fields.userId ? { userId: fields.userId } : {}),
+});
+
+const sanitizedDetailsFromLogRecord = (
+  sanitizedLogRecord: Record<string, unknown>
+): Record<string, unknown> | undefined => {
+  const { details } = sanitizedLogRecord;
+  return isRecord(details) ? details : undefined;
+};
+
+const toTelemetryLogRecord = ({
+  fields,
   level,
   message,
   sanitizedLogRecord,
 }: {
+  fields: LogFields;
   level: LogLevel;
   message: string;
   sanitizedLogRecord: Record<string, unknown>;
-}) => {
-  const consoleLike = globalThis.console;
-  const method = consoleLike?.[CONSOLE_METHOD_BY_LOG_LEVEL[level]];
-  if (typeof method !== 'function') return;
+}): TelemetryLogRecord => ({
+  attributes: telemetryAttributesFromFields(fields),
+  details: sanitizedDetailsFromLogRecord(sanitizedLogRecord),
+  direction: fields.direction,
+  error:
+    typeof sanitizedLogRecord.error === 'string'
+      ? sanitizedLogRecord.error
+      : undefined,
+  event: message,
+  level,
+  message,
+});
 
-  method.call(consoleLike, message, {
-    level,
-    ...sanitizedLogRecord,
-  });
+const prepareTelemetryWrite = ({
+  defaultFields,
+  fields,
+  redactor,
+  telemetry,
+}: {
+  defaultFields: Partial<LogFields> | undefined;
+  fields: LogFields;
+  redactor: LogRedactor;
+  telemetry: TelemetryAdapter;
+}) => {
+  const correlation = telemetry.currentCorrelation();
+  const mergedFields: LogFields = {
+    ...defaultFields,
+    ...fields,
+    ...(correlation.traceId ? { traceId: correlation.traceId } : {}),
+    ...(correlation.spanId ? { spanId: correlation.spanId } : {}),
+  };
+  const sanitizedLogRecord = redactor(prepareLogRecord(mergedFields));
+
+  return {
+    mergedFields,
+    sanitizedLogRecord,
+    message:
+      typeof sanitizedLogRecord.event === 'string'
+        ? sanitizedLogRecord.event
+        : fields.event,
+  };
 };
 
 export function createTelemetryLogger({
@@ -179,66 +229,20 @@ export function createTelemetryLogger({
   const configuredLevel = level ?? config.level;
   const shouldMirrorToConsole = consoleMirror ?? config.consoleMirror;
 
-  const write = (logLevel: LogLevel, fields: LogFields) => {
-    const correlation = telemetry.currentCorrelation();
-    const mergedFields = {
-      ...defaultFields,
-      ...fields,
-      ...(correlation.traceId ? { traceId: correlation.traceId } : {}),
-      ...(correlation.spanId ? { spanId: correlation.spanId } : {}),
-    };
-    const logRecord = prepareLogRecord(mergedFields);
-    const sanitizedLogRecord = redactor(logRecord);
-    const message =
-      typeof sanitizedLogRecord.event === 'string'
-        ? sanitizedLogRecord.event
-        : fields.event;
-    const shouldEmit = shouldEmitLog(logLevel, configuredLevel);
+  const writeOrThrow = (logLevel: LogLevel, fields: LogFields) => {
+    const { mergedFields, message, sanitizedLogRecord } = prepareTelemetryWrite(
+      { defaultFields, fields, redactor, telemetry }
+    );
+    if (!shouldEmitLog(logLevel, configuredLevel)) return;
+
     const shouldCaptureException =
       logLevel === 'error' && Object.hasOwn(mergedFields, 'exception');
 
-    if (shouldEmit && shouldMirrorToConsole) {
-      writeConsoleMirror({
+    if (shouldMirrorToConsole) {
+      writeStructuredConsoleLog({
         level: logLevel,
         message,
-        sanitizedLogRecord,
-      });
-    }
-
-    if (shouldEmit) {
-      telemetry.emitLog({
-        attributes: {
-          ...(mergedFields.correlationId
-            ? { correlationId: mergedFields.correlationId }
-            : {}),
-          ...(mergedFields.requestId
-            ? { requestId: mergedFields.requestId }
-            : {}),
-          ...(mergedFields.scopeKey ? { scopeKey: mergedFields.scopeKey } : {}),
-          ...(mergedFields.sessionId
-            ? { sessionId: mergedFields.sessionId }
-            : {}),
-          ...(mergedFields.spanId ? { spanId: mergedFields.spanId } : {}),
-          ...(mergedFields.traceId ? { traceId: mergedFields.traceId } : {}),
-          ...(mergedFields.userId ? { userId: mergedFields.userId } : {}),
-        },
-        details:
-          sanitizedLogRecord.details &&
-          typeof sanitizedLogRecord.details === 'object' &&
-          !Array.isArray(sanitizedLogRecord.details)
-            ? (sanitizedLogRecord.details as Record<string, unknown>)
-            : undefined,
-        direction: mergedFields.direction,
-        error:
-          typeof sanitizedLogRecord.error === 'string'
-            ? sanitizedLogRecord.error
-            : undefined,
-        event: message,
-        level: logLevel,
-        message,
-        ...(!shouldCaptureException && Object.hasOwn(mergedFields, 'exception')
-          ? { exception: mergedFields.exception }
-          : {}),
+        record: sanitizedLogRecord,
       });
     }
 
@@ -252,6 +256,24 @@ export function createTelemetryLogger({
           sanitizedLogRecord,
         })
       );
+      return;
+    }
+
+    telemetry.emitLog(
+      toTelemetryLogRecord({
+        fields: mergedFields,
+        level: logLevel,
+        message,
+        sanitizedLogRecord,
+      })
+    );
+  };
+
+  const write = (logLevel: LogLevel, fields: LogFields): void => {
+    try {
+      writeOrThrow(logLevel, fields);
+    } catch (failure) {
+      reportTelemetryFailure('kernel.telemetry_logger.write', failure);
     }
   };
 

@@ -15,6 +15,7 @@ import {
   RUNTIME_PROFILE_ENV_KEY,
   runtimeServerEntryPlugin,
 } from './scripts/runtime-profile-vite.js';
+import { BROWSER_TELEMETRY_BUILD_TARGET } from './scripts/browser-telemetry-target.js';
 import { shouldEnableSentryBuildPlugin } from './scripts/sentry-build-plugin.js';
 import { loadViteBuildEnvironment } from './scripts/vite-build-environment.js';
 import type { RuntimeProfile } from './src/platform/runtime/runtime-profile.js';
@@ -136,8 +137,22 @@ export default defineConfig(({ command, mode }) => {
     envDir,
     envPrefix: ['VITE_', 'APP_NAME', 'APP_SLUG'],
     build: {
-      target: 'baseline-widely-available',
+      // ZoneContextManager cannot preserve context through native async/await.
+      // Keep application code lowered so browser spans survive promise and
+      // timer boundaries.
+      target: 'esnext',
     },
+    environments: {
+      client: {
+        build: { target: BROWSER_TELEMETRY_BUILD_TARGET },
+        oxc: { target: BROWSER_TELEMETRY_BUILD_TARGET },
+      },
+      ssr: {
+        build: { target: 'esnext' },
+        oxc: { target: 'esnext' },
+      },
+    },
+    oxc: { target: 'esnext' },
     server: {
       port: env.VITE_PORT ? Number(env.VITE_PORT) : 3000,
       strictPort: true,

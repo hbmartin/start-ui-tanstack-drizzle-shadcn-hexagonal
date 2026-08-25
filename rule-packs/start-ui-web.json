@@ -112,10 +112,12 @@
       "specifiers": ["@sentry"],
       "files": ["src/**"],
       "exclude": [
-        "src/server.ts",
-        "src/start.ts",
         "src/composition/telemetry/sentry.client.ts",
-        "src/composition/telemetry/sentry.server.ts"
+        "src/composition/telemetry/sentry.server.ts",
+        "src/runtime/cloudflare/sentry-request.ts",
+        "src/runtime/cloudflare/server-entry.ts",
+        "src/runtime/node/telemetry.ts",
+        "src/runtime/vercel/telemetry.ts"
       ],
       "message": "Sentry owns exceptions only and is confined to entrypoints and telemetry composition.",
       "severity": "error"
@@ -125,7 +127,10 @@
       "kind": "banned-import",
       "specifiers": ["@opentelemetry"],
       "files": ["src/**"],
-      "exclude": ["src/composition/telemetry/**"],
+      "exclude": [
+        "src/composition/telemetry/**",
+        "src/runtime/vercel/telemetry.ts"
+      ],
       "message": "OpenTelemetry SDK imports belong to telemetry composition.",
       "severity": "error"
     },

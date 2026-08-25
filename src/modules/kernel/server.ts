@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start';
 
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 export {
   isServerFnError,
@@ -15,7 +15,7 @@ export const initSsrApp = createServerFn({ method: 'GET' }).handler(
     const { createSsrAppHandlers } =
       await import('./transport/tanstack/ssr-app-init');
 
-    return getTelemetry().startSpan(
+    return telemetryProxy.startSpan(
       {
         attributes: {
           'operation.name': 'kernel.initSsrApp',

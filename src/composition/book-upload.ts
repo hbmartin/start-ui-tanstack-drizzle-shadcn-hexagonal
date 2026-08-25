@@ -9,7 +9,7 @@ import {
   bookCoverUploadRouteDefinition,
 } from '@/modules/book/transport/upload/book-cover';
 import { BetterUploadObjectStorage } from '@/modules/kernel/backend';
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 import { createCachedFactory } from './shared/singleton';
 
@@ -47,7 +47,7 @@ const uploadHandlerFactory = createCachedFactory(() => {
 });
 
 export const handleBookUploadRequest = (request: Request) => {
-  return getTelemetry().startSpan(
+  return telemetryProxy.startSpan(
     {
       attributes: {
         'http.request.method': request.method,

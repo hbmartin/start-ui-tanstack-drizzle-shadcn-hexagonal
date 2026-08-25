@@ -50,6 +50,7 @@ vi.mock('@/modules/kernel/backend', () => ({
 
 vi.mock('@/platform/telemetry', () => ({
   getTelemetry: vi.fn(() => bookUploadMocks.telemetry),
+  telemetryProxy: bookUploadMocks.telemetry,
 }));
 
 describe('book upload composition', () => {

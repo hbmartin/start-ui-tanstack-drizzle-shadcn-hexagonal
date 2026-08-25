@@ -71,6 +71,9 @@ vi.mock('@/platform/telemetry', () => ({
   getTelemetry: () => ({
     captureException: routeErrorMocks.captureException,
   }),
+  telemetryProxy: {
+    captureException: routeErrorMocks.captureException,
+  },
 }));
 
 import { RouteError } from '@/platform/components/errors/route-error';
@@ -135,7 +138,7 @@ describe('retryRouteError', () => {
 });
 
 describe('RouteError', () => {
-  it('captures and logs route boundary errors with route context', () => {
+  it('captures route boundary errors once with route context', () => {
     const error = new Error('route failed');
 
     renderToStaticMarkup(
@@ -150,14 +153,7 @@ describe('RouteError', () => {
         routeId: '/manager',
       },
     });
-    expect(routeErrorMocks.loggerError).toHaveBeenCalledWith(
-      'route.error_boundary',
-      {
-        details: { routeId: '/manager' },
-        error,
-        message: 'route failed',
-      }
-    );
+    expect(routeErrorMocks.loggerError).not.toHaveBeenCalled();
   });
 
   it('resets errored queries from a valid route query client before retrying the route', async () => {

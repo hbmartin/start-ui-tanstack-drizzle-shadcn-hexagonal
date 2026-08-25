@@ -4,14 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { getTelemetryConfig } from '@/modules/kernel/infrastructure/config/telemetry';
 
-type LocalTelemetrySummary = {
-  kind: 'frontend_log' | 'otlp_proxy' | 'sentry_tunnel';
-  signal?: 'logs' | 'metrics' | 'traces';
-  bytes?: number;
-  eventCount?: number;
-  statusCode?: number;
-  summary?: Record<string, unknown>;
-};
+import type { LocalTelemetrySummary } from './local-summary';
 
 let database: DatabaseSync | undefined;
 
@@ -52,7 +45,7 @@ const getDatabase = () => {
   return database;
 };
 
-export const recordLocalTelemetrySummary = (input: LocalTelemetrySummary) => {
+export const persistLocalTelemetrySummary = (input: LocalTelemetrySummary) => {
   try {
     const db = getDatabase();
     if (!db) return;

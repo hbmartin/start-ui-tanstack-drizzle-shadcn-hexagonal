@@ -1,4 +1,5 @@
-import { metrics } from '@opentelemetry/api';
+import { context, metrics, propagation, trace } from '@opentelemetry/api';
+import { ZoneContextManager } from '@opentelemetry/context-zone';
 import {
   CompositePropagator,
   W3CBaggagePropagator,
@@ -6,9 +7,6 @@ import {
 } from '@opentelemetry/core';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-proto';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
-import { registerInstrumentations } from '@opentelemetry/instrumentation';
-import { DocumentLoadInstrumentation } from '@opentelemetry/instrumentation-document-load';
-import { FetchInstrumentation } from '@opentelemetry/instrumentation-fetch';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import {
   MeterProvider,
@@ -30,22 +28,11 @@ import { envClient } from '@/platform/env/client';
 import type { TelemetryAdapter } from '@/platform/telemetry';
 
 import { createOpenTelemetryAdapter } from './otel-adapter';
-
-const TELEMETRY_PATH_PATTERN = /\/api\/telemetry\//;
-const VENDOR_PATTERN = /(?:sentry\.io|honeycomb\.io|otel|collector)/;
+import { cleanupTelemetryProviders } from './provider-cleanup';
+import { claimTelemetryProviderOwnership } from './provider-ownership';
 
 let initialized = false;
 let adapter: TelemetryAdapter | undefined;
-
-const sameOriginPattern = () => {
-  if (typeof window === 'undefined') return /^\/(?!api\/telemetry\/)/;
-
-  const escapedOrigin = window.location.origin.replace(
-    /[.*+?^${}()|[\]\\]/g,
-    String.raw`\$&`
-  );
-  return new RegExp(`^${escapedOrigin}/(?!api/telemetry/)`);
-};
 
 const createClientResource = () =>
   resourceFromAttributes({
@@ -68,56 +55,87 @@ export const initOpenTelemetryClient = (): TelemetryAdapter | undefined => {
     return undefined;
   }
 
-  const resource = createClientResource();
-  const traceExporter = new OTLPTraceExporter({
-    url: '/api/telemetry/otel/v1/traces',
-  });
-  const provider = new WebTracerProvider({
-    resource,
-    sampler: new ParentBasedSampler({
-      root: new TraceIdRatioBasedSampler(
-        envClient.VITE_OTEL_TRACES_SAMPLE_RATE
-      ),
-    }),
-    spanProcessors: [new BatchSpanProcessor(traceExporter)],
-  });
+  let provider: WebTracerProvider | undefined;
+  let meterProvider: MeterProvider | undefined;
+  let contextManager: ZoneContextManager | undefined;
 
-  provider.register({
-    propagator: new CompositePropagator({
+  try {
+    const resource = createClientResource();
+    const traceExporter = new OTLPTraceExporter({
+      url: '/api/telemetry/otel/v1/traces',
+    });
+    provider = new WebTracerProvider({
+      resource,
+      sampler: new ParentBasedSampler({
+        root: new TraceIdRatioBasedSampler(
+          envClient.VITE_OTEL_TRACES_SAMPLE_RATE
+        ),
+      }),
+      spanProcessors: [new BatchSpanProcessor(traceExporter)],
+    });
+    meterProvider = new MeterProvider({
+      readers: [
+        new PeriodicExportingMetricReader({
+          exporter: new OTLPMetricExporter({
+            url: '/api/telemetry/otel/v1/metrics',
+          }),
+          exportIntervalMillis: 30_000,
+        }),
+      ],
+      resource,
+    });
+    const candidateAdapter = createOpenTelemetryAdapter({
+      forceFlush: async () => {
+        await Promise.all([
+          provider!.forceFlush(),
+          meterProvider!.forceFlush(),
+        ]);
+      },
+    });
+    const propagator = new CompositePropagator({
       propagators: [
         new W3CTraceContextPropagator(),
         new W3CBaggagePropagator(),
       ],
-    }),
-  });
+    });
+    contextManager = new ZoneContextManager().enable();
+    const ownedContextManager = contextManager;
+    const ownedMeterProvider = meterProvider;
+    const ownedTraceProvider = provider;
 
-  const meterProvider = new MeterProvider({
-    readers: [
-      new PeriodicExportingMetricReader({
-        exporter: new OTLPMetricExporter({
-          url: '/api/telemetry/otel/v1/metrics',
-        }),
-        exportIntervalMillis: 30_000,
-      }),
-    ],
-    resource,
-  });
-  metrics.setGlobalMeterProvider(meterProvider);
+    claimTelemetryProviderOwnership([
+      {
+        acquire: () => context.setGlobalContextManager(ownedContextManager),
+        name: 'context',
+        release: () => context.disable(),
+      },
+      {
+        acquire: () => propagation.setGlobalPropagator(propagator),
+        name: 'propagation',
+        release: () => propagation.disable(),
+      },
+      {
+        acquire: () => metrics.setGlobalMeterProvider(ownedMeterProvider),
+        name: 'metrics',
+        release: () => metrics.disable(),
+      },
+      {
+        acquire: () => trace.setGlobalTracerProvider(ownedTraceProvider),
+        name: 'trace',
+        release: () => trace.disable(),
+      },
+    ]);
 
-  registerInstrumentations({
-    instrumentations: [
-      new DocumentLoadInstrumentation(),
-      new FetchInstrumentation({
-        clearTimingResources: true,
-        ignoreUrls: [TELEMETRY_PATH_PATTERN, VENDOR_PATTERN],
-        propagateTraceHeaderCorsUrls: [sameOriginPattern()],
-        semconvStabilityOptIn: 'http',
-      }),
-    ],
-    meterProvider,
-    tracerProvider: provider,
-  });
-
-  adapter = createOpenTelemetryAdapter();
-  return adapter;
+    adapter = candidateAdapter;
+    return adapter;
+  } catch (failure) {
+    contextManager?.disable();
+    const cleanups: Array<() => Promise<unknown>> = [];
+    if (provider) cleanups.push(provider.shutdown.bind(provider));
+    if (meterProvider) {
+      cleanups.push(meterProvider.shutdown.bind(meterProvider));
+    }
+    void cleanupTelemetryProviders('otel.client.cleanup', cleanups);
+    throw failure;
+  }
 };

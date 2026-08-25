@@ -1,4 +1,4 @@
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 export type ServerFnContextRunner<TContext> = <TResult>(
   fn: (ctx: TContext) => Promise<TResult>
@@ -25,7 +25,7 @@ const recordServerFunctionMetric = (
   start: number,
   status: 'error' | 'success'
 ) => {
-  getTelemetry().recordMetric({
+  telemetryProxy.recordMetric({
     attributes: {
       'operation.name': operationName,
       'operation.type': 'server_function',
@@ -55,7 +55,7 @@ async function runServerFunctionHandler<TDeps, TContext, TData, TResult>({
     if (!operationName) return handler(deps, ctx, data);
 
     const start = performance.now();
-    return getTelemetry().startSpan(
+    return telemetryProxy.startSpan(
       {
         attributes: {
           'operation.name': operationName,

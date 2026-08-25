@@ -1,5 +1,1 @@
-export {
-  getTelemetry,
-  setTelemetry,
-  telemetryProxy,
-} from '@/platform/telemetry';
+export { setTelemetry, telemetryProxy } from '@/platform/telemetry';

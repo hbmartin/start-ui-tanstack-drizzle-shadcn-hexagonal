@@ -1,8 +1,4 @@
 import {
-  sentryGlobalFunctionMiddleware,
-  sentryGlobalRequestMiddleware,
-} from '@sentry/tanstackstart-react';
-import {
   createCsrfMiddleware,
   createMiddleware,
   createStart,
@@ -22,11 +18,16 @@ import { createCspNonce } from '@/platform/http/csp-nonce-server';
 import { violatesServerFnBodyLimit } from '@/platform/http/request-body-limit';
 import { applySecurityHeaders } from '@/platform/http/security-headers';
 import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
-import { createNoOpTelemetry } from '@/platform/telemetry';
+import {
+  createNoOpTelemetry,
+  isRequestExceptionCaptureState,
+  type RequestExceptionCaptureState,
+} from '@/platform/telemetry';
 
 export type AppStartRequestContext = {
   requestId: string;
   runtimeProfile: RuntimeProfile;
+  telemetryCaptureState?: RequestExceptionCaptureState;
   cspNonce?: string;
   auth?: {
     getSession: () => Promise<AuthSession | null>;
@@ -54,6 +55,10 @@ type RequestContextWithRequestId = {
   requestId?: unknown;
 };
 
+type RequestContextWithTelemetryCaptureState = {
+  telemetryCaptureState?: unknown;
+};
+
 const getCspNonceFromContext = (context: unknown) => {
   if (typeof context !== 'object' || context === null) return undefined;
 
@@ -66,6 +71,16 @@ const getRequestIdFromContext = (context: unknown) => {
 
   const { requestId } = context as RequestContextWithRequestId;
   return typeof requestId === 'string' ? requestId : undefined;
+};
+
+const getTelemetryCaptureStateFromContext = (context: unknown) => {
+  if (typeof context !== 'object' || context === null) return undefined;
+
+  const { telemetryCaptureState } =
+    context as RequestContextWithTelemetryCaptureState;
+  return isRequestExceptionCaptureState(telemetryCaptureState)
+    ? telemetryCaptureState
+    : undefined;
 };
 
 const mergeRequestContext = (
@@ -225,6 +240,7 @@ export const telemetryRequestMiddleware = createMiddleware({
       pathname,
       request,
       requestId: getRequestIdFromContext(context),
+      captureState: getTelemetryCaptureStateFromContext(context),
     },
     () => next()
   )
@@ -238,7 +254,6 @@ const csrfMiddleware = createCsrfMiddleware({
 
 export const startInstance = createStart(() => ({
   requestMiddleware: [
-    sentryGlobalRequestMiddleware,
     telemetryRequestMiddleware,
     securityHeadersMiddleware,
     authRequestContextMiddleware,
@@ -246,7 +261,7 @@ export const startInstance = createStart(() => ({
     serverFnBodyLimitMiddleware,
     csrfMiddleware,
   ],
-  functionMiddleware: [sentryGlobalFunctionMiddleware],
+  functionMiddleware: [],
 }));
 
 export {

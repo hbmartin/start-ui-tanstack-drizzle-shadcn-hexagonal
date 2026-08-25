@@ -32,7 +32,7 @@ const createNodeArtifact = (root) => {
   write(
     root,
     '.output/node/server/_ssr/ssr.mjs',
-    'createApplicationServerEntry("node")'
+    'createApplicationServerEntry("node");NodeTracerProvider;"@opentelemetry/context-async-hooks"'
   );
   fs.mkdirSync(path.join(root, '.output/node/public'));
 };
@@ -52,7 +52,7 @@ const createVercelArtifact = (root) => {
   write(
     root,
     '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
-    'createApplicationServerEntry("vercel")'
+    'createApplicationServerEntry("vercel", vercelRequestLifecycle);"@vercel/functions";"@vercel/otel";new AsyncLocalStorageContextManager()'
   );
   fs.mkdirSync(path.join(root, '.vercel/output/static'));
 };
@@ -72,7 +72,7 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/index.js',
-    'createApplicationServerEntry("cloudflare")'
+    'createApplicationServerEntry("cloudflare");"cloudflare:workers";START_UI_TELEMETRY_METRICS'
   );
   fs.mkdirSync(path.join(root, 'dist/client'));
 };
@@ -161,6 +161,70 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow('must not contain .dev.vars');
+  });
+
+  it('rejects runtime-specific provider leakage recursively', () => {
+    const cloudflareRoot = fixture();
+    createCloudflareArtifact(cloudflareRoot);
+    write(
+      cloudflareRoot,
+      'dist/server/assets/leaked.js',
+      'const provider = new AsyncLocalStorageContextManager();'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', cloudflareRoot, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'forbidden cloudflare runtime token AsyncLocalStorageContextManager'
+    );
+
+    const localSqliteRoot = fixture();
+    createCloudflareArtifact(localSqliteRoot);
+    write(
+      localSqliteRoot,
+      'dist/server/assets/local-sqlite-sink.js',
+      'const localSqliteEnabled = true; CREATE TABLE telemetry_summary;'
+    );
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', localSqliteRoot, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('forbidden cloudflare runtime token telemetry_summary');
+
+    const nodeRoot = fixture();
+    createNodeArtifact(nodeRoot);
+    write(
+      nodeRoot,
+      '.output/node/server/chunks/leaked.mjs',
+      'import "@vercel/otel";'
+    );
+    expect(() => verifyRuntimeProfile('node', nodeRoot)).toThrow(
+      'forbidden node runtime token @vercel/otel'
+    );
+
+    const vercelTraceRoot = fixture();
+    createVercelArtifact(vercelTraceRoot);
+    write(
+      vercelTraceRoot,
+      '.vercel/output/functions/__server.func/chunks/leaked.mjs',
+      'initOpenTelemetryServer();'
+    );
+    expect(() => verifyRuntimeProfile('vercel', vercelTraceRoot)).toThrow(
+      'forbidden vercel runtime token initOpenTelemetryServer'
+    );
+
+    const vercelSqliteRoot = fixture();
+    createVercelArtifact(vercelSqliteRoot);
+    write(
+      vercelSqliteRoot,
+      '.vercel/output/functions/__server.func/chunks/local-sqlite-sink.mjs',
+      'CREATE TABLE telemetry_summary;'
+    );
+    expect(() => verifyRuntimeProfile('vercel', vercelSqliteRoot)).toThrow(
+      'forbidden vercel runtime token telemetry_summary'
+    );
   });
 
   it('rejects unknown profiles', () => {

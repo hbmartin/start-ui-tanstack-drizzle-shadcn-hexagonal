@@ -49,7 +49,6 @@ describe('router observability', () => {
     const span: TelemetrySpanHandle = {
       addEvent: vi.fn(),
       end: vi.fn(),
-      recordException: vi.fn(),
       setAttributes: vi.fn(),
       setStatus: vi.fn(),
     };
@@ -99,7 +98,6 @@ describe('router observability', () => {
     const span: TelemetrySpanHandle = {
       addEvent: vi.fn(),
       end: vi.fn(),
-      recordException: vi.fn(),
       setAttributes: vi.fn(),
       setStatus: vi.fn(),
     };
@@ -123,8 +121,12 @@ describe('router observability', () => {
     attachRouterObservability(router);
 
     const event = {
+      fromLocation: {
+        href: '/manager/books?token=from-secret',
+        pathname: '/manager/books',
+      },
       toLocation: {
-        href: '/manager/books/c12345678901234567890',
+        href: '/manager/books/c12345678901234567890?token=to-secret',
         pathname: '/manager/books/c12345678901234567890',
       },
     };
@@ -133,6 +135,15 @@ describe('router observability', () => {
 
     expect(span.addEvent).toHaveBeenCalledWith('navigation.resolved');
     expect(span.end).not.toHaveBeenCalled();
+    expect(telemetry.startManualSpan).toHaveBeenCalledWith({
+      attributes: {
+        'navigation.hash_changed': undefined,
+        'navigation.path_changed': undefined,
+        'route.template': '/unmatched',
+      },
+      name: 'router.navigation',
+      op: 'router.navigation',
+    });
 
     handlers.get('onRendered')?.(event);
 

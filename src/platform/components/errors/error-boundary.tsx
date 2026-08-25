@@ -27,8 +27,7 @@ import {
 } from '@/platform/components/ui/responsive-drawer';
 
 import { envClient } from '@/platform/env/client';
-import { getTelemetry } from '@/platform/telemetry';
-import { frontendLogger } from '@/platform/telemetry/frontend-logger';
+import { telemetryProxy } from '@/platform/telemetry';
 
 const ErrorFallback = (props: FallbackProps) => {
   const { t } = useTranslation(['common', 'components']);
@@ -111,17 +110,10 @@ const captureFeatureBoundaryError = (error: unknown, info: ErrorInfo) => {
   const details = info.componentStack
     ? { componentStack: info.componentStack }
     : undefined;
-  const message = error instanceof Error ? error.message : 'Feature error';
-
-  getTelemetry().captureException(error, {
+  telemetryProxy.captureException(error, {
     extra: details,
     level: 'error',
     tags: { event: 'feature.error_boundary' },
-  });
-  frontendLogger.error('feature.error_boundary', {
-    error,
-    message,
-    ...(details ? { details } : {}),
   });
 };
 
