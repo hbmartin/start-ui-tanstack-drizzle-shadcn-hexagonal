@@ -1,12 +1,11 @@
 import type { ServerEntry } from '@tanstack/react-start/server-entry';
 import type { CloudflareOptions } from '@sentry/cloudflare';
 
+import type { CloudflareSentryEnvironment } from '@/composition/telemetry/sentry-cloudflare-options';
+
 import type { CloudflareAnalyticsEngine } from './telemetry-adapter';
 
-type CloudflareEnvironment = {
-  SENTRY_DSN?: string;
-  SENTRY_ENVIRONMENT?: string;
-  SENTRY_RELEASE?: string;
+type CloudflareEnvironment = CloudflareSentryEnvironment & {
   START_UI_TELEMETRY_METRICS?: CloudflareAnalyticsEngine;
 };
 
@@ -26,40 +25,25 @@ const { application, sentryRequestIsolationReady } =
     return createApplicationServerEntry('cloudflare');
   });
 const { tracing } = await import('cloudflare:workers');
-const { sanitizeSentryEvent, createSentryTelemetryAdapter } =
+const { createSentryTelemetryAdapter } =
   await import('@/composition/telemetry/sentry-adapter');
 const { createTelemetryAdapterChain } =
   await import('@/composition/telemetry/adapter-chain');
 const { setTelemetry } = await import('@/platform/telemetry');
 const { createCloudflareTelemetryAdapter } =
   await import('./telemetry-adapter');
+const { createCloudflareSentryOptions } =
+  await import('@/composition/telemetry/sentry-cloudflare-options');
 const { scheduleCloudflareRequestFlush } = await import('./request-lifecycle');
-
-const createCloudflareSentryOptions = (
-  request: Request,
-  environment: CloudflareEnvironment
-): CloudflareOptions => ({
-  beforeSend: (event) =>
-    sanitizeSentryEvent({
-      ...event,
-      request: { method: request.method },
-    }),
-  dsn: environment.SENTRY_DSN,
-  enableLogs: false,
-  environment: environment.SENTRY_ENVIRONMENT,
-  integrations: [],
-  release: environment.SENTRY_RELEASE,
-  sendDefaultPii: false,
-  skipOpenTelemetrySetup: true,
-  tracesSampleRate: 0,
-});
 
 const installCloudflareRequestTelemetry = (
   nativeTelemetry: ReturnType<typeof createCloudflareTelemetryAdapter>,
   sentryEnabled: boolean
 ) => {
   const sentryTelemetry = sentryEnabled
-    ? createSentryTelemetryAdapter(Sentry)
+    ? createSentryTelemetryAdapter(Sentry, {
+        flushOwner: 'request-wrapper',
+      })
     : undefined;
   setTelemetry(
     sentryTelemetry

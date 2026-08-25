@@ -71,13 +71,18 @@ describe('Sentry telemetry composition', () => {
     expect(sentryMocks.init).toHaveBeenCalledWith(
       expect.objectContaining({
         beforeSend: expect.any(Function),
+        beforeSendTransaction: expect.any(Function),
         enableLogs: false,
         integrations: [],
         sendDefaultPii: false,
-        tracesSampleRate: 0,
+        tracesSampler: expect.any(Function),
         tunnel: '/api/telemetry/sentry-tunnel',
       })
     );
+    const options = sentryMocks.init.mock.calls[0]?.[0];
+    expect(options).not.toHaveProperty('tracesSampleRate');
+    expect(options?.tracesSampler()).toBe(0);
+    expect(options?.beforeSendTransaction()).toBeNull();
   });
 
   it('does not abort optional browser bootstrap when Sentry initialization fails', async () => {
@@ -633,5 +638,50 @@ describe('Sentry telemetry composition', () => {
 
     expect(setUser).toHaveBeenCalledWith(null);
     expect(setTag).toHaveBeenCalledWith('role', 'none');
+  });
+
+  it('leaves request-wrapper-owned Sentry flushing to the runtime', async () => {
+    const { createSentryTelemetryAdapter } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const flush = vi.fn(async () => true);
+    const adapter = createSentryTelemetryAdapter(
+      {
+        captureException: vi.fn(() => 'event-id'),
+        flush,
+        setUser: vi.fn(),
+      },
+      { flushOwner: 'request-wrapper' }
+    );
+
+    await expect(adapter.forceFlush()).resolves.toBeUndefined();
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  it('preserves adapter-owned Sentry flushing for persistent runtimes', async () => {
+    const { createSentryTelemetryAdapter } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const flush = vi.fn(async () => true);
+    const adapter = createSentryTelemetryAdapter({
+      captureException: vi.fn(() => 'event-id'),
+      flush,
+      setUser: vi.fn(),
+    });
+
+    await expect(adapter.forceFlush()).resolves.toBeUndefined();
+    expect(flush).toHaveBeenCalledExactlyOnceWith(5_000);
+  });
+
+  it('preserves adapter-owned Sentry flush failure reporting', async () => {
+    const { createSentryTelemetryAdapter } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const adapter = createSentryTelemetryAdapter({
+      captureException: vi.fn(() => 'event-id'),
+      flush: vi.fn(async () => false),
+      setUser: vi.fn(),
+    });
+
+    await expect(adapter.forceFlush()).rejects.toThrow(
+      'Sentry flush did not complete'
+    );
   });
 });

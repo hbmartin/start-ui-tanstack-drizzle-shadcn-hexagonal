@@ -205,6 +205,63 @@ describe('runtime artifact verifier', () => {
     }
   );
 
+  it.each([undefined, 20260824, '2026/08/24'])(
+    'rejects malformed source compatibility date: %j',
+    (compatibilityDate) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const sourceConfig = JSON.parse(
+        fs.readFileSync(path.join(root, 'wrangler.json'), 'utf8')
+      );
+      writeJson(root, 'wrangler.json', {
+        ...sourceConfig,
+        compatibility_date: compatibilityDate,
+      });
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('Cloudflare source compatibility date format');
+    }
+  );
+
+  it.each([undefined, 20260824, '2026/08/24'])(
+    'rejects malformed generated compatibility date: %j',
+    (compatibilityDate) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const generatedConfig = JSON.parse(
+        fs.readFileSync(path.join(root, 'dist/server/wrangler.json'), 'utf8')
+      );
+      writeJson(root, 'dist/server/wrangler.json', {
+        ...generatedConfig,
+        compatibility_date: compatibilityDate,
+      });
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('Cloudflare generated compatibility date format');
+    }
+  );
+
+  it('rejects generated compatibility date drift', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const generatedConfig = JSON.parse(
+      fs.readFileSync(path.join(root, 'dist/server/wrangler.json'), 'utf8')
+    );
+    writeJson(root, 'dist/server/wrangler.json', {
+      ...generatedConfig,
+      compatibility_date: '2026-08-23',
+    });
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Cloudflare generated compatibility date drift');
+  });
+
   it('rejects runtime-specific provider leakage recursively', () => {
     const cloudflareRoot = fixture();
     createCloudflareArtifact(cloudflareRoot);

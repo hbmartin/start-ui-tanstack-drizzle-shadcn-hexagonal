@@ -59,6 +59,9 @@ const hasCompatibilityFlag = (config, flag) =>
   Array.isArray(config.compatibility_flags) &&
   config.compatibility_flags.includes(flag);
 
+const isCompatibilityDate = (value) =>
+  typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value);
+
 const readJson = (filePath) => {
   assertFile(filePath);
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -177,8 +180,16 @@ const verifyCloudflare = (root, expectedAppSlug) => {
     'Cloudflare generated Worker name'
   );
   assert(
+    isCompatibilityDate(sourceConfig.compatibility_date),
+    'Cloudflare source compatibility date format'
+  );
+  assert(
+    isCompatibilityDate(generatedConfig.compatibility_date),
+    'Cloudflare generated compatibility date format'
+  );
+  assert(
     generatedConfig.compatibility_date === sourceConfig.compatibility_date,
-    'Cloudflare generated compatibility date'
+    'Cloudflare generated compatibility date drift'
   );
   assert(
     hasCompatibilityFlag(generatedConfig, 'nodejs_compat'),

@@ -2,41 +2,59 @@ import assert from 'node:assert/strict';
 
 import * as Sentry from '@sentry/cloudflare';
 
+import { createTelemetryAdapterChain } from '@/composition/telemetry/adapter-chain';
+import { createSentryTelemetryAdapter } from '@/composition/telemetry/sentry-adapter';
+import { createCloudflareSentryOptions } from '@/composition/telemetry/sentry-cloudflare-options';
 import {
-  createSentryTelemetryAdapter,
-  sanitizeSentryEvent,
-} from '@/composition/telemetry/sentry-adapter';
-import { setTelemetry, telemetryProxy } from '@/platform/telemetry';
+  createNoOpTelemetry,
+  setTelemetry,
+  telemetryProxy,
+} from '@/platform/telemetry';
 import {
   initializeCloudflareSentryIsolation,
   runWithCloudflareSentry,
 } from '@/runtime/cloudflare/sentry-request';
 import {
+  forceFlushRequestTelemetry,
   registerRequestCompletion,
-  takeRequestCompletions,
 } from '@/runtime/request-completion';
 
 type RequestClient = ReturnType<typeof Sentry.getClient>;
 
 const sentEnvelopes = new Map<string, unknown[]>();
+const transportFlushCounts = new Map<string, number>();
+let nativeFlushCount = 0;
+
+const nativeTelemetry = {
+  ...createNoOpTelemetry(),
+  forceFlush: async () => {
+    nativeFlushCount += 1;
+  },
+};
+const sentryTelemetry = createSentryTelemetryAdapter(Sentry, {
+  flushOwner: 'request-wrapper',
+});
+const requestTelemetry = createTelemetryAdapterChain([
+  nativeTelemetry,
+  sentryTelemetry,
+]);
 
 const sentryOptions = (
   label: string,
   request: Request
 ): Parameters<typeof Sentry.wrapRequestHandler>[0]['options'] => ({
-  beforeSend: (event) =>
-    sanitizeSentryEvent({
-      ...event,
-      request: { method: request.method },
-    }),
-  dsn: 'https://public@example.com/1',
-  integrations: [],
+  ...createCloudflareSentryOptions(request, {
+    SENTRY_DSN: 'https://public@example.com/1',
+  }),
   release: `start-ui-web@5.0.0-${label}`,
-  sendDefaultPii: false,
-  skipOpenTelemetrySetup: true,
-  tracesSampleRate: 0,
   transport: () => ({
-    flush: async () => true,
+    flush: async () => {
+      transportFlushCounts.set(
+        label,
+        (transportFlushCounts.get(label) ?? 0) + 1
+      );
+      return true;
+    },
     send: async (envelope: unknown) => {
       const envelopes = sentEnvelopes.get(label) ?? [];
       envelopes.push(envelope);
@@ -142,9 +160,13 @@ const runConcurrentDeferredScenario = async (method: 'HEAD' | 'OPTIONS') => {
     'concurrent requests must not share the current Sentry scope client'
   );
 
-  await Promise.allSettled(takeRequestCompletions(requestB));
+  assert.equal(
+    await forceFlushRequestTelemetry(requestB, requestTelemetry),
+    'flushed'
+  );
   await Promise.allSettled(waitUntilB);
   assert.equal(requestClientB.getTransport(), undefined);
+  assert.equal(transportFlushCounts.get(bLabel), 1);
   assert.ok(
     requestClientA.getTransport(),
     `${method} A client must survive B disposal`
@@ -152,10 +174,14 @@ const runConcurrentDeferredScenario = async (method: 'HEAD' | 'OPTIONS') => {
 
   assert.ok(resolveLateWork);
   resolveLateWork();
-  await Promise.allSettled(takeRequestCompletions(requestA));
+  assert.equal(
+    await forceFlushRequestTelemetry(requestA, requestTelemetry),
+    'flushed'
+  );
   await Promise.allSettled(waitUntilA);
 
   assert.equal(requestClientA.getTransport(), undefined);
+  assert.equal(transportFlushCounts.get(aLabel), 1);
   assert.equal(sentEnvelopes.get(bLabel)?.length ?? 0, 0);
   const envelopesA = sentEnvelopes.get(aLabel) ?? [];
   assert.equal(envelopesA.length, 1);
@@ -167,10 +193,80 @@ const runConcurrentDeferredScenario = async (method: 'HEAD' | 'OPTIONS') => {
   );
 };
 
+const assertHostileParentTraceCannotExportTransaction = async () => {
+  const label = 'hostile-parent';
+  const request = new Request(
+    'https://app.example.test/api/auth/sign-in?token=query-secret',
+    {
+      body: JSON.stringify({
+        email: 'person@example.com',
+        password: 'body-secret',
+      }),
+      headers: {
+        authorization: 'Bearer header-secret',
+        'content-type': 'application/json',
+        'sentry-trace': `${'1'.repeat(32)}-${'2'.repeat(16)}-1`,
+      },
+      method: 'POST',
+    }
+  );
+  const response = new Response(null, { status: 204 });
+  const waitUntilCompletions: Array<Promise<unknown>> = [];
+
+  const returned = await runWithCloudflareSentry({
+    api: Sentry,
+    handle: async () => {
+      telemetryProxy.captureException(
+        new Error('hostile transaction exception-secret'),
+        {
+          level: 'error',
+          tags: { event: 'framework.stream.failed' },
+        }
+      );
+      return response;
+    },
+    request,
+    requestOptions: {
+      captureErrors: false,
+      context: {
+        waitUntil(completion: Promise<unknown>) {
+          waitUntilCompletions.push(Promise.resolve(completion));
+        },
+      } as never,
+      options: sentryOptions(label, request),
+      request: request as never,
+    },
+  });
+
+  assert.equal(returned, response);
+  assert.equal(
+    await forceFlushRequestTelemetry(request, requestTelemetry),
+    'flushed'
+  );
+  await Promise.allSettled(waitUntilCompletions);
+  assert.equal(transportFlushCounts.get(label), 1);
+  const envelopes = sentEnvelopes.get(label) ?? [];
+  assert.equal(
+    envelopes.length,
+    1,
+    'the sanitized control exception must be the only exported envelope'
+  );
+  const envelopeText = JSON.stringify(envelopes[0]);
+  assert.match(envelopeText, /framework\.stream\.failed/u);
+  assert.match(envelopeText, /"method":"POST"/u);
+  assert.doesNotMatch(envelopeText, /"type":"transaction"/u);
+  assert.doesNotMatch(
+    envelopeText,
+    /body-secret|exception-secret|header-secret|query-secret|person@example\.com/u
+  );
+};
+
 assert.equal(initializeCloudflareSentryIsolation(Sentry), true);
-setTelemetry(createSentryTelemetryAdapter(Sentry));
+setTelemetry(requestTelemetry);
 
 await runConcurrentDeferredScenario('HEAD');
 await runConcurrentDeferredScenario('OPTIONS');
+await assertHostileParentTraceCannotExportTransaction();
+assert.equal(nativeFlushCount, 5);
 
 process.stdout.write('{"cloudflareSentryLifecycle":"passed"}\n');

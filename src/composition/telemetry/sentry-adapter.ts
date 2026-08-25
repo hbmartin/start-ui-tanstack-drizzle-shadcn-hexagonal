@@ -495,11 +495,31 @@ export const sanitizeSentryEvent = <TEvent>(event: TEvent): TEvent => {
 
 type SentryTelemetryAdapterOptions = {
   currentCorrelation?: () => TelemetryCorrelation;
+  flushOwner?: 'adapter' | 'request-wrapper';
+};
+
+const createSentryForceFlush = (
+  Sentry: SentryLike,
+  flushOwner: NonNullable<SentryTelemetryAdapterOptions['flushOwner']>
+) => {
+  if (flushOwner === 'request-wrapper') {
+    // Cloudflare's SDK wrapper flushes and disposes its request-scoped client.
+    return async () => {};
+  }
+
+  return async () => {
+    if (!Sentry.flush) return;
+    const flushed = await Sentry.flush(5_000);
+    if (!flushed) throw new Error('Sentry flush did not complete');
+  };
 };
 
 export const createSentryTelemetryAdapter = (
   Sentry: SentryLike,
-  { currentCorrelation = () => ({}) }: SentryTelemetryAdapterOptions = {}
+  {
+    currentCorrelation = () => ({}),
+    flushOwner = 'adapter',
+  }: SentryTelemetryAdapterOptions = {}
 ): TelemetryAdapter => ({
   captureException: (error, context) => {
     let correlation: TelemetryCorrelation = {};
@@ -535,11 +555,7 @@ export const createSentryTelemetryAdapter = (
   },
   currentCorrelation: () => ({}),
   emitLog: () => {},
-  forceFlush: async () => {
-    if (!Sentry.flush) return;
-    const flushed = await Sentry.flush(5_000);
-    if (!flushed) throw new Error('Sentry flush did not complete');
-  },
+  forceFlush: createSentryForceFlush(Sentry, flushOwner),
   recordMetric: () => {},
   startManualSpan: () => ({
     addEvent: () => {},
