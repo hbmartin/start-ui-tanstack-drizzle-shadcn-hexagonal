@@ -63,6 +63,12 @@ export const LICENSE_EXCEPTIONS = [
     reason:
       'Inter web font. SIL Open Font License explicitly permits embedding and redistribution of the font files.',
   },
+  {
+    name: '@img/sharp-libvips',
+    license: 'LGPL-3.0-or-later',
+    reason:
+      'Unmodified platform-native libvips binary used only by the pinned Miniflare/Wrangler development toolchain. It is dynamically loaded by sharp and is not linked into application artifacts.',
+  },
 ];
 
 function matchesException(packageName, license) {

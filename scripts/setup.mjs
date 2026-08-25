@@ -7,6 +7,13 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import {
+  applyEdits,
+  getNodeValue,
+  modify,
+  parseTree,
+  printParseErrorCode,
+} from 'jsonc-parser';
 
 const presets = new Set(['core', 'demo']);
 const capabilityPresetDefinitionsPath = new URL(
@@ -452,6 +459,59 @@ export const isCapabilityEnabled = (capabilityId: string) =>
 `;
 };
 
+const isStrictWranglerRoot = (root, errors) =>
+  Boolean(root) && root.type === 'object' && errors.length === 0;
+
+const wranglerParseErrorSuffix = (errors) => {
+  const details = errors
+    .map((error) => printParseErrorCode(error.error))
+    .join(', ');
+  return details ? ` (${details})` : '';
+};
+
+const parseStrictWranglerTree = (source) => {
+  const errors = [];
+  const root = parseTree(source, errors, {
+    allowTrailingComma: false,
+    disallowComments: true,
+  });
+  if (isStrictWranglerRoot(root, errors)) return root;
+  throw new Error(
+    `wrangler.json must contain strict valid JSON${wranglerParseErrorSuffix(errors)}.`
+  );
+};
+
+const topLevelPropertiesNamed = (root, name) =>
+  (root.children ?? []).filter(
+    (property) =>
+      property.type === 'property' && property.children?.[0]?.value === name
+  );
+
+const hasOneStringProperty = (properties) =>
+  properties.length === 1 && properties[0]?.children?.[1]?.type === 'string';
+
+const parseWranglerConfig = (source) => {
+  const root = parseStrictWranglerTree(source);
+  const nameProperties = topLevelPropertiesNamed(root, 'name');
+  if (!hasOneStringProperty(nameProperties)) {
+    throw new Error(
+      'wrangler.json must contain one top-level string name field for APP_SLUG setup.'
+    );
+  }
+  return { name: getNodeValue(nameProperties[0].children[1]) };
+};
+
+export const createWranglerConfigSource = (source, appSlug) => {
+  parseWranglerConfig(source);
+  const edits = modify(source, ['name'], validateSlug(appSlug), {
+    formattingOptions: { eol: '\n', insertSpaces: true, tabSize: 2 },
+  });
+  const next = applyEdits(source, edits);
+  return next.endsWith('\n') ? next : `${next}\n`;
+};
+
+const readWranglerName = (source) => parseWranglerConfig(source).name;
+
 const assertStableApplicationSlug = (assignments, options) => {
   const existing = assignments.get('APP_SLUG');
   if (existing && existing !== options.appSlug) {
@@ -472,8 +532,7 @@ const assertStableCapabilityPreset = (assignments, options) => {
 
 const assertSafeRerun = (assignments, options) => {
   const version = assignments.get('SETUP_VERSION');
-  if (version === undefined || version === '') return;
-  if (version !== '1') {
+  if (version !== undefined && version !== '' && version !== '1') {
     throw new Error(
       `Unsupported SETUP_VERSION ${version}; update the setup tool before changing this environment.`
     );
@@ -531,13 +590,25 @@ const setupPaths = (cwd) => ({
     cwd,
     'src/modules/kernel/domain/capability-selection.generated.ts'
   ),
+  wranglerPath: path.join(cwd, 'wrangler.json'),
 });
 
 const readSetupEnvironmentSource = (paths, existed) =>
   fs.readFileSync(existed ? paths.envPath : paths.examplePath, 'utf8');
 
-const setupPlanChanged = (envChanged, selectionChanged) =>
-  [envChanged, selectionChanged].some(Boolean);
+const setupPlanChanged = (...changes) => changes.some(Boolean);
+
+const assertEstablishedWranglerIdentity = ({
+  establishedSlug,
+  existed,
+  wranglerSource,
+}) => {
+  if (!existed || !establishedSlug) return;
+  if (readWranglerName(wranglerSource) === establishedSlug) return;
+  throw new Error(
+    `Refusing setup because wrangler.json name does not match established APP_SLUG ${establishedSlug}. Reconcile the deployment identity explicitly before continuing.`
+  );
+};
 
 const createSetupPlan = ({ cwd, options, randomBytes }) => {
   const paths = setupPaths(cwd);
@@ -553,19 +624,34 @@ const createSetupPlan = ({ cwd, options, randomBytes }) => {
   });
   const selectionSource = fs.readFileSync(paths.selectionPath, 'utf8');
   const nextSelection = createCapabilitySelectionSource(options.preset);
+  const wranglerSource = fs.readFileSync(paths.wranglerPath, 'utf8');
+  const establishedSlug = current.get('APP_SLUG');
+  assertEstablishedWranglerIdentity({
+    establishedSlug,
+    existed,
+    wranglerSource,
+  });
+  const nextWrangler = createWranglerConfigSource(
+    wranglerSource,
+    options.appSlug
+  );
   const envChanged = next !== source || !existed;
   const selectionChanged = nextSelection !== selectionSource;
+  const wranglerChanged = nextWrangler !== wranglerSource;
   return {
     ...paths,
-    changed: setupPlanChanged(envChanged, selectionChanged),
+    changed: setupPlanChanged(envChanged, selectionChanged, wranglerChanged),
     emailDeliveryEnabled:
       readEnvAssignments(next).get('EMAIL_DELIVERY_DISABLED') === 'false',
     envChanged,
     existed,
     next,
     nextSelection,
+    nextWrangler,
     selectionChanged,
     selectionSource,
+    wranglerChanged,
+    wranglerSource,
   };
 };
 
@@ -591,6 +677,14 @@ const printDryRunResult = (output, plan) => {
   output.write(
     `${plan.selectionChanged ? 'Would update' : 'No changes for'} ${plan.selectionPath}.\n`
   );
+  output.write(
+    `${plan.wranglerChanged ? 'Would update' : 'No changes for'} ${plan.wranglerPath}.\n`
+  );
+};
+
+const writeWranglerConfig = (plan, writeAtomic) => {
+  if (!plan.wranglerChanged) return;
+  writeAtomic(plan.wranglerPath, plan.nextWrangler, { mode: 0o644 });
 };
 
 const writeGeneratedSelection = (plan, writeAtomic) => {
@@ -613,12 +707,67 @@ const restoreGeneratedSelection = (plan, writeAtomic) => {
   writeAtomic(plan.selectionPath, plan.selectionSource, { mode: 0o644 });
 };
 
-const writeSetupPlan = (plan, writeAtomic) => {
+const restoreWranglerConfig = (plan, writeAtomic) => {
+  if (!plan.wranglerChanged) return;
+  writeAtomic(plan.wranglerPath, plan.wranglerSource, { mode: 0o644 });
+};
+
+const attemptPublicSetupRestore = (
+  shouldRestore,
+  restore,
+  plan,
+  writeAtomic
+) => {
+  if (!shouldRestore) return undefined;
   try {
+    restore(plan, writeAtomic);
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+};
+
+const restorePublicSetupFiles = (
+  plan,
+  writeAtomic,
+  { selectionWritten, wranglerWritten }
+) => {
+  return [
+    attemptPublicSetupRestore(
+      selectionWritten,
+      restoreGeneratedSelection,
+      plan,
+      writeAtomic
+    ),
+    attemptPublicSetupRestore(
+      wranglerWritten,
+      restoreWranglerConfig,
+      plan,
+      writeAtomic
+    ),
+  ].filter(Boolean);
+};
+
+const writeSetupPlan = (plan, writeAtomic) => {
+  let selectionWritten = false;
+  let wranglerWritten = false;
+  try {
+    writeWranglerConfig(plan, writeAtomic);
+    wranglerWritten = plan.wranglerChanged;
     writeGeneratedSelection(plan, writeAtomic);
+    selectionWritten = plan.selectionChanged;
     writePrivateEnvironment(plan, writeAtomic);
   } catch (error) {
-    restoreGeneratedSelection(plan, writeAtomic);
+    const rollbackErrors = restorePublicSetupFiles(plan, writeAtomic, {
+      selectionWritten,
+      wranglerWritten,
+    });
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        'Setup failed and one or more public configuration files could not be restored.'
+      );
+    }
     throw error;
   }
 };

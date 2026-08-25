@@ -31,6 +31,12 @@ describe('license compliance checker', () => {
           { name: '@sentry/cli-linux-x64', versions: ['1.2.3'] },
         ],
         'MPL-2.0': [{ name: 'lightningcss-darwin-arm64', versions: ['1.0.0'] }],
+        'LGPL-3.0-or-later': [
+          {
+            name: '@img/sharp-libvips-darwin-arm64',
+            versions: ['1.3.1'],
+          },
+        ],
       })
     ).toEqual([]);
 

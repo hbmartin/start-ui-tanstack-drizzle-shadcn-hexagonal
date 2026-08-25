@@ -5,9 +5,11 @@
   // conventional src/index.ts. Public gates are also intentional template API
   // even when the demo preset does not consume every export.
   "entry": [
+    "instrument.server.mjs",
     "src/server.ts",
     "src/start.ts",
     "src/router.tsx",
+    "src/runtime/*/server-entry.ts",
     "src/routes/**/*.{ts,tsx}",
     "src/app/**/{index,presentation}.{ts,tsx}",
     "src/modules/*/{index,server,backend,client,presentation,testing,manifest,persistence}.{ts,tsx}",
@@ -37,6 +39,12 @@
       "exports": ["*"],
     },
     { "file": "src/platform/**/index.{ts,tsx}", "exports": ["*"] },
+    {
+      // Runtime requirements are a v5 template contract consumed by profile
+      // composition as each executable adapter gate lands.
+      "file": "src/platform/runtime/runtime-profile.ts",
+      "exports": ["*"],
+    },
     { "file": "src/platform/components/**/*.{ts,tsx}", "exports": ["*"] },
     { "file": "src/app/**/{index,presentation}.{ts,tsx}", "exports": ["*"] },
     {

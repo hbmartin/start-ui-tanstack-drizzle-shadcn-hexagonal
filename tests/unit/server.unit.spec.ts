@@ -41,6 +41,7 @@ describe('server entry', () => {
       expect.objectContaining({
         context: {
           requestId: expect.any(String),
+          runtimeProfile: 'node',
         },
       })
     );

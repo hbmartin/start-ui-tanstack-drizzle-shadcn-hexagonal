@@ -205,48 +205,63 @@ pnpm e2e:ui     # Open a UI which allows you to run specific tests and see test 
 > The generated e2e context files contain authentication logic. If you make changes to your local database instance, you should re-run `pnpm e2e:setup`. It will be run automatically in a CI context.
 ## Production
 
+Production targets are explicit and have isolated output contracts:
+
 ```bash
-pnpm install
-pnpm build
-pnpm start
+pnpm build                 # Node alias; writes .output/node
+pnpm build:vercel          # Nitro Vercel preset; writes .vercel/output
+pnpm build:cloudflare      # Cloudflare Vite plugin; writes dist
+pnpm verify:artifacts      # Build and inspect all three artifact shapes
 ```
+
+`pnpm preview:node` and `pnpm preview:vercel` run the corresponding
+already-built output. Runtime selection is a trusted build input; the application never
+infers a deployment profile from request hosts, forwarding headers, or ambient
+provider variables.
+
+The v5 runtime work is intentionally incremental. These commands currently
+prove isolated artifact shapes and trusted profile injection. Executable
+adapter contract tests for Hyperdrive, R2, Worker lifecycle ownership, and the
+Vercel serverless lifecycle land before Workers or Vercel are declared
+production-ready. Node is likewise not runtime-verified yet: the current
+artifact renders the login route, but its streamed response does not terminate
+before the serialization timeout. The future Node gate must prove clean stream
+completion in addition to process lifecycle behavior.
 
 ## Deploy
 
-This app is a TanStack Start app with Nitro already enabled in `vite.config.ts`. `pnpm build` creates the production `.output` directory, and `pnpm start` runs `.output/server/index.mjs`.
+Node and Vercel use explicit Nitro presets. Cloudflare uses the official
+Cloudflare Vite plugin and its generated deployment configuration. Do not set
+`NITRO_PRESET`; use the target-specific command instead.
 
 Before deploying anywhere:
 
 * Use Node.js 24 or newer to match the current `package.json` engine.
-* Set production values for the required variables in `.env.example`, especially `DATABASE_URL`, `AUTH_SECRET`, `VITE_BASE_URL`, S3 storage, email, OAuth, and any public `VITE_*` values.
-* Point `VITE_BASE_URL` at the deployed HTTPS URL. For preview domains, also configure `AUTH_ALLOWED_HOSTS` as needed.
+* Set production values for the required variables in `.env.example`, especially the database, authentication secrets, canonical application URL, and public `VITE_*` values. Object storage is required only when its capability is enabled.
+* Use explicit platform secrets and bindings. The Cloudflare artifact build disables implicit `.env` fallback and rejects local `.dev.vars*` files before bundling.
 * Run your versioned migration command against the production database before serving production traffic. Do not use `pnpm db:push` for production deployments because it bypasses migration history.
 
 <details>
 <summary><strong>Cloudflare Workers</strong></summary>
 
-Cloudflare's TanStack Start guide supports existing projects through Wrangler automatic configuration.
+Build and inspect the Worker artifact while the executable runtime gate is
+under construction:
 
 ```bash
-pnpm dlx wrangler login
-pnpm dlx wrangler deploy
+pnpm build:cloudflare
 ```
 
-Wrangler can detect TanStack Start and generate the Worker configuration for `.output/server/index.mjs`, `.output/public`, and the `nodejs_compat` compatibility flag.
+`wrangler.json` is the source configuration. The Cloudflare Vite plugin emits
+the deployment snapshot at `dist/server/wrangler.json`; Wrangler automatically
+uses that generated output after a build. `pnpm setup` keeps the Worker name in
+sync with `APP_SLUG`. `.wrangler` and `.dev.vars*` are local-only and ignored.
 
-For Workers Builds from the Cloudflare dashboard:
-
-* Deploy command: `pnpm dlx wrangler deploy`
-* Build variables: set `NODE_VERSION=24` and `PNPM_VERSION=11.9.0`
-* Secrets and environment variables: add the production values from `.env.example`
-
-For source-controlled Worker configuration, install Wrangler and the Cloudflare Vite plugin, then follow Cloudflare's existing-app setup for `vite.config.ts` and `wrangler.jsonc`.
-
-```bash
-pnpm add -D wrangler @cloudflare/vite-plugin
-```
-
-Cloudflare Workers is not a normal Node server, so validate database, storage, and email dependencies with Workers-compatible providers or bindings instead of local Docker, MinIO, and Maildev URLs.
+The artifact build alone is not a deployment approval, so the v5 branch does
+not yet expose a Cloudflare preview or deploy script. The production Worker
+gate must first prove that the built graph starts in workerd and exercises
+Hyperdrive, R2 when uploads are enabled, lifecycle flushing, and non-Node
+adapters. Workers Builds configuration and deploy instructions return only
+after that contract is executable.
 
 Docs: [Cloudflare TanStack Start](https://developers.cloudflare.com/workers/framework-guides/web-apps/tanstack-start/), [Workers Builds image](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)
 
@@ -255,14 +270,15 @@ Docs: [Cloudflare TanStack Start](https://developers.cloudflare.com/workers/fram
 <details>
 <summary><strong>Vercel</strong></summary>
 
-Vercel supports TanStack Start with Nitro, and this repo already has the required `nitro()` Vite plugin.
+Vercel uses the explicit Nitro `vercel` preset and emits Build Output API v3
+under `.vercel/output`.
 
 Deploy from Git:
 
 1. Import the repository in Vercel.
 2. Use the TanStack Start preset if it is shown, otherwise use the default project settings.
 3. Set Node.js Version to `24.x`.
-4. Set Build Command to `pnpm build`.
+4. Set Build Command to `pnpm build:vercel`.
 5. Leave Output Directory empty/default.
 6. Add the production environment variables from `.env.example`.
 7. Deploy.
@@ -274,7 +290,10 @@ pnpm dlx vercel
 pnpm dlx vercel --prod
 ```
 
-For Vercel preview URLs, this app can derive `VITE_BASE_URL` from Vercel's preview environment variables when `VITE_BASE_URL` is not set. Add `AUTH_ALLOWED_HOSTS="*.vercel.app"` if auth should accept Vercel preview hosts.
+Run `pnpm verify:artifact:vercel` locally or in CI to validate the function
+entry, Node 24 runtime metadata, response-streaming flag, and static output.
+Configure the canonical application origin and allowed auth hosts explicitly
+until the v5 canonical-origin policy is implemented.
 
 Docs: [TanStack Start on Vercel](https://vercel.com/docs/frameworks/full-stack/tanstack-start), [Vercel Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions)
 
@@ -324,13 +343,12 @@ Dashboard settings:
 ```text
 Runtime: Node
 Build Command: pnpm i --shamefully-hoist && pnpm build
-Start Command: node .output/server/index.mjs
+Start Command: pnpm start
 ```
 
 Environment variables:
 
 ```text
-NITRO_PRESET=render-com
 NODE_VERSION=24
 HOST=0.0.0.0
 ```
@@ -345,10 +363,8 @@ services:
     name: start-ui-web
     env: node
     buildCommand: pnpm i --shamefully-hoist && pnpm build
-    startCommand: node .output/server/index.mjs
+    startCommand: pnpm start
     envVars:
-      - key: NITRO_PRESET
-        value: render-com
       - key: NODE_VERSION
         value: 24
       - key: HOST

@@ -72,7 +72,9 @@ Escalate based on touched surface:
 | Module workflows or public APIs | `pnpm test:integration:workflow` |
 | Auth, routing, session, upload, or full-stack persistence | `pnpm test:e2e:chromium` |
 | Critical screens or layout-heavy UI | `pnpm test:e2e:visual` |
-| Framework config, env loading, production runtime, dependencies | `pnpm build` |
+| Node framework config, env loading, production runtime, dependencies | `pnpm build` |
+| Vercel or Cloudflare build/profile code | `pnpm verify:artifact:vercel` or `pnpm verify:artifact:cloudflare` |
+| Shared server entry or runtime build configuration | `pnpm verify:artifacts` |
 | Merge-level confidence | `pnpm verify` |
 
 Mutation testing is intentionally slower. Use the data-driven runner during deep work, for example `node scripts/run-mutation.mjs --scope=auth --fast`, and run `pnpm test:mutation:critical` before high-risk releases or from the scheduled CI workflow.

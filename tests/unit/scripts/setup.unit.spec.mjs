@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   createCapabilitySelectionSource,
   createSetupEnvironment,
+  createWranglerConfigSource,
   parseSetupArguments,
   readEnvAssignments,
   resolveSetupOptions,
@@ -27,6 +28,7 @@ const fixture = () => {
     'src/modules/kernel/domain/capability-selection.generated.ts',
     selectionPath
   );
+  fs.copyFileSync('wrangler.json', path.join(directory, 'wrangler.json'));
   return directory;
 };
 const deterministicRandom = (size) => Buffer.alloc(size, 7);
@@ -41,7 +43,9 @@ const outputSink = () => {
   };
 };
 const failAtomicWriteTo = (target) => (filePath, contents, options) => {
-  if (filePath === target) throw new Error('simulated env write failure');
+  if (filePath === target) {
+    throw new Error(`simulated write failure for ${path.basename(target)}`);
+  }
   writeFileAtomic(filePath, contents, options);
 };
 
@@ -252,6 +256,38 @@ describe('setup environment generation', () => {
   });
 });
 
+describe('setup Worker identity generation', () => {
+  it('uses APP_SLUG as the source-controlled Worker name', () => {
+    const source = fs.readFileSync('wrangler.json', 'utf8');
+    const generated = createWranglerConfigSource(source, 'acme-cloud');
+    expect(generated).toContain('"name": "acme-cloud"');
+    expect(generated).not.toContain('"name": "start-ui-web"');
+  });
+
+  it('rejects an ambiguous or missing Worker name field', () => {
+    expect(() => createWranglerConfigSource('{}\n', 'acme-cloud')).toThrow(
+      'top-level'
+    );
+    const nestedName = createWranglerConfigSource(
+      '{\n  "name": "root",\n  "workflow": { "name": "nested" }\n}\n',
+      'acme-cloud'
+    );
+    expect(JSON.parse(nestedName)).toEqual({
+      name: 'acme-cloud',
+      workflow: { name: 'nested' },
+    });
+    expect(() =>
+      createWranglerConfigSource(
+        '{\n  "name": "one",\n  "name": "two"\n}\n',
+        'acme-cloud'
+      )
+    ).toThrow('one top-level');
+    expect(() =>
+      createWranglerConfigSource('{ "name": "broken", }\n', 'acme-cloud')
+    ).toThrow('strict valid JSON');
+  });
+});
+
 describe('setup filesystem behavior', () => {
   const argumentsFor = (preset, extra = []) => [
     `--preset=${preset}`,
@@ -269,6 +305,8 @@ describe('setup filesystem behavior', () => {
       'src/modules/kernel/domain/capability-selection.generated.ts'
     );
     const selectionBefore = fs.readFileSync(selectionPath, 'utf8');
+    const wranglerPath = path.join(cwd, 'wrangler.json');
+    const wranglerBefore = fs.readFileSync(wranglerPath, 'utf8');
     const result = await runSetup({
       argv: argumentsFor('core', ['--dry-run']),
       cwd,
@@ -279,6 +317,7 @@ describe('setup filesystem behavior', () => {
     expect(result).toMatchObject({ changed: true, dryRun: true });
     expect(fs.existsSync(path.join(cwd, '.env'))).toBe(false);
     expect(fs.readFileSync(selectionPath, 'utf8')).toBe(selectionBefore);
+    expect(fs.readFileSync(wranglerPath, 'utf8')).toBe(wranglerBefore);
     expect(output.value()).not.toContain(
       Buffer.alloc(48, 7).toString('base64url')
     );
@@ -307,6 +346,9 @@ describe('setup filesystem behavior', () => {
     expect(second.changed).toBe(false);
     expect(fs.readFileSync(envPath, 'utf8')).toBe(content);
     expect(fs.statSync(envPath).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(path.join(cwd, 'wrangler.json'), 'utf8')).toContain(
+      '"name": "acme-app"'
+    );
   });
 
   it('writes the generated core selection without demo capabilities', async () => {
@@ -373,6 +415,48 @@ describe('setup filesystem behavior', () => {
     ).rejects.toThrow('Refusing to change CAPABILITY_PRESET');
   });
 
+  it('protects an established slug even without SETUP_VERSION', async () => {
+    const cwd = fixture();
+    fs.copyFileSync(path.join(cwd, '.env.example'), path.join(cwd, '.env'));
+    await expect(
+      runSetup({
+        argv: argumentsFor('demo'),
+        cwd,
+        input: { isTTY: false },
+        output: outputSink(),
+        randomBytes: deterministicRandom,
+      })
+    ).rejects.toThrow('Refusing to change APP_SLUG');
+  });
+
+  it('refuses to hide divergence between durable and Worker identity', async () => {
+    const cwd = fixture();
+    await runSetup({
+      argv: argumentsFor('demo'),
+      cwd,
+      input: { isTTY: false },
+      output: outputSink(),
+      randomBytes: deterministicRandom,
+    });
+    const wranglerPath = path.join(cwd, 'wrangler.json');
+    fs.writeFileSync(
+      wranglerPath,
+      createWranglerConfigSource(
+        fs.readFileSync(wranglerPath, 'utf8'),
+        'different-worker'
+      )
+    );
+    await expect(
+      runSetup({
+        argv: argumentsFor('demo'),
+        cwd,
+        input: { isTTY: false },
+        output: outputSink(),
+        randomBytes: deterministicRandom,
+      })
+    ).rejects.toThrow('does not match established APP_SLUG');
+  });
+
   it('rejects unsupported setup versions without changing either file', async () => {
     const cwd = fixture();
     const envPath = path.join(cwd, '.env');
@@ -427,6 +511,8 @@ describe('setup filesystem behavior', () => {
       'src/modules/kernel/domain/capability-selection.generated.ts'
     );
     const selectionBefore = fs.readFileSync(selectionPath, 'utf8');
+    const wranglerPath = path.join(cwd, 'wrangler.json');
+    const wranglerBefore = fs.readFileSync(wranglerPath, 'utf8');
 
     await expect(
       runSetup({
@@ -437,10 +523,59 @@ describe('setup filesystem behavior', () => {
         randomBytes: deterministicRandom,
         writeAtomic: failAtomicWriteTo(path.join(cwd, '.env')),
       })
-    ).rejects.toThrow('simulated env write failure');
+    ).rejects.toThrow('simulated write failure for .env');
 
     expect(fs.existsSync(path.join(cwd, '.env'))).toBe(false);
     expect(fs.readFileSync(selectionPath, 'utf8')).toBe(selectionBefore);
+    expect(fs.readFileSync(wranglerPath, 'utf8')).toBe(wranglerBefore);
+  });
+
+  it('does not run rollback writes when the first public write fails', async () => {
+    const cwd = fixture();
+    const wranglerPath = path.join(cwd, 'wrangler.json');
+    const wranglerBefore = fs.readFileSync(wranglerPath, 'utf8');
+
+    await expect(
+      runSetup({
+        argv: argumentsFor('core'),
+        cwd,
+        input: { isTTY: false },
+        output: outputSink(),
+        randomBytes: deterministicRandom,
+        writeAtomic: failAtomicWriteTo(wranglerPath),
+      })
+    ).rejects.toThrow('simulated write failure for wrangler.json');
+
+    expect(fs.existsSync(path.join(cwd, '.env'))).toBe(false);
+    expect(fs.readFileSync(wranglerPath, 'utf8')).toBe(wranglerBefore);
+  });
+
+  it('restores Worker identity when the capability selection write fails', async () => {
+    const cwd = fixture();
+    const selectionPath = path.join(
+      cwd,
+      'src/modules/kernel/domain/capability-selection.generated.ts'
+    );
+    const selectionBefore = fs.readFileSync(selectionPath, 'utf8');
+    const wranglerPath = path.join(cwd, 'wrangler.json');
+    const wranglerBefore = fs.readFileSync(wranglerPath, 'utf8');
+
+    await expect(
+      runSetup({
+        argv: argumentsFor('core'),
+        cwd,
+        input: { isTTY: false },
+        output: outputSink(),
+        randomBytes: deterministicRandom,
+        writeAtomic: failAtomicWriteTo(selectionPath),
+      })
+    ).rejects.toThrow(
+      'simulated write failure for capability-selection.generated.ts'
+    );
+
+    expect(fs.existsSync(path.join(cwd, '.env'))).toBe(false);
+    expect(fs.readFileSync(selectionPath, 'utf8')).toBe(selectionBefore);
+    expect(fs.readFileSync(wranglerPath, 'utf8')).toBe(wranglerBefore);
   });
 
   it('leaves the destination intact when an atomic rename fails', () => {

@@ -8,6 +8,10 @@ const resolve = (filePath: string) =>
 
 const testAliases = [
   {
+    find: /^virtual:start-ui\/runtime-server-entry$/,
+    replacement: resolve('./src/runtime/node/server-entry.ts'),
+  },
+  {
     find: /^@tanstack\/react-start$/,
     replacement: resolve('./tests/mocks/tanstack-react-start.ts'),
   },

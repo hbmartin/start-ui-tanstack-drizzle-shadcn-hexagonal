@@ -1,14 +1,15 @@
 import { z } from 'zod';
 
+import {
+  runtimeProfiles,
+  type RuntimeProfile,
+} from '@/platform/runtime/runtime-profile';
+
 export const capabilityPresets = ['core', 'demo'] as const;
 export type CapabilityPreset = (typeof capabilityPresets)[number];
 
-export const manifestRuntimeProfiles = [
-  'node',
-  'vercel',
-  'cloudflare',
-] as const;
-export type ManifestRuntimeProfile = (typeof manifestRuntimeProfiles)[number];
+export const manifestRuntimeProfiles = runtimeProfiles;
+export type ManifestRuntimeProfile = RuntimeProfile;
 
 export const runtimeAdapterKeys = [
   'database',

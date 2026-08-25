@@ -53,3 +53,4 @@ allowBuilds:
   protobufjs: false
   sharp: true
   ssh2: false
+  workerd: true

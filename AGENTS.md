@@ -22,13 +22,20 @@ Use these commands instead of invoking underlying tools directly.
 | `pnpm test:e2e:visual:app-shell` | Local Chromium visual regression check for the authenticated app shell. |
 | `pnpm test:e2e:visual:manager-users` | Local Chromium visual regression check for manager user screens. |
 | `pnpm test:e2e:visual:update` | Update local visual baselines for review. |
-| `pnpm build` | Production build. |
-| `pnpm verify` | Full pre-merge gate: `check` + `test` + `build`. |
+| `pnpm build` | Node production build alias; writes `.output/node`. |
+| `pnpm build:vercel` | Explicit Nitro Vercel artifact build. |
+| `pnpm build:cloudflare` | Explicit Cloudflare Vite/workerd artifact build. |
+| `pnpm verify:artifacts` | Build and inspect all three isolated artifact contracts. |
+| `pnpm verify` | Full pre-merge gate: `check` + `test` + all profile artifacts. |
 | `pnpm verify:task` | Task-level verification runner with timestamped logs under `test-results/task-verification/`. |
 | `pnpm format:changed` | Format changed files only. |
 | `pnpm check:migrations` | Guard against invalid manual migration edits. |
 
 After code changes, run `pnpm format:changed && pnpm check && pnpm test:affected`. Before merge, run `pnpm verify`.
+
+Cloudflare is artifact-only at this v5 stage. Do not deploy or claim Worker
+runtime verification until `verify:cloudflare` exists and starts the built
+graph in workerd with the declared bindings.
 
 ## Task Verification Loop
 
@@ -41,7 +48,7 @@ Use a layered verification loop rather than relying on one broad command.
 - Use `pnpm verify:task` when a single command/report is more useful than separate commands. Add `-- --visual` for UI changes, `-- --e2e-chromium` for auth/routing/session/persistence risk, and `-- --build` for production runtime risk.
 - Escalate to `pnpm test:e2e --project=chromium` when auth, routing, session, persistence, upload, or full-stack behavior is touched.
 - Escalate to all Playwright projects or the CI matrix when a change is likely to vary by browser.
-- Run `pnpm build` for production build/runtime changes, and `pnpm verify` before merge-level handoff.
+- Run the target-specific build for production runtime changes. Run `pnpm verify:artifacts` when shared build or server-entry code changes, and `pnpm verify` before merge-level handoff.
 - When tests fail, inspect Playwright traces, screenshots, videos, console output, network evidence, and auth diagnostics before changing code. Treat retries as a diagnostic signal, not proof of correctness.
 
 Local full-stack verification with seeded data, Maildev, MinIO, and the local database is the default realism level for agent work. Production smoke testing is out of scope unless read-only routes, credentials, and data safety rules are explicitly provided.

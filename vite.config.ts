@@ -1,4 +1,5 @@
 import babel from '@rolldown/plugin-babel';
+import { cloudflare } from '@cloudflare/vite-plugin';
 import { sentryTanstackStart } from '@sentry/tanstackstart-react/vite';
 import { devtools } from '@tanstack/devtools-vite';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
@@ -8,7 +9,36 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 
+import {
+  cloudflareVitePluginOptions,
+  resolveViteRuntimeProfile,
+  RUNTIME_PROFILE_ENV_KEY,
+  runtimeServerEntryPlugin,
+} from './scripts/runtime-profile-vite.js';
 import { CSP_NONCE_PLACEHOLDER } from './src/platform/http/csp-nonce.js';
+import type { RuntimeProfile } from './src/platform/runtime/runtime-profile.js';
+
+const createRuntimeBuildPlugins = (runtimeProfile: RuntimeProfile) => {
+  if (runtimeProfile === 'cloudflare') {
+    return [cloudflare(cloudflareVitePluginOptions), tanstackStart()];
+  }
+  const nitroOptions =
+    runtimeProfile === 'node'
+      ? {
+          buildDir: 'node_modules/.nitro/node',
+          output: {
+            dir: '.output/node',
+            publicDir: '.output/node/public',
+            serverDir: '.output/node/server',
+          },
+          preset: 'node-server',
+        }
+      : {
+          buildDir: 'node_modules/.nitro/vercel',
+          preset: 'vercel',
+        };
+  return [tanstackStart(), nitro(nitroOptions)];
+};
 
 function srcJsonImportPlugin(): Plugin {
   return {
@@ -68,10 +98,15 @@ function srcJsonImportPlugin(): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
+  const root = process.cwd();
+  const runtimeProfile = resolveViteRuntimeProfile(
+    { command },
+    process.env[RUNTIME_PROFILE_ENV_KEY]
+  );
   // Load env file based on `mode` in the current working directory.
-  const env = loadEnv(mode, process.cwd(), 'VITE_');
-  const sentryEnv = loadEnv(mode, process.cwd(), 'SENTRY_');
+  const env = loadEnv(mode, root, 'VITE_');
+  const sentryEnv = loadEnv(mode, root, 'SENTRY_');
   const envName = env.VITE_ENV_NAME?.toLowerCase();
   const isTestRuntime = envName === 'test' || envName === 'tests';
   const sentryPlugins =
@@ -85,6 +120,7 @@ export default defineConfig(({ mode }) => {
           authToken: sentryEnv.SENTRY_AUTH_TOKEN,
         })
       : [];
+  const runtimeBuildPlugins = createRuntimeBuildPlugins(runtimeProfile);
 
   return {
     envPrefix: ['VITE_', 'APP_NAME', 'APP_SLUG'],
@@ -104,8 +140,8 @@ export default defineConfig(({ mode }) => {
     plugins: [
       ...(isTestRuntime ? [] : devtools()),
       srcJsonImportPlugin(),
-      tanstackStart(),
-      nitro(),
+      runtimeServerEntryPlugin({ profile: runtimeProfile, root }),
+      ...runtimeBuildPlugins,
       // react's vite plugin must come after start's vite plugin
       viteReact(),
       babel({ presets: [reactCompilerPreset()] }),

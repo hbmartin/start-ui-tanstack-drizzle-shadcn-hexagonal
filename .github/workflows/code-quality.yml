@@ -302,7 +302,7 @@ jobs:
           retention-days: 30
 
   build:
-    name: Build (${{ matrix.preset }})
+    name: Build (${{ matrix.preset }}, ${{ matrix.profile }})
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -310,6 +310,7 @@ jobs:
       fail-fast: false
       matrix:
         preset: [core, demo]
+        profile: [node, vercel, cloudflare]
     env:
       VITE_BASE_URL: http://localhost:3000
     steps:
@@ -327,16 +328,16 @@ jobs:
           pnpm setup -- --yes --preset=${{ matrix.preset }}
           --app-name="Start UI" --app-slug=start-ui-web
 
-      - name: Build app
+      - name: Build and verify runtime artifact
         run: |
-          mkdir -p test-results/build
+          mkdir -p test-results/build/${{ matrix.preset }}-${{ matrix.profile }}
           set -o pipefail
-          pnpm build 2>&1 | tee test-results/build/build.log
+          pnpm verify:artifact:${{ matrix.profile }} 2>&1 | tee test-results/build/${{ matrix.preset }}-${{ matrix.profile }}/build.log
 
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-log
-          path: test-results/build/build.log
+          name: build-log-${{ matrix.preset }}-${{ matrix.profile }}
+          path: test-results/build/${{ matrix.preset }}-${{ matrix.profile }}/build.log
           retention-days: 30

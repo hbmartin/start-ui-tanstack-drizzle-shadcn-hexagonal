@@ -22,10 +22,12 @@ import { replaceCspNoncePlaceholderInHtmlResponse } from '@/platform/http/csp-no
 import { createCspNonce } from '@/platform/http/csp-nonce-server';
 import { violatesServerFnBodyLimit } from '@/platform/http/request-body-limit';
 import { applySecurityHeaders } from '@/platform/http/security-headers';
+import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
 import { createNoOpTelemetry } from '@/platform/telemetry';
 
 export type AppStartRequestContext = {
   requestId: string;
+  runtimeProfile: RuntimeProfile;
   cspNonce?: string;
   auth?: {
     getSession: () => Promise<AuthSession | null>;
