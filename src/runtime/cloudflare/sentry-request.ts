@@ -9,6 +9,10 @@ type CloudflareSentryRequestApi = Pick<
   typeof import('@sentry/cloudflare'),
   'wrapRequestHandler'
 >;
+type CloudflareSentryIsolationApi = Pick<
+  typeof import('@sentry/cloudflare'),
+  'setAsyncLocalStorageAsyncContextStrategy'
+>;
 
 type RequestHandlerOptions = Parameters<
   CloudflareSentryRequestApi['wrapRequestHandler']
@@ -33,6 +37,25 @@ const sentrySentinelResponse = (applicationCompletion: Promise<unknown>) =>
       status: 200,
     }
   );
+
+/**
+ * `wrapRequestHandler` assumes the Cloudflare SDK async-context strategy has
+ * already been installed (normally `withSentry` does this). This entrypoint
+ * calls the lower-level wrapper so it must establish the strategy exactly once
+ * before accepting requests. Failure disables Sentry instead of sharing its
+ * fallback isolation scope across concurrent requests.
+ */
+export const initializeCloudflareSentryIsolation = (
+  api: CloudflareSentryIsolationApi
+): boolean => {
+  try {
+    api.setAsyncLocalStorageAsyncContextStrategy();
+    return true;
+  } catch (failure) {
+    reportTelemetryFailure('sentry.cloudflare.async_context', failure);
+    return false;
+  }
+};
 
 /**
  * Gives Sentry a request-isolated client without letting its streaming wrapper

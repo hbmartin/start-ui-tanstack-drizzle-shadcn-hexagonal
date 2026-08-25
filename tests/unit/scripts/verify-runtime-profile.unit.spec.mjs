@@ -60,12 +60,14 @@ const createVercelArtifact = (root) => {
 const createCloudflareArtifact = (root) => {
   writeJson(root, 'wrangler.json', {
     compatibility_date: '2026-08-24',
+    compatibility_flags: ['nodejs_compat'],
     main: 'src/server.ts',
     name: 'acme-app',
   });
   writeJson(root, 'dist/server/wrangler.json', {
     assets: { directory: '../client' },
     compatibility_date: '2026-08-24',
+    compatibility_flags: ['nodejs_compat'],
     main: 'index.js',
     name: 'acme-app',
   });

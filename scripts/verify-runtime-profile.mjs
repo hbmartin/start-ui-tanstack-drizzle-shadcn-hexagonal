@@ -159,6 +159,10 @@ const verifyCloudflare = (root, expectedAppSlug) => {
   const generatedConfig = readJson(path.join(output, 'server/wrangler.json'));
   assert(sourceConfig.main === 'src/server.ts', 'Cloudflare source entry');
   assert(
+    sourceConfig.compatibility_flags?.includes('nodejs_compat'),
+    'Cloudflare Sentry AsyncLocalStorage compatibility'
+  );
+  assert(
     typeof expectedAppSlug === 'string' && expectedAppSlug.length > 0,
     'APP_SLUG must be supplied for Cloudflare artifact verification'
   );
@@ -171,6 +175,10 @@ const verifyCloudflare = (root, expectedAppSlug) => {
   assert(
     generatedConfig.compatibility_date === sourceConfig.compatibility_date,
     'Cloudflare generated compatibility date'
+  );
+  assert(
+    generatedConfig.compatibility_flags?.includes('nodejs_compat'),
+    'Cloudflare generated AsyncLocalStorage compatibility'
   );
   assert(
     generatedConfig.assets?.directory === '../client',

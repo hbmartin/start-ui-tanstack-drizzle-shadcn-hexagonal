@@ -8,6 +8,20 @@ const resolve = (filePath: string) =>
 export default defineConfig({
   plugins: [
     cloudflareTest({
+      miniflare: {
+        serviceBindings: {
+          TELEMETRY_TAIL_COLLECTOR: 'telemetry-tail-collector',
+        },
+        streamingTails: ['telemetry-tail-collector'],
+        workers: [
+          {
+            name: 'telemetry-tail-collector',
+            modules: true,
+            scriptPath:
+              './tests/cloudflare/support/telemetry-tail-collector.mjs',
+          },
+        ],
+      },
       wrangler: { configPath: './wrangler.json' },
     }),
   ],

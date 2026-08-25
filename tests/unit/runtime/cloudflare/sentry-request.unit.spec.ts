@@ -1,10 +1,15 @@
+import { readFileSync } from 'node:fs';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   registerRequestCompletion,
   takeRequestCompletions,
 } from '@/runtime/request-completion';
-import { runWithCloudflareSentry } from '@/runtime/cloudflare/sentry-request';
+import {
+  initializeCloudflareSentryIsolation,
+  runWithCloudflareSentry,
+} from '@/runtime/cloudflare/sentry-request';
 
 beforeEach(() => {
   vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
@@ -16,6 +21,45 @@ const requestOptions = {
 } as never;
 
 describe('Cloudflare Sentry request isolation', () => {
+  it('installs request isolation once before application bootstrap', () => {
+    const source = readFileSync(
+      new URL(
+        '../../../../src/runtime/cloudflare/server-entry.ts',
+        import.meta.url
+      ),
+      'utf8'
+    );
+    const installIndex = source.indexOf(
+      'initializeCloudflareSentryIsolation(Sentry)'
+    );
+    const applicationIndex = source.indexOf(
+      "createApplicationServerEntry('cloudflare')"
+    );
+
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(applicationIndex).toBeGreaterThan(installIndex);
+    expect(
+      source.match(/initializeCloudflareSentryIsolation\(Sentry\)/gu)
+    ).toHaveLength(1);
+  });
+
+  it('disables Sentry safely when async-context installation fails', () => {
+    const report = vi.spyOn(globalThis.console, 'error');
+    const failure = new Error('async context unavailable');
+    const api = {
+      setAsyncLocalStorageAsyncContextStrategy: vi.fn(() => {
+        throw failure;
+      }),
+    };
+
+    expect(initializeCloudflareSentryIsolation(api as never)).toBe(false);
+    expect(api.setAsyncLocalStorageAsyncContextStrategy).toHaveBeenCalledOnce();
+    expect(report).toHaveBeenCalledWith('telemetry.report_failure', {
+      errorType: 'Error',
+      source: 'sentry.cloudflare.async_context',
+    });
+  });
+
   it('returns the exact application response and body stream', async () => {
     const request = new Request('https://app.example.test');
     const body = new ReadableStream();
@@ -102,7 +146,7 @@ describe('Cloudflare Sentry request isolation', () => {
     expect(handle).toHaveBeenCalledOnce();
   });
 
-  it('keeps the request client alive until deferred stream work settles', async () => {
+  it('keeps the wrapped sentinel alive until deferred stream work settles', async () => {
     const request = new Request('https://app.example.test');
     let resolveStream: (() => void) | undefined;
     const streamReady = new Promise<void>((resolve) => {
@@ -110,7 +154,6 @@ describe('Cloudflare Sentry request isolation', () => {
     });
     registerRequestCompletion(request, streamReady);
     let disposed = false;
-    const captureLateStreamFailure = vi.fn((_failure: unknown) => undefined);
     const api = {
       wrapRequestHandler: vi.fn(async (_options, handler) => {
         const sentinel = await handler();
@@ -133,11 +176,9 @@ describe('Cloudflare Sentry request isolation', () => {
       requestOptions,
     });
 
-    captureLateStreamFailure(new Error('late stream failure'));
     expect(disposed).toBe(false);
     resolveStream?.();
     await Promise.allSettled(takeRequestCompletions(request));
     expect(disposed).toBe(true);
-    expect(captureLateStreamFailure).toHaveBeenCalledOnce();
   });
 });

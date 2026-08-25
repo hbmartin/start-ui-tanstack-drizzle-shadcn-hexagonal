@@ -1,4 +1,6 @@
 declare module 'cloudflare:workers' {
+  export const env: Readonly<Record<string, unknown>>;
+
   type NativeSpan = {
     end(): void;
     setAttribute(key: string, value: boolean | number | string): NativeSpan;

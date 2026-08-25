@@ -25,11 +25,13 @@ const { createTelemetryAdapterChain } =
 const { setTelemetry } = await import('@/platform/telemetry');
 const { createCloudflareTelemetryAdapter } =
   await import('./telemetry-adapter');
-const { runWithCloudflareSentry } = await import('./sentry-request');
+const { initializeCloudflareSentryIsolation, runWithCloudflareSentry } =
+  await import('./sentry-request');
 const { scheduleCloudflareRequestFlush } = await import('./request-lifecycle');
 const { createApplicationServerEntry } =
   await import('../create-application-server-entry');
 
+const sentryRequestIsolationReady = initializeCloudflareSentryIsolation(Sentry);
 const application = await createApplicationServerEntry('cloudflare');
 
 const entry = {
@@ -53,7 +55,10 @@ const entry = {
       skipOpenTelemetrySetup: true,
       tracesSampleRate: 0,
     };
-    const sentryTelemetry = environment.SENTRY_DSN
+    const sentryEnabled = Boolean(
+      environment.SENTRY_DSN && sentryRequestIsolationReady
+    );
+    const sentryTelemetry = sentryEnabled
       ? createSentryTelemetryAdapter(Sentry)
       : undefined;
     setTelemetry(
@@ -65,7 +70,7 @@ const entry = {
     const handle = () =>
       application.fetch(request, { context: undefined as never });
     try {
-      return environment.SENTRY_DSN
+      return sentryEnabled
         ? await runWithCloudflareSentry({
             api: Sentry,
             handle,

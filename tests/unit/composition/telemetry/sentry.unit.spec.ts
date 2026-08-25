@@ -276,6 +276,136 @@ describe('Sentry telemetry composition', () => {
     );
   });
 
+  it('preserves source-map identity while rejecting hostile release metadata', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const debugId = '01234567-89ab-cdef-0123-456789abcdef';
+    const codeFile = 'https://cdn.example/assets/app.js?token=secret';
+
+    const sanitized = sanitizeSentryEvent({
+      debug_meta: {
+        images: [
+          ...Array.from({ length: 50 }, (_, index) => ({
+            code_file: `https://cdn.example/assets/unmatched-${index}.js`,
+            debug_id: `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}`,
+            type: 'sourcemap',
+          })),
+          { code_file: codeFile, debug_id: debugId, type: 'sourcemap' },
+          { code_file: codeFile, debug_id: debugId, type: 'sourcemap' },
+          {
+            code_file: 'https://cdn.example/assets/other.js',
+            debug_id: 'fedcba98-7654-3210-fedc-ba9876543210',
+            type: 'sourcemap',
+          },
+          { code_file: codeFile, debug_id: '0'.repeat(32), type: 'sourcemap' },
+          { code_file: codeFile, debug_id: debugId, type: 'wasm' },
+        ],
+      },
+      environment: 'production',
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                {
+                  abs_path: codeFile,
+                  filename: codeFile,
+                },
+              ],
+            },
+            type: 'Error',
+          },
+        ],
+      },
+      release: 'start-ui-web@5.0.0-alpha.1+7308e9c2',
+    });
+
+    expect(sanitized).toMatchObject({
+      debug_meta: {
+        images: [
+          {
+            code_file: '/assets/app.js',
+            debug_id: debugId,
+            type: 'sourcemap',
+          },
+        ],
+      },
+      environment: 'production',
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                {
+                  abs_path: '/assets/app.js',
+                  filename: '/assets/app.js',
+                },
+              ],
+            },
+            type: 'Error',
+          },
+        ],
+      },
+      release: 'start-ui-web@5.0.0-alpha.1+7308e9c2',
+    });
+
+    const rejected = sanitizeSentryEvent({
+      debug_meta: {
+        images: [
+          {
+            code_file: codeFile,
+            debug_id: 'not-a-debug-id',
+            type: 'sourcemap',
+          },
+        ],
+      },
+      environment: 'production/../../secret',
+      exception: {
+        values: [
+          {
+            stacktrace: { frames: [{ debug_id: 'not-a-debug-id' }] },
+            type: 'Error',
+          },
+        ],
+      },
+      release: 'release with user@example.com',
+    });
+    expect(rejected).not.toHaveProperty('debug_meta');
+    expect(rejected).not.toHaveProperty('environment');
+    expect(rejected).not.toHaveProperty('release');
+    expect(JSON.stringify(rejected)).not.toMatch(
+      /not-a-debug-id|production\/\.\.|user@example\.com/u
+    );
+
+    for (const environment of [
+      'None',
+      'a'.repeat(65),
+      'preview/query',
+      'preview environment',
+      'sk-abcdefghi',
+    ]) {
+      expect(sanitizeSentryEvent({ environment })).not.toHaveProperty(
+        'environment'
+      );
+    }
+    for (const release of [
+      '.',
+      '..',
+      'a'.repeat(201),
+      'release/path',
+      'release\\path',
+      'release\nvalue',
+      'sk-abcdefghi',
+      'user@example.com',
+      `a@${'1'.repeat(199)}`,
+    ]) {
+      expect(sanitizeSentryEvent({ release })).not.toHaveProperty('release');
+    }
+    expect(
+      sanitizeSentryEvent({ release: 'start-ui-web@v5.0.0-alpha.1+7308e9c2' })
+    ).toHaveProperty('release', 'start-ui-web@v5.0.0-alpha.1+7308e9c2');
+  });
+
   it('never exports dynamic request path segments', async () => {
     const { sanitizeSentryEvent } =
       await import('@/composition/telemetry/sentry-adapter');
