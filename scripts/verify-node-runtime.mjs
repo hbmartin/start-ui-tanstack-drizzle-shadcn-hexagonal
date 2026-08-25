@@ -1,0 +1,733 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import net from 'node:net';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import pg from 'pg';
+import { chromium } from 'playwright';
+
+import {
+  createVerificationEnvironment,
+  parseGeneratedCapabilityPreset,
+  readGeneratedCapabilityPreset,
+} from './runtime-verification-environment.mjs';
+import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
+import { verifyRuntimeProfile } from './verify-runtime-profile.mjs';
+
+export { createVerificationEnvironment, parseGeneratedCapabilityPreset };
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const responseTimeoutMs = 8_000;
+const startupTimeoutMs = 15_000;
+const shutdownTimeoutMs = 5_000;
+const cspNoncePlaceholder = '__START_UI_CSP_NONCE__';
+const activeChildren = new Set();
+let activeCleanup;
+let activeDiagnostics = [];
+
+const fail = (message) => {
+  throw new Error(`Node runtime verification failed: ${message}`);
+};
+
+const assert = (condition, message) => {
+  if (!condition) fail(message);
+};
+
+export const createShutdownGuard = () => {
+  let shutdownRequested = false;
+  return Object.freeze({
+    assertCanSpawn() {
+      assert(!shutdownRequested, 'shutdown began before a child could start');
+    },
+    requestShutdown() {
+      shutdownRequested = true;
+    },
+  });
+};
+
+const shutdownGuard = createShutdownGuard();
+
+const delay = (milliseconds) =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const parseRequestedPort = (value, name) => {
+  if (value === undefined) return 0;
+  const port = Number(value);
+  assert(
+    Number.isSafeInteger(port) && port > 0 && port < 65_536,
+    `${name} must be an integer from 1 to 65535`
+  );
+  return port;
+};
+
+const listen = (server, port) =>
+  new Promise((resolve, reject) => {
+    const onError = (error) => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        reject(new Error('TCP listener did not expose a numeric port'));
+        return;
+      }
+      resolve(address.port);
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, '127.0.0.1');
+  });
+
+const closeServer = (server) =>
+  new Promise((resolve) => {
+    if (!server.listening) {
+      resolve();
+      return;
+    }
+    server.close(() => resolve());
+    server.closeAllConnections?.();
+  });
+
+const canConnect = (port) =>
+  new Promise((resolve) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    const finish = (connected) => {
+      socket.destroy();
+      resolve(connected);
+    };
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+    socket.setTimeout(250, () => finish(false));
+  });
+
+const childStartupFailure = (child, name) => {
+  if (child.verificationSpawnError) {
+    return `${name} could not start: ${child.verificationSpawnError.message}`;
+  }
+  if (child.exitCode !== null) {
+    return `${name} exited before listening (exit ${child.exitCode})`;
+  }
+  if (child.signalCode !== null) {
+    return `${name} exited before listening (signal ${child.signalCode})`;
+  }
+  return undefined;
+};
+
+const waitForPort = async (port, child, name) => {
+  const deadline = Date.now() + startupTimeoutMs;
+  while (Date.now() < deadline) {
+    const startupFailure = childStartupFailure(child, name);
+    if (startupFailure) fail(startupFailure);
+    if (await canConnect(port)) return;
+    await delay(100);
+  }
+  fail(`${name} did not listen on port ${port} within ${startupTimeoutMs}ms`);
+};
+
+const spawnManaged = (command, args, options) => {
+  shutdownGuard.assertCanSpawn();
+  const child = spawn(command, args, options);
+  child.verificationSpawnError = undefined;
+  child.verificationClosed = once(child, 'close').catch(() => undefined);
+  activeChildren.add(child);
+  child.once('error', (error) => {
+    child.verificationSpawnError = error;
+    activeChildren.delete(child);
+  });
+  child.once('exit', () => activeChildren.delete(child));
+  return child;
+};
+
+const captureOutput = (child) => {
+  let output = '';
+  const append = (chunk) => {
+    output = `${output}${String(chunk)}`.slice(-20_000);
+  };
+  child.stdout?.on('data', append);
+  child.stderr?.on('data', append);
+  return () => output;
+};
+
+const runCommand = (command, args, options = {}) =>
+  new Promise((resolve, reject) => {
+    const child = spawnManaged(command, args, {
+      cwd: root,
+      env: options.env,
+      stdio: options.stdio ?? 'inherit',
+    });
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          `${command} ${args.join(' ')} exited with ${
+            code === null ? `signal ${signal}` : `code ${code}`
+          }`
+        )
+      );
+    });
+  });
+
+const hasChildExited = (child) =>
+  child.exitCode !== null || child.signalCode !== null;
+
+const childIsUnavailableOrExited = (child) => !child || hasChildExited(child);
+
+const waitForChildExit = (child, timeoutMs) => {
+  if (hasChildExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.off('exit', onExit);
+      // oxlint-disable-next-line promise/no-multiple-resolved -- The settled guard arbitrates the exit/timeout race.
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    child.once('exit', onExit);
+    if (hasChildExited(child)) finish(true);
+  });
+};
+
+export const terminateChild = async (
+  child,
+  { gracefulTimeoutMs = shutdownTimeoutMs, killTimeoutMs = 1_000 } = {}
+) => {
+  if (childIsUnavailableOrExited(child)) return true;
+  child.kill('SIGTERM');
+  if (await waitForChildExit(child, gracefulTimeoutMs)) return true;
+  if (hasChildExited(child)) return true;
+  child.kill('SIGKILL');
+  return waitForChildExit(child, killTimeoutMs);
+};
+
+const tagAttributes = (tag) => {
+  const attributeSource = tag
+    .replace(/^<(?:script|style)\b/iu, '')
+    .replace(/>$/u, '');
+  return [
+    ...attributeSource.matchAll(
+      /[\t\n\f\r ]+([^\t\n\f\r />=]+)(?:[\t\n\f\r ]*=[\t\n\f\r ]*(?:"([^"]*)"|'([^']*)'|([^\t\n\f\r "'=<>`]+)))?/gu
+    ),
+  ].map((match) => ({
+    name: match[1].toLowerCase(),
+    value: match[2] ?? match[3] ?? match[4],
+  }));
+};
+
+const tagNonce = (tag) => {
+  const nonceAttributes = tagAttributes(tag).filter(
+    (attribute) => attribute.name === 'nonce'
+  );
+  return nonceAttributes.length === 1 ? nonceAttributes[0].value : undefined;
+};
+
+const directiveValue = (policy, directiveName) =>
+  policy
+    .split(';')
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(`${directiveName} `));
+
+const directiveNonce = (directive) => {
+  if (!directive) return undefined;
+  const nonces = [...directive.matchAll(/'nonce-([^']+)'/gu)].map(
+    (match) => match[1]
+  );
+  return nonces.length === 1 ? nonces[0] : undefined;
+};
+
+const verifyCompletedHtmlResponse = ({ body, status }) => {
+  assert(status === 200, `expected /login status 200, received ${status}`);
+  assert(
+    body.trimEnd().endsWith('</body></html>'),
+    'the streamed HTML response did not terminate with </body></html>'
+  );
+  assert(
+    body.includes('$_TSR.e()'),
+    'the TanStack serialization stream did not emit its end marker'
+  );
+  assert(
+    !body.includes(cspNoncePlaceholder),
+    'the response contains an unresolved CSP nonce placeholder'
+  );
+};
+
+const readResponseCspNonces = (headers) => {
+  const csp = headers.get('content-security-policy') ?? '';
+  const scriptDirective = directiveValue(csp, 'script-src');
+  const styleDirective = directiveValue(csp, 'style-src');
+  const scriptNonce = directiveNonce(scriptDirective);
+  const styleNonce = directiveNonce(styleDirective);
+  assert(scriptNonce, 'the CSP script-src directive has no unique nonce');
+  assert(styleNonce, 'the CSP style-src directive has no unique nonce');
+  assert(
+    scriptNonce === styleNonce,
+    'the CSP script-src and style-src nonces do not match'
+  );
+  return { scriptDirective, scriptNonce, styleDirective, styleNonce };
+};
+
+const verifySafeCspDirectives = ({ scriptDirective, styleDirective }) => {
+  for (const [name, directive] of [
+    ['script-src', scriptDirective],
+    ['style-src', styleDirective],
+  ]) {
+    assert(
+      !directive.includes("'unsafe-eval'") &&
+        !directive.includes("'unsafe-inline'"),
+      `the production CSP ${name} directive is unsafe`
+    );
+  }
+};
+
+const readExecutableTags = (body) => {
+  const executableTags = [...body.matchAll(/<(?:script|style)\b[^>]*>/giu)].map(
+    (match) => match[0]
+  );
+  assert(
+    executableTags.length > 0,
+    'the response contains no script/style tags'
+  );
+  return executableTags;
+};
+
+const expectedNonceForTag = (tag, scriptNonce, styleNonce) =>
+  /^<script\b/iu.test(tag) ? scriptNonce : styleNonce;
+
+const verifyExecutableTagNonces = ({
+  executableTags,
+  scriptNonce,
+  styleNonce,
+}) => {
+  for (const tag of executableTags) {
+    const nonceMatch = tagNonce(tag);
+    assert(
+      nonceMatch,
+      `script/style tag is missing a nonce: ${tag.slice(0, 120)}`
+    );
+    const expectedNonce = expectedNonceForTag(tag, scriptNonce, styleNonce);
+    assert(
+      nonceMatch === expectedNonce,
+      'a script/style nonce does not match its CSP directive nonce'
+    );
+  }
+};
+
+export const verifyNodeHtmlResponse = ({ body, headers, status }) => {
+  verifyCompletedHtmlResponse({ body, status });
+  const csp = readResponseCspNonces(headers);
+  verifySafeCspDirectives(csp);
+  const executableTags = readExecutableTags(body);
+  verifyExecutableTagNonces({ executableTags, ...csp });
+
+  return {
+    bytes: Buffer.byteLength(body),
+    cspNonce: csp.scriptNonce,
+    executableTagCount: executableTags.length,
+  };
+};
+
+const createRuntimeResources = () => {
+  const applicationReservation = net.createServer();
+  const databaseReservation = net.createServer();
+  const redis = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ result: null }));
+  });
+  let cleanupPromise;
+  const cleanup = () => {
+    cleanupPromise ??= (async () => {
+      await Promise.all(
+        [...activeChildren].map((child) => terminateChild(child))
+      );
+      await Promise.all([
+        closeServer(redis),
+        closeServer(applicationReservation),
+        closeServer(databaseReservation),
+      ]);
+    })();
+    return cleanupPromise;
+  };
+  return {
+    applicationReservation,
+    cleanup,
+    databaseReservation,
+    redis,
+  };
+};
+
+const reserveRuntimePorts = ({
+  applicationReservation,
+  databaseReservation,
+  redis,
+}) =>
+  Promise.all([
+    listen(
+      applicationReservation,
+      parseRequestedPort(
+        process.env.START_UI_NODE_VERIFY_PORT,
+        'START_UI_NODE_VERIFY_PORT'
+      )
+    ),
+    listen(
+      databaseReservation,
+      parseRequestedPort(
+        process.env.START_UI_NODE_VERIFY_DATABASE_PORT,
+        'START_UI_NODE_VERIFY_DATABASE_PORT'
+      )
+    ),
+    listen(
+      redis,
+      parseRequestedPort(
+        process.env.START_UI_NODE_VERIFY_REDIS_PORT,
+        'START_UI_NODE_VERIFY_REDIS_PORT'
+      )
+    ),
+  ]);
+
+const buildNodeRuntimeArtifact = async (env) => {
+  console.log('Building the Node runtime artifact...');
+  removeRuntimeArtifactOutput('node', root);
+  // Use the canonical build steps with an allowlisted environment. Calling
+  // the dotenv-wrapped package script here could absorb real provider
+  // credentials from a developer's .env into an ordinary verification run.
+  await Promise.all([
+    runCommand(
+      process.execPath,
+      ['./run-jiti', './scripts/validate-client-config.ts'],
+      { env }
+    ),
+    runCommand(
+      process.execPath,
+      ['./run-jiti', './scripts/validate-server-build-config.ts'],
+      { env }
+    ),
+    runCommand(
+      process.execPath,
+      [
+        './run-jiti',
+        './src/app/build-info/infrastructure/generate-build-info.ts',
+      ],
+      { env }
+    ),
+  ]);
+  await runCommand(path.join(root, 'node_modules/.bin/vite'), ['build'], {
+    env,
+  });
+  verifyRuntimeProfile('node', root);
+};
+
+const registerDiagnosticOutput = (diagnostics, name, child) =>
+  diagnostics.push({ child, name, readOutput: captureOutput(child) });
+
+const verifyPgliteIdentity = async (databaseUrl) => {
+  const client = new pg.Client({
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 2_000,
+  });
+  await client.connect();
+  try {
+    const result = await client.query('select version() as version');
+    assert(
+      typeof result.rows[0]?.version === 'string' &&
+        result.rows[0].version.includes('PGlite'),
+      'the reserved database port was not claimed by PGlite'
+    );
+  } finally {
+    await client.end();
+  }
+};
+
+const assertChildRunning = (child, name) => {
+  if (child.verificationSpawnError) {
+    fail(`${name} failed to start: ${child.verificationSpawnError.message}`);
+  }
+  assert(
+    !hasChildExited(child),
+    `${name} exited before the runtime contract completed`
+  );
+};
+
+const startPglite = async ({
+  databasePort,
+  databaseReservation,
+  diagnostics,
+  env,
+}) => {
+  console.log('Starting an isolated PGlite database...');
+  await closeServer(databaseReservation);
+  const pglite = spawnManaged(
+    path.join(root, 'node_modules/.bin/pglite-server'),
+    ['--db=memory://', `--port=${databasePort}`, '--max-connections=16'],
+    { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  registerDiagnosticOutput(diagnostics, 'PGlite', pglite);
+  await waitForPort(databasePort, pglite, 'PGlite');
+  await verifyPgliteIdentity(env.DATABASE_URL);
+  await runCommand(
+    process.execPath,
+    ['./run-jiti', './src/modules/kernel/infrastructure/db/migrate-cli.ts'],
+    { env }
+  );
+  assertChildRunning(pglite, 'PGlite');
+  return pglite;
+};
+
+const startNodeApplication = async ({
+  appPort,
+  applicationReservation,
+  diagnostics,
+  env,
+}) => {
+  console.log('Starting the built Node server...');
+  await closeServer(applicationReservation);
+  const application = spawnManaged(
+    process.execPath,
+    [path.join(root, '.output/node/server/index.mjs')],
+    { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] }
+  );
+  registerDiagnosticOutput(diagnostics, 'Node', application);
+  await waitForPort(appPort, application, 'Node application');
+  assertChildRunning(application, 'Node application');
+  return application;
+};
+
+const fetchVerifiedLogin = async (appPort, requestNumber) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), responseTimeoutMs);
+  try {
+    const response = await fetch(`http://localhost:${appPort}/login`, {
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    return verifyNodeHtmlResponse({
+      body,
+      headers: response.headers,
+      status: response.status,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      fail(
+        `/login request ${requestNumber} did not complete within ${responseTimeoutMs}ms`
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const verifyNodeLoginResponses = async ({
+  appPort,
+  application,
+  pglite,
+  preset,
+}) => {
+  const startedAt = Date.now();
+  const summaries = [];
+  for (let requestNumber = 1; requestNumber <= 2; requestNumber += 1) {
+    summaries.push(await fetchVerifiedLogin(appPort, requestNumber));
+    assertChildRunning(application, 'Node application');
+    assertChildRunning(pglite, 'PGlite');
+  }
+  assert(
+    summaries[0].cspNonce !== summaries[1].cspNonce,
+    'consecutive responses reused the same CSP nonce'
+  );
+  console.log(
+    `Verified Node ${preset} /login twice: HTTP 200, ${
+      summaries[0].bytes
+    } bytes, ${Date.now() - startedAt}ms, ${
+      summaries[0].executableTagCount
+    } nonce-bearing script/style tags.`
+  );
+};
+
+const isCspConsoleViolation = (message) =>
+  /content security policy|refused to (?:apply|execute|load)/iu.test(message);
+
+const verifyBrowserElementNonces = async (page, expectedNonce) => {
+  const nonces = await page
+    .locator('script, style')
+    .evaluateAll((elements) => elements.map((element) => element.nonce));
+  assert(nonces.length > 0, 'the hydrated document has no script/style tags');
+  assert(
+    nonces.every((nonce) => nonce === expectedNonce),
+    'a hydrated script/style tag has a missing or incorrect CSP nonce'
+  );
+};
+
+const verifyStrictCspBrowserHydration = async (appPort) => {
+  const browser = await chromium.launch({ headless: true });
+  const browserFailures = [];
+  try {
+    const page = await browser.newPage();
+    page.on('console', (message) => {
+      if (isCspConsoleViolation(message.text())) {
+        browserFailures.push(message.text());
+      }
+    });
+    page.on('pageerror', (error) => browserFailures.push(error.message));
+
+    const response = await page.goto(`http://localhost:${appPort}/login`, {
+      timeout: responseTimeoutMs,
+      waitUntil: 'domcontentloaded',
+    });
+    assert(response?.status() === 200, 'the browser did not receive HTTP 200');
+    const policy = response.headers()['content-security-policy'] ?? '';
+    const csp = readResponseCspNonces(
+      new Headers({ 'content-security-policy': policy })
+    );
+    await page
+      .locator('[data-testid="auth-login-form"][data-hydrated="true"]')
+      .waitFor({ timeout: responseTimeoutMs });
+    await page.locator('input[type="email"]').fill('csp@example.test');
+
+    // React hoists styles that declare href + precedence and exposes the
+    // resource identity through data-href in the hydrated document.
+    const baseUiStyle = page.locator(
+      'style[data-href~="base-ui-disable-scrollbar"]'
+    );
+    assert(
+      (await baseUiStyle.count()) === 0,
+      'the Base UI scrollbar style existed before the Select was opened'
+    );
+
+    // The application bridge pre-nonces dynamically created style elements.
+    // Remove only that createElement-time contribution in this test page so
+    // the assertion below proves Base UI received the nonce through its React
+    // CSPProvider. React applies the nonce prop after createElement returns.
+    await page.evaluate(() => {
+      const prototype = Document.prototype;
+      const createElement = prototype.createElement;
+      prototype.createElement = function (tagName, options) {
+        const element = createElement.call(this, tagName, options);
+        if (typeof tagName === 'string' && tagName.toLowerCase() === 'style') {
+          element.removeAttribute('nonce');
+        }
+        return element;
+      };
+    });
+
+    await page.getByRole('combobox', { name: 'Language' }).click();
+    await page.getByRole('option').first().waitFor({
+      timeout: responseTimeoutMs,
+    });
+    await baseUiStyle.waitFor({
+      state: 'attached',
+      timeout: responseTimeoutMs,
+    });
+    assert(
+      (await baseUiStyle.evaluate((element) => element.nonce)) ===
+        csp.scriptNonce,
+      'the Base UI scrollbar style did not receive the request CSP nonce'
+    );
+    await verifyBrowserElementNonces(page, csp.scriptNonce);
+    assert(
+      browserFailures.length === 0,
+      `strict-CSP browser hydration failed: ${browserFailures.join(' | ')}`
+    );
+    console.log(
+      'Verified strict-CSP Chromium hydration and Base UI Select nonce use.'
+    );
+  } finally {
+    await browser.close();
+  }
+};
+
+const renderDiagnostic = async ({ child, name, readOutput }) => {
+  await Promise.race([child.verificationClosed, delay(250)]);
+  const output = readOutput();
+  return output ? `${name} output:\n${output}` : '';
+};
+
+const printDiagnostics = async (diagnostics) => {
+  const logs = (await Promise.all(diagnostics.map(renderDiagnostic)))
+    .filter(Boolean)
+    .join('\n');
+  if (logs) console.error(logs);
+};
+
+export const verifyNodeRuntime = async () => {
+  const resources = createRuntimeResources();
+  const diagnostics = [];
+  activeCleanup = resources.cleanup;
+  activeDiagnostics = diagnostics;
+
+  try {
+    const [appPort, databasePort, redisPort] =
+      await reserveRuntimePorts(resources);
+    const preset = readGeneratedCapabilityPreset(root);
+    const env = createVerificationEnvironment({
+      appPort,
+      databasePort,
+      preset,
+      redisPort,
+    });
+
+    await buildNodeRuntimeArtifact(env);
+    const pglite = await startPglite({
+      databasePort,
+      databaseReservation: resources.databaseReservation,
+      diagnostics,
+      env,
+    });
+    const application = await startNodeApplication({
+      appPort,
+      applicationReservation: resources.applicationReservation,
+      diagnostics,
+      env,
+    });
+    await verifyNodeLoginResponses({ appPort, application, pglite, preset });
+    await verifyStrictCspBrowserHydration(appPort);
+    assertChildRunning(application, 'Node application');
+    assertChildRunning(pglite, 'PGlite');
+  } catch (error) {
+    await printDiagnostics(diagnostics);
+    throw error;
+  } finally {
+    await resources.cleanup();
+    if (activeCleanup === resources.cleanup) activeCleanup = undefined;
+    if (activeDiagnostics === diagnostics) activeDiagnostics = [];
+  }
+};
+
+const isEntryPoint =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isEntryPoint) {
+  let signalShutdownStarted = false;
+  const handleSignal = async (signal) => {
+    if (signalShutdownStarted) return;
+    signalShutdownStarted = true;
+    shutdownGuard.requestShutdown();
+    try {
+      if (activeCleanup) {
+        await activeCleanup();
+      } else {
+        await Promise.all(
+          [...activeChildren].map((child) => terminateChild(child))
+        );
+      }
+      await printDiagnostics(activeDiagnostics);
+    } finally {
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    }
+  };
+  process.once('SIGINT', () => void handleSignal('SIGINT'));
+  process.once('SIGTERM', () => void handleSignal('SIGTERM'));
+  verifyNodeRuntime().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

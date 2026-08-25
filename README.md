@@ -212,6 +212,7 @@ pnpm build                 # Node alias; writes .output/node
 pnpm build:vercel          # Nitro Vercel preset; writes .vercel/output
 pnpm build:cloudflare      # Cloudflare Vite plugin; writes dist
 pnpm verify:artifacts      # Build and inspect all three artifact shapes
+pnpm verify:node           # Build, boot, stream-test, and hydrate the Node artifact in Chromium
 ```
 
 `pnpm preview:node` and `pnpm preview:vercel` run the corresponding
@@ -219,14 +220,24 @@ already-built output. Runtime selection is a trusted build input; the applicatio
 infers a deployment profile from request hosts, forwarding headers, or ambient
 provider variables.
 
-The v5 runtime work is intentionally incremental. These commands currently
-prove isolated artifact shapes and trusted profile injection. Executable
+The v5 runtime work is intentionally incremental. The artifact commands prove
+isolated output shapes and trusted profile injection. `pnpm verify:node` also
+uses an isolated PGlite database and local Upstash configuration stub to boot the built
+Node server and prove that `/login` returns HTTP 200, completes the TanStack
+serialization stream within a bounded timeout, and applies one request nonce
+consistently to the CSP header and every executable HTML tag. It then hydrates
+the production response in Chromium, opens a Base UI Select under the enforced
+CSP, and verifies Base UI's generated scrollbar style carries the request
+nonce. Verification builds ignore repository `.env*` files and consume only
+their generated, allowlisted child-process environment. Executable
 adapter contract tests for Hyperdrive, R2, Worker lifecycle ownership, and the
 Vercel serverless lifecycle land before Workers or Vercel are declared
-production-ready. Node is likewise not runtime-verified yet: the current
-artifact renders the login route, but its streamed response does not terminate
-before the serialization timeout. The future Node gate must prove clean stream
-completion in addition to process lifecycle behavior.
+production-ready.
+
+The Node gate covers the emitted entry, streamed public-login response, and
+strict-CSP browser hydration. Node
+is not production-ready until its remaining adapter contracts and
+lifecycle-owned telemetry shutdown are executable as well.
 
 ## Deploy
 

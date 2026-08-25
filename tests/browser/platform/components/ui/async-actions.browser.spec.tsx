@@ -156,8 +156,8 @@ test('locale changes expose localized transition feedback', async () => {
 
   render(<LocalSwitcher />);
 
-  await user.click(page.getByRole('button'));
-  (page.getByRole('menuitem').nth(1).element() as HTMLElement).click();
+  await user.click(page.getByRole('combobox'));
+  (page.getByRole('option').nth(1).element() as HTMLElement).click();
 
   await vi.waitFor(() => expect(changeLanguage).toHaveBeenCalledOnce());
   await expect

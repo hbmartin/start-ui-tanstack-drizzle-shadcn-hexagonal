@@ -18,7 +18,6 @@ import {
   shouldProtectBrowserMutation,
   validateSameOriginBrowserMutationRequest,
 } from '@/platform/http/browser-mutation-protection';
-import { replaceCspNoncePlaceholderInHtmlResponse } from '@/platform/http/csp-nonce';
 import { createCspNonce } from '@/platform/http/csp-nonce-server';
 import { violatesServerFnBodyLimit } from '@/platform/http/request-body-limit';
 import { applySecurityHeaders } from '@/platform/http/security-headers';
@@ -158,15 +157,8 @@ export const securityHeadersMiddleware = createMiddleware({
   const cspNonce = createCspNonce();
   const nextContext = mergeRequestContext(context, { cspNonce });
   const result = await next({ context: nextContext });
-  const response = applyAppSecurityHeaders(
-    await replaceCspNoncePlaceholderInHtmlResponse(result.response, cspNonce),
-    nextContext
-  );
-
-  return {
-    ...result,
-    response,
-  };
+  applyAppSecurityHeaders(result.response, nextContext);
+  return result;
 });
 
 export const browserMutationGuardMiddleware = createMiddleware({

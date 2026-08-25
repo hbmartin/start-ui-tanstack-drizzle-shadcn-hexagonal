@@ -323,6 +323,12 @@ jobs:
         with:
           node-version: 24
 
+      - name: Setup Chromium for Node runtime verification
+        if: matrix.profile == 'node'
+        uses: ./.github/actions/setup-playwright
+        with:
+          browsers: chromium
+
       - name: Configure selected preset
         run: >-
           pnpm setup -- --yes --preset=${{ matrix.preset }}
@@ -332,7 +338,11 @@ jobs:
         run: |
           mkdir -p test-results/build/${{ matrix.preset }}-${{ matrix.profile }}
           set -o pipefail
-          pnpm verify:artifact:${{ matrix.profile }} 2>&1 | tee test-results/build/${{ matrix.preset }}-${{ matrix.profile }}/build.log
+          if [ "${{ matrix.profile }}" = "node" ]; then
+            pnpm verify:node 2>&1 | tee test-results/build/${{ matrix.preset }}-${{ matrix.profile }}/build.log
+          else
+            pnpm verify:artifact:${{ matrix.profile }} 2>&1 | tee test-results/build/${{ matrix.preset }}-${{ matrix.profile }}/build.log
+          fi
 
       - name: Upload build log
         if: always()

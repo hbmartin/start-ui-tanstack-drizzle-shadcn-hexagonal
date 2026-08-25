@@ -34,24 +34,40 @@ that field atomically with environment and capability selection files.
 ## Consequences
 
 Artifact verification proves build isolation and deployment shape, not a live
-runtime. The current commands are therefore named `verify:artifact:*` and
-`verify:artifacts`. The names `verify:node`, `verify:vercel`,
-`verify:cloudflare`, and `verify:profiles` remain reserved for executable HTTP
-and adapter contract tests.
+runtime. Those commands are therefore named `verify:artifact:*` and
+`verify:artifacts`. The Node target additionally has an executable
+`verify:node` HTTP/stream gate. The names `verify:vercel`,
+`verify:cloudflare`, and `verify:profiles` remain reserved until their
+executable adapter contracts exist.
 
 The initial Cloudflare artifact still contains Node-oriented composition and
 does not start successfully in workerd. No preview or deployment command is
 public until profile-specific composition removes that graph and an executable
 gate proves the result.
 
-A manual Node artifact smoke rendered `/login` with HTTP 200, but the response
-stream did not terminate before the existing serialization timeout. This is a
-runtime-verification blocker, not evidence against the build output contract.
-The future `verify:node` gate must assert bounded, clean stream completion.
+The first Node artifact smoke exposed a stream-ownership defect: post-render
+CSP placeholder replacement created a derived `Response` body after TanStack
+Start had registered serialization listeners on the original stream. Start
+disposed the original response while the derived pipe was still active. The
+security middleware now mutates only the original response headers; the router
+and platform UI providers receive the request nonce before rendering. This also
+avoids depending on the related upstream router cleanup work in
+[TanStack Router #7529](https://github.com/TanStack/router/issues/7529).
+
+`pnpm verify:node` builds the Node artifact, migrates an isolated PGlite
+database, boots the emitted server, requests `/login` twice, and asserts HTTP 200,
+bounded clean stream completion, TanStack's serialization end marker,
+CSP/HTML nonce agreement, per-response nonce freshness, and absence of the
+former placeholder. The gate ignores repository `.env*` files, verifies that
+the reserved database listener is PGlite, checks child liveness, and hydrates
+the production response in Chromium before opening a Base UI Select under the
+enforced CSP and verifying its generated scrollbar style carries the request
+nonce.
 
 Before a target is production-ready, its runtime gate must exercise the built
 application with that profile's database, storage when enabled, trusted client
 IP, lifecycle, rate limiting, and telemetry adapters. Cloudflare additionally
 requires workerd tests with Hyperdrive and conditional R2 bindings. Vercel must
-prove serverless lifecycle ownership; Node must prove the persistent process
-entry, clean response-stream completion, and shutdown contract.
+prove serverless lifecycle ownership. Node has proven the emitted entry and
+clean response stream; lifecycle-owned telemetry shutdown remains a release
+blocker.

@@ -8,6 +8,7 @@ import '@fontsource-variable/inter';
 import { QueryClientProvider } from '@/platform/lib/tanstack-query/provider';
 
 import { Sonner } from '@/platform/components/ui/sonner';
+import { CspProvider } from '@/platform/components/ui/csp-provider';
 
 import { getTelemetry } from '@/composition/telemetry';
 import { useCurrentSessionQuery } from '@/modules/auth/client';
@@ -22,17 +23,19 @@ export const Providers = (props: {
   const cspNonce = props.cspNonce ?? readCspNonceFromMeta();
 
   return (
-    <ThemeProvider
-      attribute="class"
-      storageKey="theme"
-      disableTransitionOnChange
-      nonce={cspNonce}
-      forcedTheme={props.forcedTheme}
-    >
-      <QueryClientProvider client={props.client}>
-        <ProviderContent>{props.children}</ProviderContent>
-      </QueryClientProvider>
-    </ThemeProvider>
+    <CspProvider nonce={cspNonce}>
+      <ThemeProvider
+        attribute="class"
+        storageKey="theme"
+        disableTransitionOnChange
+        nonce={cspNonce}
+        forcedTheme={props.forcedTheme}
+      >
+        <QueryClientProvider client={props.client}>
+          <ProviderContent>{props.children}</ProviderContent>
+        </QueryClientProvider>
+      </ThemeProvider>
+    </CspProvider>
   );
 };
 

@@ -15,7 +15,8 @@ import {
   RUNTIME_PROFILE_ENV_KEY,
   runtimeServerEntryPlugin,
 } from './scripts/runtime-profile-vite.js';
-import { CSP_NONCE_PLACEHOLDER } from './src/platform/http/csp-nonce.js';
+import { shouldEnableSentryBuildPlugin } from './scripts/sentry-build-plugin.js';
+import { loadViteBuildEnvironment } from './scripts/vite-build-environment.js';
 import type { RuntimeProfile } from './src/platform/runtime/runtime-profile.js';
 
 const createRuntimeBuildPlugins = (runtimeProfile: RuntimeProfile) => {
@@ -104,31 +105,38 @@ export default defineConfig(({ command, mode }) => {
     { command },
     process.env[RUNTIME_PROFILE_ENV_KEY]
   );
-  // Load env file based on `mode` in the current working directory.
-  const env = loadEnv(mode, root, 'VITE_');
-  const sentryEnv = loadEnv(mode, root, 'SENTRY_');
+  const cloudBuildPluginsDisabled =
+    process.env.START_UI_DISABLE_CLOUD_BUILD_PLUGINS === 'true';
+  const { env, envDir } = loadViteBuildEnvironment({
+    isolated: cloudBuildPluginsDisabled,
+    mode,
+    root,
+  });
+  const sentryEnv: Record<string, string> = cloudBuildPluginsDisabled
+    ? {}
+    : loadEnv(mode, root, 'SENTRY_');
   const envName = env.VITE_ENV_NAME?.toLowerCase();
   const isTestRuntime = envName === 'test' || envName === 'tests';
-  const sentryPlugins =
-    env.VITE_SENTRY_DSN &&
-    sentryEnv.SENTRY_ORG &&
-    sentryEnv.SENTRY_PROJECT &&
-    sentryEnv.SENTRY_AUTH_TOKEN
-      ? sentryTanstackStart({
-          org: sentryEnv.SENTRY_ORG,
-          project: sentryEnv.SENTRY_PROJECT,
-          authToken: sentryEnv.SENTRY_AUTH_TOKEN,
-        })
-      : [];
+  const sentryPlugins = shouldEnableSentryBuildPlugin({
+    authToken: sentryEnv.SENTRY_AUTH_TOKEN,
+    disabled: cloudBuildPluginsDisabled,
+    dsn: env.VITE_SENTRY_DSN,
+    organization: sentryEnv.SENTRY_ORG,
+    project: sentryEnv.SENTRY_PROJECT,
+  })
+    ? sentryTanstackStart({
+        org: sentryEnv.SENTRY_ORG,
+        project: sentryEnv.SENTRY_PROJECT,
+        authToken: sentryEnv.SENTRY_AUTH_TOKEN,
+      })
+    : [];
   const runtimeBuildPlugins = createRuntimeBuildPlugins(runtimeProfile);
 
   return {
+    envDir,
     envPrefix: ['VITE_', 'APP_NAME', 'APP_SLUG'],
     build: {
       target: 'baseline-widely-available',
-    },
-    html: {
-      cspNonce: CSP_NONCE_PLACEHOLDER,
     },
     server: {
       port: env.VITE_PORT ? Number(env.VITE_PORT) : 3000,

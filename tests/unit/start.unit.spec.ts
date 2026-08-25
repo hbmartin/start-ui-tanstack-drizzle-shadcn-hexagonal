@@ -1,8 +1,6 @@
 import { mockLogger } from '@tests/server/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CSP_NONCE_PLACEHOLDER } from '@/platform/http/csp-nonce';
-
 const sentryMiddleware = vi.hoisted(() => ({
   function: { type: 'sentry-function' },
   request: { type: 'sentry-request' },
@@ -126,15 +124,13 @@ describe('TanStack Start instance', () => {
   it('applies security headers to successful responses', async () => {
     const { securityHeadersMiddleware } = await import('@/start');
     type NextOptions = { context: { cspNonce: string; requestId: string } };
+    const originalResponse = new Response('<html><body>ok</body></html>', {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+      },
+    });
     const next = vi.fn(async (_options: NextOptions) => ({
-      response: new Response(
-        `<meta property="csp-nonce" content="${CSP_NONCE_PLACEHOLDER}" nonce="${CSP_NONCE_PLACEHOLDER}"><script nonce="${CSP_NONCE_PLACEHOLDER}">window.__nonce__="${CSP_NONCE_PLACEHOLDER}"</script>`,
-        {
-          headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-          },
-        }
-      ),
+      response: originalResponse,
     }));
 
     const result = await (securityHeadersMiddleware as ExplicitAny).handler({
@@ -164,8 +160,10 @@ describe('TanStack Start instance', () => {
     expect(result.response.headers.get('Cross-Origin-Opener-Policy')).toBe(
       'same-origin-allow-popups'
     );
+    expect(result.response).toBe(originalResponse);
+    expect(result.response.body).toBe(originalResponse.body);
     await expect(result.response.text()).resolves.toBe(
-      `<meta property="csp-nonce" content="${cspNonce}" nonce="${cspNonce}"><script nonce="${cspNonce}">window.__nonce__="${cspNonce}"</script>`
+      '<html><body>ok</body></html>'
     );
   });
 
