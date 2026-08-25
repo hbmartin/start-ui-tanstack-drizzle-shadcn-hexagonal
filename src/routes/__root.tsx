@@ -2,6 +2,7 @@
 import {
   createRootRouteWithContext,
   HeadContent,
+  notFound,
   Outlet,
   Scripts,
   useRouteContext,
@@ -24,14 +25,21 @@ import {
   getEnvHintTitlePrefix,
   TanStackDevtoolsPanel,
 } from '@/app/devtools/presentation';
+import { isCapabilityRouteEnabled } from '@/app/capabilities/is-capability-route-enabled';
 import { Providers } from '@/composition/providers';
 import { initSsrApp } from '@/modules/kernel/server';
+import { envClient } from '@/platform/env/client';
 import { createCspNonceBridgeScript } from '@/platform/http/csp-nonce';
 import type { RouterContext } from '@/platform/router/context';
 import { observedLoader } from '@/platform/router/route-observability';
 import appCss from '@/platform/styles/app.css?url';
 
 export const Route = createRootRouteWithContext<RouterContext>()({
+  beforeLoad: ({ location }) => {
+    if (!isCapabilityRouteEnabled(location.pathname)) {
+      throw notFound();
+    }
+  },
   loader: observedLoader('__root__', async () => {
     // Setup language and theme in SSR to prevent hydratation errors
     if (import.meta.env.SSR) {
@@ -53,11 +61,19 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         content: 'width=device-width, initial-scale=1, viewport-fit=cover',
       },
       {
-        title: getPageTitle(undefined, getEnvHintTitlePrefix()),
+        title: getPageTitle(
+          undefined,
+          getEnvHintTitlePrefix(),
+          envClient.APP_NAME
+        ),
       },
       {
         name: 'apple-mobile-web-app-title',
-        content: getPageTitle(undefined, getEnvHintTitlePrefix()),
+        content: getPageTitle(
+          undefined,
+          getEnvHintTitlePrefix(),
+          envClient.APP_NAME
+        ),
       },
       {
         name: 'apple-mobile-web-app-status-bar-style',

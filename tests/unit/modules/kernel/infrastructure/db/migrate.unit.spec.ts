@@ -61,6 +61,10 @@ vi.mock('drizzle-orm/node-postgres/migrator', () => ({
   migrate: mocks.migrateNodePg,
 }));
 
+vi.mock('@/modules/kernel/infrastructure/config/application', () => ({
+  getApplicationIdentity: () => ({ name: 'Acme Test', slug: 'acme-test' }),
+}));
+
 const dbWithDriver = (driver: MigrationDatabase['$migrationDriver']) =>
   ({
     $migrationDriver: driver,
@@ -86,14 +90,14 @@ describe('migrateDatabase', () => {
     expect(mocks.migrationClient.query).toHaveBeenNthCalledWith(
       1,
       'SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired',
-      ['start-ui-web', 'drizzle-migrations']
+      ['acme-test', 'drizzle-migrations']
     );
     expect(mocks.migrateNodePg).toHaveBeenCalledWith(db, {
       migrationsFolder: 'drizzle/migrations',
     });
     expect(mocks.migrationClient.query).toHaveBeenLastCalledWith(
       'SELECT pg_advisory_unlock(hashtext($1), hashtext($2))',
-      ['start-ui-web', 'drizzle-migrations']
+      ['acme-test', 'drizzle-migrations']
     );
   });
 
@@ -138,7 +142,7 @@ describe('migrateDatabase', () => {
 
     expect(mocks.migrationClient.query).toHaveBeenLastCalledWith(
       'SELECT pg_advisory_unlock(hashtext($1), hashtext($2))',
-      ['start-ui-web', 'drizzle-migrations']
+      ['acme-test', 'drizzle-migrations']
     );
   });
 });

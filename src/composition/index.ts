@@ -43,6 +43,7 @@ import { type GenreOverrides, getGenreUseCases } from './genre';
 import { getKernel, type KernelOverrides } from './kernel';
 import { getUserUseCases, type UserOverrides } from './user';
 import { type ProfileOverrides, getProfileUseCases } from './profile';
+import { isCapabilityEnabled } from '@/modules/kernel';
 
 export type ServicesOverrides = {
   kernel?: KernelOverrides;
@@ -57,21 +58,26 @@ export function getServices(overrides?: ServicesOverrides) {
   if (overrides === undefined) {
     return {
       kernel: getKernel(),
-      book: getBookUseCases(),
       user: getUserUseCases(),
-      genre: getGenreUseCases(),
       profile: getProfileUseCases(),
       email: getEmailServices(),
+      ...(isCapabilityEnabled('book')
+        ? { book: getBookUseCases(), genre: getGenreUseCases() }
+        : {}),
     } as const;
   }
 
   const kernel = getKernel(overrides.kernel ?? {});
   return {
     kernel,
-    book: getBookUseCases({ ...overrides.book, kernel }),
     user: getUserUseCases({ ...overrides.user, kernel }),
-    genre: getGenreUseCases({ ...overrides.genre, kernel }),
     profile: getProfileUseCases({ ...overrides.profile, kernel }),
     email: getEmailServices({ ...overrides.email, kernel }),
+    ...(isCapabilityEnabled('book')
+      ? {
+          book: getBookUseCases({ ...overrides.book, kernel }),
+          genre: getGenreUseCases({ ...overrides.genre, kernel }),
+        }
+      : {}),
   } as const;
 }

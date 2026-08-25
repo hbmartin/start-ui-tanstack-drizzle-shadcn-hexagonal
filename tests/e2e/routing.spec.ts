@@ -9,7 +9,7 @@ import locales from '@/app/i18n';
 
 const t = locales[DEFAULT_LANGUAGE_KEY];
 
-test.describe('Protected route navigation', () => {
+test.describe('Protected route navigation', { tag: '@demo' }, () => {
   test('returns to a protected deep link after login with search intact', async ({
     page,
   }) => {
@@ -34,47 +34,49 @@ test.describe('Protected route navigation', () => {
 test.describe('Protected route navigation as manager', () => {
   test.use({ storageState: ADMIN_FILE });
 
-  test('opens and refreshes a nested book route from a direct URL', async ({
-    page,
-  }) => {
-    await page.goto('/manager/books?searchTerm=Hobbit', {
-      waitUntil: 'commit',
-    });
+  test(
+    'opens and refreshes a nested book route from a direct URL',
+    { tag: '@demo' },
+    async ({ page }) => {
+      await page.goto('/manager/books?searchTerm=Hobbit', {
+        waitUntil: 'commit',
+      });
 
-    const bookLink = page.getByRole('link', { name: 'The Hobbit' });
-    await expect(bookLink).toBeVisible();
-    const href = await bookLink.getAttribute('href');
-    expect(href).toMatch(/^\/manager\/books\/[^/]+\/?$/);
+      const bookLink = page.getByRole('link', { name: 'The Hobbit' });
+      await expect(bookLink).toBeVisible();
+      const href = await bookLink.getAttribute('href');
+      expect(href).toMatch(/^\/manager\/books\/[^/]+\/?$/);
 
-    await expect(async () => {
-      try {
-        await page.goto(href ?? '/manager/books', { waitUntil: 'commit' });
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          !error.message.includes('NS_BINDING_ABORTED')
-        ) {
-          throw error;
+      await expect(async () => {
+        try {
+          await page.goto(href ?? '/manager/books', { waitUntil: 'commit' });
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            !error.message.includes('NS_BINDING_ABORTED')
+          ) {
+            throw error;
+          }
         }
-      }
 
-      expect(new URL(page.url()).pathname).toMatch(
-        /^\/manager\/books\/[^/]+\/?$/
-      );
-    }).toPass({ timeout: 10_000 });
-    const deepLink = new URL(page.url()).pathname;
+        expect(new URL(page.url()).pathname).toMatch(
+          /^\/manager\/books\/[^/]+\/?$/
+        );
+      }).toPass({ timeout: 10_000 });
+      const deepLink = new URL(page.url()).pathname;
 
-    await expect(page.getByText('The Hobbit - J.R.R. Tolkien')).toBeVisible();
-    await expect(
-      page.getByText('J.R.R. Tolkien', { exact: true })
-    ).toBeVisible();
+      await expect(page.getByText('The Hobbit - J.R.R. Tolkien')).toBeVisible();
+      await expect(
+        page.getByText('J.R.R. Tolkien', { exact: true })
+      ).toBeVisible();
 
-    await page.reload({ waitUntil: 'commit' });
+      await page.reload({ waitUntil: 'commit' });
 
-    await expect(page).toHaveURL(new RegExp(`${deepLink}/?$`));
-    await expect(page.getByTestId('layout-manager')).toBeVisible();
-    await expect(page.getByText('The Hobbit - J.R.R. Tolkien')).toBeVisible();
-  });
+      await expect(page).toHaveURL(new RegExp(`${deepLink}/?$`));
+      await expect(page.getByTestId('layout-manager')).toBeVisible();
+      await expect(page.getByText('The Hobbit - J.R.R. Tolkien')).toBeVisible();
+    }
+  );
 
   test('preserves manager list search params across reloads', async ({
     page,

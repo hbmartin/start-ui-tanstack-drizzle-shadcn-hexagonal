@@ -26,6 +26,8 @@ jobs:
         scope:
           [profile, auth, book, genre, kernel, runtime-config, shared, user]
     env:
+      APP_NAME: Start UI
+      APP_SLUG: start-ui-web
       SKIP_ENV_VALIDATION: true
       VITE_BASE_URL: http://localhost:3000
       VITE_S3_BUCKET_PUBLIC_URL: http://localhost:9000/default

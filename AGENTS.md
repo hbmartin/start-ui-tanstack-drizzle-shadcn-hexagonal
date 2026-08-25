@@ -11,6 +11,7 @@ Use these commands instead of invoking underlying tools directly.
 
 | Command | Purpose |
 |---|---|
+| `pnpm setup` | Interactive, idempotent setup; use explicit `--yes --preset --app-name --app-slug` in automation. |
 | `pnpm dev` | Start the local dev server. |
 | `pnpm check` | Static checks: format, lint, typecheck, Fallow, Semgrep, audit. |
 | `pnpm test` | Vitest unit and browser projects. |
@@ -60,7 +61,7 @@ Cross-module imports must use one of these public files:
 | `client.ts` | Client-only public API, query options, client facades. |
 | `presentation.ts` | React components and presentation exports. |
 | `testing.ts` | Test-only public gate for owner internals. |
-| `manifest.ts` | Static capability metadata for composition and lifecycle tooling only. |
+| `manifest.ts` | Static capability metadata for composition, validation, and generated registries only. |
 | `persistence.ts` | Named schema exports for schema aggregation and owner persistence wiring only. |
 
 Do not deep-import another module's `domain/`, `application/`, `infrastructure/`, `transport/`, or `presentation/` internals. `kernel` internals are the practical exception for cross-cutting primitives.

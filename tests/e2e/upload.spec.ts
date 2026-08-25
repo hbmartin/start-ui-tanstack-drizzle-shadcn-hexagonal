@@ -14,7 +14,7 @@ type UploadInitRequest = {
   route?: string;
 };
 
-test.describe('Book cover uploads', () => {
+test.describe('Book cover uploads', { tag: '@demo' }, () => {
   test.use({ storageState: ADMIN_FILE });
 
   test('uploads a cover and keeps the book form recoverable after clearing it', async ({

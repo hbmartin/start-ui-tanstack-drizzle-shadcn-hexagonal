@@ -42,6 +42,7 @@ vi.mock('@/modules/kernel/infrastructure/config/auth', () => ({
     sessionAbsoluteMaxInSeconds: 2_592_000,
     rateLimitWindowSeconds: 60,
     rateLimitMax: 100,
+    rateLimitHmacSecret: 'rate-limit-hmac-secret-that-is-long-enough-for-tests',
     otpAllowedAttempts: 3,
     otpSendWindowSeconds: 60,
     otpSendMax: 3,

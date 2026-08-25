@@ -6,6 +6,7 @@ import {
 } from '@/platform/lib/tanstack-start/server-function-handler';
 
 import type { ProtectedContext } from '@/modules/auth/backend';
+import { assertCapabilityAvailable } from '@/modules/kernel/backend';
 
 import {
   createGenreHandlers,
@@ -20,8 +21,9 @@ type GenreServerRuntimeDeps = {
   withProtectedContext: ProtectedRunner;
 };
 
-const getDeps = createServerOnlyFn(
+export const getGenreServerRuntimeDeps = createServerOnlyFn(
   async (): Promise<GenreServerRuntimeDeps> => {
+    assertCapabilityAvailable('genre');
     const [{ getGenreUseCases }, { getKernel }, { withProtectedContext }] =
       await Promise.all([
         import('@/composition/genre'),
@@ -42,7 +44,7 @@ const getDeps = createServerOnlyFn(
 );
 
 const runProtected = createServerFunctionInvoker({
-  getDeps,
+  getDeps: getGenreServerRuntimeDeps,
   selectRunner: (deps) => deps.withProtectedContext,
 });
 

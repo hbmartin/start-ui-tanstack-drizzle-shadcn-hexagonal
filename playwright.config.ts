@@ -3,11 +3,13 @@ import { defineConfig, devices } from '@playwright/test';
 import { DEFAULT_LANGUAGE_KEY } from '@/platform/lib/i18n/constants';
 
 const shouldRunVisualTests = process.env.VITE_VISUAL_TEST === 'true';
+const isCorePreset = process.env.CAPABILITY_PRESET === 'core';
 
 /**
  * See https://playwright.dev/docs/test-configuration.
  */
 export default defineConfig({
+  grepInvert: isCorePreset ? /@demo/u : undefined,
   testDir: './tests/e2e',
   testIgnore: !shouldRunVisualTests
     ? /visual[/\\].*\.visual\.spec\.ts/

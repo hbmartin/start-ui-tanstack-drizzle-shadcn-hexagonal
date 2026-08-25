@@ -14,3 +14,8 @@ export * from './domain/errors/domain-error';
 export * from './domain/errors/id-validation-error';
 export * from './domain/errors/upload-rejected-error';
 export * from './domain/ids';
+export {
+  ACTIVE_CAPABILITY_PRESET,
+  ENABLED_CAPABILITY_IDS,
+  isCapabilityEnabled,
+} from './domain/capability-selection.generated';

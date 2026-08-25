@@ -149,7 +149,7 @@ const buildAuthHttpGateway = (
     config: authConfig,
     storage: createBetterAuthRateLimitStorage({
       defaultWindowSeconds: authConfig.rateLimitWindowSeconds,
-      hmacSecret: authConfig.secret,
+      hmacSecret: authConfig.rateLimitHmacSecret,
       store: secondaryStore,
     }),
   });

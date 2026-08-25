@@ -2,6 +2,8 @@ import { makeTestDatabaseUrl } from '@tests/server/test-database-url';
 import { makeStrongTestSecret } from '@tests/support/test-secrets';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ACTIVE_CAPABILITY_PRESET } from '@/modules/kernel';
+
 /**
  * Regression guardrails for the fail-closed boot path.
  *
@@ -20,6 +22,13 @@ describe('validateServerConfig fails closed on insecure production config', () =
     vi.resetModules();
     vi.unstubAllEnvs();
     vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
+    vi.stubEnv('APP_NAME', 'Start UI Test');
+    vi.stubEnv('APP_SLUG', 'start-ui-test');
+    vi.stubEnv('CAPABILITY_PRESET', ACTIVE_CAPABILITY_PRESET);
+    vi.stubEnv(
+      'AUTH_RATE_LIMIT_HMAC_SECRET',
+      makeStrongTestSecret('rate-limit')
+    );
   });
 
   it('throws ConfigurationError in production when AUTH_SECRET is missing', async () => {
@@ -69,6 +78,10 @@ describe('Better Auth OTP attempt cap default', () => {
     vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('AUTH_PROVIDER', 'better-auth');
     vi.stubEnv('AUTH_SECRET', makeStrongTestSecret('auth'));
+    vi.stubEnv(
+      'AUTH_RATE_LIMIT_HMAC_SECRET',
+      makeStrongTestSecret('rate-limit')
+    );
   });
 
   it('defaults otpAllowedAttempts to the hardened value of 3', async () => {

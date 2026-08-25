@@ -87,6 +87,7 @@ export default defineConfig(({ mode }) => {
       : [];
 
   return {
+    envPrefix: ['VITE_', 'APP_NAME', 'APP_SLUG'],
     build: {
       target: 'baseline-widely-available',
     },

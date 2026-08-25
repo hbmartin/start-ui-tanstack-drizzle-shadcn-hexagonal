@@ -8,6 +8,8 @@ import {
 } from '@tests/server/test-utils';
 import { beforeEach, vi } from 'vitest';
 
+import { ACTIVE_CAPABILITY_PRESET } from '@/modules/kernel';
+
 vi.mock('@/modules/auth/infrastructure/better-auth/auth', () => {
   const defaultAuth = {
     api: {
@@ -73,6 +75,13 @@ vi.mock('@/modules/kernel/infrastructure/db/client', () => {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('AUTH_SECRET', 'unit-test-auth-secret-12345678901234567890');
+  vi.stubEnv(
+    'AUTH_RATE_LIMIT_HMAC_SECRET',
+    'unit-test-rate-secret-12345678901234567890'
+  );
+  vi.stubEnv('APP_NAME', 'Start UI Test');
+  vi.stubEnv('APP_SLUG', 'start-ui-test');
+  vi.stubEnv('CAPABILITY_PRESET', ACTIVE_CAPABILITY_PRESET);
   resetMockDb();
   setupAuthenticatedUser();
 });

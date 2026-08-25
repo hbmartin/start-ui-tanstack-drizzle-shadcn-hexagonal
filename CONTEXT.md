@@ -41,8 +41,7 @@ external contract; adapters translate that language at the boundary.
 
 The core preset contains authentication, permissions, Profile, and durable
 audit capabilities. These capabilities define the production security and
-accountability boundary and are not removable by the normal module-removal
-workflow.
+accountability boundary and remain enabled in every supported preset.
 
 The demo preset adds books and uploads. Demo capabilities are examples rather
 than framework dependencies and must be removable without leaving registered

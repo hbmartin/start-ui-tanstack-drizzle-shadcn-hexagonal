@@ -19,7 +19,7 @@ const makeDb = (findFirst: ReturnType<typeof vi.fn>) =>
 
 const makeInput = () => ({
   userId: unwrapParseResult(toUserId('user-1')),
-  permissions: { book: ['delete'] },
+  permissions: { user: ['delete'] },
   headers: new Headers(),
 });
 

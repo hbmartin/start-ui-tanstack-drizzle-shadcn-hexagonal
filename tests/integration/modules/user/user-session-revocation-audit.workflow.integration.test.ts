@@ -828,6 +828,10 @@ describe('user session revocation audit transaction', () => {
       'AUTH_SECRET',
       'integration-only-auth-secret-with-32-characters'
     );
+    vi.stubEnv(
+      'AUTH_RATE_LIMIT_HMAC_SECRET',
+      'integration-only-rate-secret-with-32-characters'
+    );
     const gateway = new SessionGatewayBetterAuth(
       makeCachedAuth({ sessionId: targetSessionId, userId }),
       database.db as Database,

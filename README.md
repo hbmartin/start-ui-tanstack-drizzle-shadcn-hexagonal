@@ -47,11 +47,37 @@ This project uses Vite's native `resolve.tsconfigPaths: true` option to resolve 
 ## Installation
 
 ```bash
-cp .env.example .env  # Setup your env variables
-pnpm install          # Install dependencies
-pnpm dk:init          # Start Docker containers (PostgreSQL, MinIO)
-pnpm db:init          # Push the Drizzle schema and seed the database
+pnpm install
+pnpm setup # Interactive: choose core or demo and provide the application identity
+pnpm dk:db:init # core: PostgreSQL only
+# pnpm dk:init # demo: PostgreSQL plus MinIO bucket initialization
+pnpm db:init
 ```
+
+For a deterministic noninteractive setup:
+
+```bash
+pnpm setup -- --yes --preset=core --app-name="Acme Cloud" --app-slug=acme-cloud
+```
+
+There is no default preset. `core` enables auth, permissions, Profile, email
+ports, and durable audit without requiring object storage. `demo` additionally
+enables the books, genres, uploads, and demo seed data. Setup creates a private
+`.env`, generates distinct authentication and rate-limit secrets, and leaves
+optional email delivery and external telemetry exporters disabled until they are
+configured. Browser telemetry and its local SQLite development sink remain on.
+Email-dependent sign-in, invitation, verification, and reset delivery cannot
+complete while email delivery is disabled.
+
+`APP_NAME` is presentation identity and can be renamed. `APP_SLUG` is the stable
+machine identifier used by durable consumers; change it only before the first
+deployment unless you also supply an explicit data migration.
+
+Inspect setup without writing files by adding `--dry-run`. Re-running the same
+setup is byte-idempotent and preserves explicitly configured optional adapters.
+The production build validates every supplied adapter value but does not require
+deploy-time Upstash credentials. Production server startup still fails closed
+until the distributed authentication limiter is configured.
 
 > [!NOTE]
 > **Don't want to use docker?**

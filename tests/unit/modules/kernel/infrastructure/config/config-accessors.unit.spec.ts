@@ -6,11 +6,25 @@ import {
 } from '@tests/support/test-secrets';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ACTIVE_CAPABILITY_PRESET } from '@/modules/kernel';
+
+const otherCapabilityPreset = {
+  core: 'demo',
+  demo: 'core',
+} as const;
+
 describe('server config accessors', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.unstubAllEnvs();
     vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
+    vi.stubEnv('APP_NAME', 'Start UI Test');
+    vi.stubEnv('APP_SLUG', 'start-ui-test');
+    vi.stubEnv('CAPABILITY_PRESET', ACTIVE_CAPABILITY_PRESET);
+    vi.stubEnv(
+      'AUTH_RATE_LIMIT_HMAC_SECRET',
+      makeStrongTestSecret('rate-limit')
+    );
   });
 
   it('caches parsed database config', async () => {
@@ -165,6 +179,43 @@ describe('server config accessors', () => {
     expect(getAuthProviderConfig()).toEqual({ provider: 'better-auth' });
   });
 
+  it('parses canonical application identity and the explicit preset', async () => {
+    vi.stubEnv('APP_NAME', 'Acme Cloud');
+    vi.stubEnv('APP_SLUG', 'acme-cloud');
+    vi.stubEnv('CAPABILITY_PRESET', ACTIVE_CAPABILITY_PRESET);
+    const { getApplicationConfig } =
+      await import('@/modules/kernel/infrastructure/config/application');
+
+    expect(getApplicationConfig()).toEqual({
+      identity: { name: 'Acme Cloud', slug: 'acme-cloud' },
+      preset: ACTIVE_CAPABILITY_PRESET,
+    });
+  });
+
+  it('rejects a preset that differs from the generated composition', async () => {
+    vi.stubEnv(
+      'CAPABILITY_PRESET',
+      otherCapabilityPreset[ACTIVE_CAPABILITY_PRESET]
+    );
+    const { getApplicationConfig } =
+      await import('@/modules/kernel/infrastructure/config/application');
+
+    expect(() => getApplicationConfig()).toThrow(
+      'Invalid environment configuration: CAPABILITY_PRESET'
+    );
+  });
+
+  it('rejects an unstable application slug through ConfigurationError', async () => {
+    vi.stubEnv('APP_SLUG', 'Acme Cloud');
+    const { getApplicationConfig } =
+      await import('@/modules/kernel/infrastructure/config/application');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
+
+    expect(() => getApplicationConfig()).toThrow(ConfigurationError);
+    expect(() => getApplicationConfig()).toThrow('APP_SLUG');
+  });
+
   it('parses WorkOS as a reserved auth provider without Better Auth secrets', async () => {
     vi.stubEnv('AUTH_PROVIDER', 'workos');
     vi.stubEnv('AUTH_SECRET', undefined);
@@ -220,12 +271,29 @@ describe('server config accessors', () => {
 
   it('accepts strong AUTH_SECRET values', async () => {
     const authValue = makeStrongTestSecret('auth');
+    const rateLimitValue = makeStrongTestSecret('rate-limit');
     vi.stubEnv('AUTH_PROVIDER', 'better-auth');
     vi.stubEnv('AUTH_SECRET', authValue);
+    vi.stubEnv('AUTH_RATE_LIMIT_HMAC_SECRET', rateLimitValue);
     const { getBetterAuthConfig } =
       await import('@/modules/kernel/infrastructure/config/auth');
 
     expect(getBetterAuthConfig().secret).toBe(authValue);
+    expect(getBetterAuthConfig().rateLimitHmacSecret).toBe(rateLimitValue);
+  });
+
+  it('requires the rate-limit HMAC secret to be distinct from AUTH_SECRET', async () => {
+    const sharedValue = makeStrongTestSecret('shared');
+    vi.stubEnv('AUTH_PROVIDER', 'better-auth');
+    vi.stubEnv('AUTH_SECRET', sharedValue);
+    vi.stubEnv('AUTH_RATE_LIMIT_HMAC_SECRET', sharedValue);
+    const { getBetterAuthConfig } =
+      await import('@/modules/kernel/infrastructure/config/auth');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
+
+    expect(() => getBetterAuthConfig()).toThrow(ConfigurationError);
+    expect(() => getBetterAuthConfig()).toThrow('AUTH_RATE_LIMIT_HMAC_SECRET');
   });
 
   it('allows weak AUTH_SECRET values only when non-production env validation is skipped', async () => {
@@ -312,6 +380,17 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/domain/errors/configuration-error');
 
     expect(() => getRedisConfig()).toThrow(ConfigurationError);
+    expect(() => getRedisConfig()).toThrow('Production startup requires');
+  });
+
+  it('allows production build validation to omit runtime Redis credentials without weakening startup', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', undefined);
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+
+    expect(getRedisConfig({ requiredInProduction: false })).toBeNull();
     expect(() => getRedisConfig()).toThrow('Production startup requires');
   });
 
@@ -431,16 +510,16 @@ describe('server config accessors', () => {
     expect(getLoggerConfig().consoleMirror).toBe(true);
   });
 
-  it('requires an OpenTelemetry Collector URL in production', async () => {
+  it('uses safe no-export telemetry defaults in production without a Collector', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('OTEL_COLLECTOR_URL', undefined);
     const { getTelemetryConfig } =
       await import('@/modules/kernel/infrastructure/config/telemetry');
-    const { ConfigurationError } =
-      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(() => getTelemetryConfig()).toThrow(ConfigurationError);
-    expect(() => getTelemetryConfig()).toThrow('OTEL_COLLECTOR_URL');
+    expect(getTelemetryConfig()).toMatchObject({
+      collectorUrl: undefined,
+      localSqliteEnabled: false,
+    });
   });
 
   it('accepts production telemetry config when the Collector URL is present', async () => {

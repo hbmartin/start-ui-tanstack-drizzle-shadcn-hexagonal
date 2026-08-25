@@ -38,7 +38,9 @@ const redisConfigMissingFieldsError = (fields: string[]) =>
     }
   );
 
-export function getRedisConfig(): RedisConfig | null {
+export function getRedisConfig(
+  options: { requiredInProduction?: boolean } = {}
+): RedisConfig | null {
   if (cachedRedisConfig !== undefined) return cachedRedisConfig;
 
   const env = parseEnv(redisEnvSchema);
@@ -51,13 +53,16 @@ export function getRedisConfig(): RedisConfig | null {
     env,
   });
   if (!restUrl && !restToken) {
-    if (isProdRuntimeEnvironment(env)) {
+    if (
+      isProdRuntimeEnvironment(env) &&
+      (options.requiredInProduction ?? true)
+    ) {
       throw new ConfigurationError(
         'Production startup requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for distributed authentication rate limiting.'
       );
     }
-    cachedRedisConfig = null;
-    return cachedRedisConfig;
+    if (!isProdRuntimeEnvironment(env)) cachedRedisConfig = null;
+    return null;
   }
   if (!restUrl || !restToken) {
     throw redisConfigMissingFieldsError(

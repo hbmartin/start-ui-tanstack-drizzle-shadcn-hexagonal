@@ -102,15 +102,26 @@ describe('composition override contract', () => {
     const overridden = getServices({});
 
     expect(second.kernel).toBe(first.kernel);
-    expect(second.book).toBe(first.book);
     expect(second.user).toBe(first.user);
-    expect(second.genre).toBe(first.genre);
     expect(second.profile).toBe(first.profile);
+    expect(Object.keys(second).toSorted()).toEqual(
+      Object.keys(first).toSorted()
+    );
 
     expect(overridden.kernel).not.toBe(first.kernel);
-    expect(overridden.book).not.toBe(first.book);
     expect(overridden.user).not.toBe(first.user);
-    expect(overridden.genre).not.toBe(first.genre);
     expect(overridden.profile).not.toBe(first.profile);
+    expect(Object.keys(overridden).toSorted()).toEqual(
+      Object.keys(first).toSorted()
+    );
+    expect(
+      ['book', 'genre']
+        .filter((key) => Object.hasOwn(first, key))
+        .every(
+          (key) =>
+            overridden[key as 'book' | 'genre'] !==
+            first[key as 'book' | 'genre']
+        )
+    ).toBe(true);
   });
 });

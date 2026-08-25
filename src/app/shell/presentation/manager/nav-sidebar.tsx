@@ -28,6 +28,7 @@ import {
 
 import { NavUser } from '@/app/shell/presentation/manager/nav-user';
 import { WithPermissions } from '@/modules/auth/client';
+import { isCapabilityEnabled } from '@/modules/kernel';
 
 export const NavSidebar = (props: { children?: ReactNode }) => {
   const { t } = useTranslation(['layout']);
@@ -81,21 +82,23 @@ export const NavSidebar = (props: { children?: ReactNode }) => {
                     )}
                   </Link>
                 </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <Link to="/manager/books">
-                    {({ isActive }) => (
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        render={
-                          <span>
-                            <IconBookOpen />
-                            <span>{t('layout:nav.books')}</span>
-                          </span>
-                        }
-                      />
-                    )}
-                  </Link>
-                </SidebarMenuItem>
+                {isCapabilityEnabled('book') ? (
+                  <SidebarMenuItem>
+                    <Link to="/manager/books">
+                      {({ isActive }) => (
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          render={
+                            <span>
+                              <IconBookOpen />
+                              <span>{t('layout:nav.books')}</span>
+                            </span>
+                          }
+                        />
+                      )}
+                    </Link>
+                  </SidebarMenuItem>
+                ) : null}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

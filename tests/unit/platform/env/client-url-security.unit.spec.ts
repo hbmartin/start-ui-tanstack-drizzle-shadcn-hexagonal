@@ -4,6 +4,8 @@ describe('getEnvClient URL security', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.unstubAllEnvs();
+    vi.stubEnv('APP_NAME', 'Start UI Test');
+    vi.stubEnv('APP_SLUG', 'start-ui-test');
   });
 
   it('rejects cleartext VITE_BASE_URL for remote hosts in production', async () => {
@@ -67,6 +69,8 @@ describe('getEnvClient URL security', () => {
 
     expect(
       parseClientEnv({
+        APP_NAME: 'Start UI Test',
+        APP_SLUG: 'start-ui-test',
         VITE_BASE_URL: 'http://localhost:3000',
         VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default',
       }).VITE_AUTH_SIGNUP_ENABLED
@@ -78,10 +82,43 @@ describe('getEnvClient URL security', () => {
 
     expect(
       parseClientEnv({
+        APP_NAME: 'Start UI Test',
+        APP_SLUG: 'start-ui-test',
         VITE_AUTH_SIGNUP_ENABLED: 'true',
         VITE_BASE_URL: 'http://localhost:3000',
         VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default',
       }).VITE_AUTH_SIGNUP_ENABLED
     ).toBe(true);
+  });
+
+  it('uses the shared application identity contract', async () => {
+    const { parseClientEnv } = await import('@/platform/env/config');
+
+    expect(
+      parseClientEnv({
+        APP_NAME: 'Acme Cloud',
+        APP_SLUG: 'acme-cloud',
+        VITE_BASE_URL: 'http://localhost:3000',
+      })
+    ).toMatchObject({ APP_NAME: 'Acme Cloud', APP_SLUG: 'acme-cloud' });
+    expect(() =>
+      parseClientEnv({
+        APP_NAME: 'Acme Cloud',
+        APP_SLUG: 'Acme Cloud',
+        VITE_BASE_URL: 'http://localhost:3000',
+      })
+    ).toThrow();
+  });
+
+  it('rejects control characters in the application presentation name', async () => {
+    const { parseClientEnv } = await import('@/platform/env/config');
+
+    expect(() =>
+      parseClientEnv({
+        APP_NAME: 'Acme\r\nBcc: victim@example.com',
+        APP_SLUG: 'acme-cloud',
+        VITE_BASE_URL: 'http://localhost:3000',
+      })
+    ).toThrow();
   });
 });

@@ -1,6 +1,8 @@
 /* oxlint-disable no-process-env */
 import { z } from 'zod';
 
+import { applicationIdentitySchema } from './application-identity';
+
 import {
   isDevRuntimeEnvironment,
   isProdRuntimeEnvironment,
@@ -13,6 +15,9 @@ import {
 } from './url-security';
 
 const isTruthy = (value: unknown) => value === true || value === 'true';
+
+const emptyStringAsUndefined = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
 
 const isProd = () => isProdRuntimeEnvironment();
 const isDev = () => isDevRuntimeEnvironment();
@@ -35,7 +40,7 @@ const getBaseUrl = (env: RuntimeEnv) => {
 };
 
 const clientSchema = () =>
-  z.object({
+  applicationIdentitySchema.extend({
     VITE_BASE_URL: z
       .url()
       .refine((value) => isSecureUrlForProduction(value, isProd()), {
@@ -67,11 +72,15 @@ const clientSchema = () =>
       .string()
       .optional()
       .transform((value) => value ?? (isDev() ? 'gold' : 'plum')),
-    VITE_S3_BUCKET_PUBLIC_URL: z
-      .url()
-      .refine((value) => isSecureUrlForProduction(value, isProd()), {
-        message: httpsInProductionMessage('VITE_S3_BUCKET_PUBLIC_URL'),
-      }),
+    VITE_S3_BUCKET_PUBLIC_URL: z.preprocess(
+      emptyStringAsUndefined,
+      z
+        .url()
+        .refine((value) => isSecureUrlForProduction(value, isProd()), {
+          message: httpsInProductionMessage('VITE_S3_BUCKET_PUBLIC_URL'),
+        })
+        .optional()
+    ),
     VITE_SENTRY_DSN: z
       .string()
       .url()

@@ -6,6 +6,7 @@ import ar from '@/app/i18n/ar';
 import en from '@/app/i18n/en';
 import fr from '@/app/i18n/fr';
 import sw from '@/app/i18n/sw';
+import { isCapabilityRouteEnabled } from '@/app/capabilities/is-capability-route-enabled';
 import {
   compileCapabilityNavigation,
   compileCapabilityPermissions,
@@ -16,10 +17,7 @@ import {
   capabilityRegistry,
   getDeclaredCapabilitiesForPreset,
 } from '@/composition/capabilities/registry';
-import {
-  activeSeedPreset,
-  seedContributionIds,
-} from '../../drizzle/seed/registry.generated';
+import { getSeedContributionIds } from '../../drizzle/seed/registry.generated';
 import {
   defaultUserPermissions,
   permissionStatements,
@@ -32,6 +30,7 @@ import * as bookPersistence from '@/modules/book/persistence';
 import * as bookPresentation from '@/modules/book/presentation';
 import * as emailPersistence from '@/modules/email/persistence';
 import * as genrePersistence from '@/modules/genre/persistence';
+import { ACTIVE_CAPABILITY_PRESET } from '@/modules/kernel';
 import * as profilePresentation from '@/modules/profile/presentation';
 import * as userPresentation from '@/modules/user/presentation';
 
@@ -212,7 +211,9 @@ describe('capability manifest registry', () => {
   });
 
   it('matches permission and locale registries during generated-file transition', () => {
-    const compiled = compileCapabilityPermissions(capabilityRegistry);
+    const compiled = compileCapabilityPermissions(
+      getDeclaredCapabilitiesForPreset(ACTIVE_CAPABILITY_PRESET)
+    );
     expect(compiled.statements).toEqual(permissionStatements);
     expect(compiled.rolePermissions).toEqual(rolePermissions);
     expect(compiled.defaultUserPermissions).toEqual(defaultUserPermissions);
@@ -226,9 +227,12 @@ describe('capability manifest registry', () => {
     }
   });
 
-  it('keeps the generated seed registry aligned with the active preset', () => {
-    expect(seedContributionIds).toEqual(
-      compileCapabilitySeeds(capabilityRegistry, activeSeedPreset)
+  it('keeps the generated seed registry aligned with both explicit presets', () => {
+    expect(getSeedContributionIds('demo')).toEqual(
+      compileCapabilitySeeds(capabilityRegistry, 'demo')
+    );
+    expect(getSeedContributionIds('core')).toEqual(
+      compileCapabilitySeeds(capabilityRegistry, 'core')
     );
     expect(compileCapabilitySeeds(capabilityRegistry, 'core')).toEqual([
       { capabilityId: 'user', id: 'user.local-accounts' },
@@ -262,22 +266,11 @@ describe('capability manifest registry', () => {
   it('keeps core independent of demo-only storage and preserves removal order', () => {
     const core = getDeclaredCapabilitiesForPreset('core');
     const demo = getDeclaredCapabilitiesForPreset('demo');
-    expect(core.map(({ id }) => id)).toEqual([
-      'audit',
-      'email',
-      'auth',
-      'profile',
-      'user',
-    ]);
-    expect(demo.map(({ id }) => id)).toEqual([
-      'audit',
-      'email',
-      'auth',
-      'profile',
-      'user',
-      'genre',
-      'book',
-    ]);
+    const presetDefinitions = JSON.parse(
+      readProjectFile('src/modules/kernel/domain/capability-presets.json')
+    ) as Record<'core' | 'demo', string[]>;
+    expect(core.map(({ id }) => id)).toEqual(presetDefinitions.core);
+    expect(demo.map(({ id }) => id)).toEqual(presetDefinitions.demo);
     expect(
       core
         .flatMap(({ runtimeAdapters }) => runtimeAdapters)
@@ -291,5 +284,22 @@ describe('capability manifest registry', () => {
     expect(demo.findIndex(({ id }) => id === 'genre')).toBeLessThan(
       demo.findIndex(({ id }) => id === 'book')
     );
+  });
+
+  it('keeps every demo-only public route behind the core route gate', () => {
+    const coreIds = new Set(
+      getDeclaredCapabilitiesForPreset('core').map(({ id }) => id)
+    );
+    const demoOnlyRoutes = getDeclaredCapabilitiesForPreset('demo')
+      .filter(({ id }) => !coreIds.has(id))
+      .flatMap(({ publicRoutes }) => publicRoutes);
+
+    for (const { routeId } of demoOnlyRoutes) {
+      const concretePath = routeId.replace(/\$[^/]+/gu, 'example');
+      expect(
+        isCapabilityRouteEnabled(concretePath, () => false),
+        `${routeId} must be unavailable in core`
+      ).toBe(false);
+    }
   });
 });

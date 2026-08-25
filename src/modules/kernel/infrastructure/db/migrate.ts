@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { Client as PgClient } from 'pg';
 
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
+import { getApplicationIdentity } from '@/modules/kernel/infrastructure/config/application';
 import {
   getMigrationDatabaseConfig,
   type MigrationDatabaseConfig,
@@ -21,7 +22,6 @@ const migrationConfig = {
   migrationsFolder: 'drizzle/migrations',
 } as const;
 
-const MIGRATION_LOCK_NAMESPACE = 'start-ui-web';
 const MIGRATION_LOCK_KEY = 'drizzle-migrations';
 
 const require = createRequire(import.meta.url);
@@ -106,11 +106,12 @@ export async function createMigrationDbClient(
 }
 
 async function acquireMigrationLock(
-  client: MigrationDatabaseClient
+  client: MigrationDatabaseClient,
+  namespace: string
 ): Promise<() => Promise<void>> {
   const { rows } = await client.query<{ acquired: boolean }>(
     'SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired',
-    [MIGRATION_LOCK_NAMESPACE, MIGRATION_LOCK_KEY]
+    [namespace, MIGRATION_LOCK_KEY]
   );
 
   if (rows[0]?.acquired !== true) {
@@ -125,7 +126,7 @@ async function acquireMigrationLock(
     released = true;
     await client.query(
       'SELECT pg_advisory_unlock(hashtext($1), hashtext($2))',
-      [MIGRATION_LOCK_NAMESPACE, MIGRATION_LOCK_KEY]
+      [namespace, MIGRATION_LOCK_KEY]
     );
   };
 }
@@ -143,7 +144,10 @@ async function runMigration(db: MigrationDatabase) {
 }
 
 export async function migrateDatabase(db: MigrationDatabase) {
-  const releaseLock = await acquireMigrationLock(db.$client);
+  const releaseLock = await acquireMigrationLock(
+    db.$client,
+    getApplicationIdentity().slug
+  );
 
   try {
     await runMigration(db);

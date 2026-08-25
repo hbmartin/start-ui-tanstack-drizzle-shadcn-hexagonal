@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => {
       otpSendMax: 3,
       otpSendWindowSeconds: 60,
       rateLimitMax: 100,
+      rateLimitHmacSecret:
+        'rate-limit-hmac-secret-that-is-long-enough-for-tests',
       rateLimitWindowSeconds: 60,
       trustedOrigins: undefined as string[] | undefined,
     },

@@ -6,6 +6,7 @@ import {
 } from '@/platform/lib/tanstack-start/server-function-handler';
 
 import type { ProtectedContext } from '@/modules/auth/backend';
+import { assertCapabilityAvailable } from '@/modules/kernel/backend';
 
 import {
   type BookHandlers,
@@ -25,36 +26,39 @@ type BookServerRuntimeDeps = {
   withProtectedMutation: ProtectedRunner;
 };
 
-const getDeps = createServerOnlyFn(async (): Promise<BookServerRuntimeDeps> => {
-  const [
-    { getBookUseCases },
-    { getKernel },
-    { withProtectedContext, withProtectedMutation },
-  ] = await Promise.all([
-    import('@/composition/book'),
-    import('@/composition/kernel'),
-    import('@/modules/auth/backend'),
-  ]);
+export const getBookServerRuntimeDeps = createServerOnlyFn(
+  async (): Promise<BookServerRuntimeDeps> => {
+    assertCapabilityAvailable('book');
+    const [
+      { getBookUseCases },
+      { getKernel },
+      { withProtectedContext, withProtectedMutation },
+    ] = await Promise.all([
+      import('@/composition/book'),
+      import('@/composition/kernel'),
+      import('@/modules/auth/backend'),
+    ]);
 
-  return {
-    handlers: createBookHandlers({
-      getUseCases: (ctx) =>
-        getBookUseCases({
-          kernel: getKernel({ logger: ctx.logger }),
-        }),
-    }),
-    withProtectedContext,
-    withProtectedMutation,
-  };
-});
+    return {
+      handlers: createBookHandlers({
+        getUseCases: (ctx) =>
+          getBookUseCases({
+            kernel: getKernel({ logger: ctx.logger }),
+          }),
+      }),
+      withProtectedContext,
+      withProtectedMutation,
+    };
+  }
+);
 
 const runProtected = createServerFunctionInvoker({
-  getDeps,
+  getDeps: getBookServerRuntimeDeps,
   selectRunner: (deps) => deps.withProtectedContext,
 });
 
 const runMutation = createServerFunctionInvoker({
-  getDeps,
+  getDeps: getBookServerRuntimeDeps,
   selectRunner: (deps) => deps.withProtectedMutation,
 });
 

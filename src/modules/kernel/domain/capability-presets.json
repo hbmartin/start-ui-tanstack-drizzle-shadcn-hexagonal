@@ -1,0 +1,4 @@
+{
+  "core": ["audit", "email", "auth", "profile", "user"],
+  "demo": ["audit", "email", "auth", "profile", "user", "genre", "book"]
+}
