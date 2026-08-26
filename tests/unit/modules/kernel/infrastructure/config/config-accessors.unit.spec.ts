@@ -344,7 +344,7 @@ describe('server config accessors', () => {
     const { validateServerConfig } =
       await import('@/modules/kernel/infrastructure/config/server');
 
-    expect(() => validateServerConfig()).not.toThrow();
+    expect(() => validateServerConfig('node')).not.toThrow();
   });
 
   it('runs server config validation in production even when SKIP_ENV_VALIDATION is true', async () => {
@@ -358,7 +358,7 @@ describe('server config accessors', () => {
     const { validateServerConfig } =
       await import('@/modules/kernel/infrastructure/config/server');
 
-    expect(() => validateServerConfig()).toThrow(ConfigurationError);
+    expect(() => validateServerConfig('node')).toThrow(ConfigurationError);
   });
 
   it('returns null for absent optional Redis config', async () => {

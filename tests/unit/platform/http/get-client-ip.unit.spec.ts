@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { createTrustedClientIpAdapter } from '@/platform/http/get-client-ip';
+import {
+  runtimeCapabilityRequirements,
+  runtimeProfiles,
+} from '@/platform/runtime/runtime-profile';
 
 const requestWith = (headers: Record<string, string>) =>
   new Request('http://localhost/api/telemetry/logs', { headers });
@@ -11,6 +15,18 @@ const adapter = (
 ) => createTrustedClientIpAdapter({ runtimeProfile, trustedProxyDepth });
 
 describe('trusted client IP adapters', () => {
+  it.each(runtimeProfiles)(
+    'matches the declared %s runtime capability kind',
+    (runtimeProfile) => {
+      expect(
+        createTrustedClientIpAdapter({
+          runtimeProfile,
+          trustedProxyDepth: 1,
+        }).kind
+      ).toBe(runtimeCapabilityRequirements[runtimeProfile].trustedClientIp);
+    }
+  );
+
   it('defaults to depth 1: the rightmost X-Forwarded-For entry, ignoring spoofed leftmost entries', () => {
     const ip = adapter('node').resolve(
       requestWith({ 'X-Forwarded-For': '1.2.3.4, 203.0.113.7' })

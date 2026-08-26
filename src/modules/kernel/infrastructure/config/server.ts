@@ -1,22 +1,52 @@
+import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
+
+import { ConfigurationError } from '../../domain/errors/configuration-error';
 import { getApplicationConfig } from './application';
 import { getAuthConfig } from './auth';
 import { getDatabaseConfig } from './database';
 import { getEmailConfig } from './email';
-import { shouldSkipEnvValidation } from './env-schema';
+import {
+  isProdRuntimeEnvironment,
+  shouldSkipEnvValidation,
+} from './env-schema';
 import { getHttpConfig } from './http';
 import { getLoggerConfig } from './logger';
 import { getRedisConfig } from './redis';
 import { getStorageConfig } from './storage';
 import { getTelemetryConfig } from './telemetry';
 
-const validateServerConfiguration = (requiredRuntimeServices: boolean) => {
+const validateTrustedClientIpConfiguration = (
+  runtimeProfile: RuntimeProfile,
+  trustedProxyDepth: number | undefined
+) => {
+  if (
+    runtimeProfile === 'node' &&
+    isProdRuntimeEnvironment() &&
+    trustedProxyDepth === undefined
+  ) {
+    throw new ConfigurationError(
+      'Node production startup requires TRUSTED_PROXY_DEPTH to match the trusted reverse-proxy topology.'
+    );
+  }
+};
+
+const validateServerConfiguration = (
+  requiredRuntimeServices: boolean,
+  runtimeProfile?: RuntimeProfile
+) => {
   if (shouldSkipEnvValidation()) return;
 
   const application = getApplicationConfig();
+  const http = getHttpConfig();
+  if (runtimeProfile) {
+    validateTrustedClientIpConfiguration(
+      runtimeProfile,
+      http.trustedProxyDepth
+    );
+  }
   getAuthConfig();
   getDatabaseConfig();
   getEmailConfig();
-  getHttpConfig();
   getLoggerConfig();
   getRedisConfig({ requiredInProduction: requiredRuntimeServices });
   if (application.preset === 'demo') getStorageConfig();
@@ -26,4 +56,5 @@ const validateServerConfiguration = (requiredRuntimeServices: boolean) => {
 export const validateServerBuildConfig = () =>
   validateServerConfiguration(false);
 
-export const validateServerConfig = () => validateServerConfiguration(true);
+export const validateServerConfig = (runtimeProfile: RuntimeProfile) =>
+  validateServerConfiguration(true, runtimeProfile);

@@ -7,11 +7,11 @@ import { ACTIVE_CAPABILITY_PRESET } from '@/modules/kernel';
 /**
  * Regression guardrails for the fail-closed boot path.
  *
- * `src/server.ts` calls `validateServerConfig()` (re-exported from the kernel
- * public gate `@/modules/kernel/backend`) at module load, so an insecure
- * production environment must abort the boot with a `ConfigurationError` rather
- * than start serving. These tests pin that behaviour through the public gate and
- * the no-op escape hatch used by local dev / CI.
+ * The profile-selected runtime entry calls `validateServerConfig(profile)`
+ * (re-exported from the kernel public gate `@/modules/kernel/backend`) at module
+ * load, so an insecure production environment must abort the boot with a
+ * `ConfigurationError` rather than start serving. These tests pin that behaviour
+ * through the public gate and the no-op escape hatch used by local dev / CI.
  *
  * Env is mutated with `vi.stubEnv` per the config-accessors.unit.spec.ts
  * pattern; `vi.resetModules()` clears the module-level config caches between
@@ -25,6 +25,7 @@ describe('validateServerConfig fails closed on insecure production config', () =
     vi.stubEnv('APP_NAME', 'Start UI Test');
     vi.stubEnv('APP_SLUG', 'start-ui-test');
     vi.stubEnv('CAPABILITY_PRESET', ACTIVE_CAPABILITY_PRESET);
+    vi.stubEnv('TRUSTED_PROXY_DEPTH', '1');
     vi.stubEnv(
       'AUTH_RATE_LIMIT_HMAC_SECRET',
       makeStrongTestSecret('rate-limit')
@@ -38,7 +39,7 @@ describe('validateServerConfig fails closed on insecure production config', () =
     const { ConfigurationError } = await import('@/modules/kernel');
     const { validateServerConfig } = await import('@/modules/kernel/backend');
 
-    expect(() => validateServerConfig()).toThrow(ConfigurationError);
+    expect(() => validateServerConfig('node')).toThrow(ConfigurationError);
   });
 
   it('throws ConfigurationError in production for a cleartext database URL', async () => {
@@ -49,8 +50,8 @@ describe('validateServerConfig fails closed on insecure production config', () =
     const { ConfigurationError } = await import('@/modules/kernel');
     const { validateServerConfig } = await import('@/modules/kernel/backend');
 
-    expect(() => validateServerConfig()).toThrow(ConfigurationError);
-    expect(() => validateServerConfig()).toThrow('DATABASE_URL');
+    expect(() => validateServerConfig('node')).toThrow(ConfigurationError);
+    expect(() => validateServerConfig('node')).toThrow('DATABASE_URL');
   });
 
   it('is a no-op when env validation is skipped outside production', async () => {
@@ -61,7 +62,18 @@ describe('validateServerConfig fails closed on insecure production config', () =
 
     const { validateServerConfig } = await import('@/modules/kernel/backend');
 
-    expect(() => validateServerConfig()).not.toThrow();
+    expect(() => validateServerConfig('node')).not.toThrow();
+  });
+
+  it('fails Node production startup when trusted proxy depth is not explicit', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TRUSTED_PROXY_DEPTH', undefined);
+
+    const { ConfigurationError } = await import('@/modules/kernel');
+    const { validateServerConfig } = await import('@/modules/kernel/backend');
+
+    expect(() => validateServerConfig('node')).toThrow(ConfigurationError);
+    expect(() => validateServerConfig('node')).toThrow('TRUSTED_PROXY_DEPTH');
   });
 });
 

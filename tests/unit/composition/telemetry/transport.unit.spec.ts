@@ -31,12 +31,15 @@ const authUseCasesMock = vi.hoisted(() => ({
   getCurrentSession: vi.fn(),
 }));
 
+const runtimeEnvironmentMock = vi.hoisted(() => ({ production: false }));
+
 vi.mock('@/modules/kernel/infrastructure/config/telemetry', () => ({
   getTelemetryConfig: () => configMock,
 }));
 
 vi.mock('@/modules/kernel/backend', () => ({
   getHttpConfig: () => ({ trustedProxyDepth: 1 }),
+  isProdRuntimeEnvironment: () => runtimeEnvironmentMock.production,
 }));
 
 vi.mock('@/composition/kernel', () => ({
@@ -84,6 +87,7 @@ describe('telemetry transport handlers', () => {
     configMock.proxyMaxBytes = 1_000;
     configMock.rateLimitPerMinute = 1_000;
     configMock.requireAuth = false;
+    runtimeEnvironmentMock.production = false;
     defaultRateLimiter.reset();
     authUseCasesMock.getCurrentSession.mockResolvedValue(
       Result.Ok({ type: 'auth_session_found', session: { user: { id: 'u1' } } })
@@ -329,6 +333,27 @@ describe('telemetry transport handlers', () => {
     expect(first.status).toBe(204);
     expect(second.status).toBe(429);
     expect(second.headers.get('Retry-After')).toBeTruthy();
+  });
+
+  it('fails closed in production when trusted client IP provenance is unavailable', async () => {
+    runtimeEnvironmentMock.production = true;
+    const { handleOtlpProxyRequest } =
+      await import('@/composition/telemetry/transport');
+
+    const response = await handleOtlpProxyRequest(
+      request(
+        '/api/telemetry/otel/v1/traces',
+        'application/x-protobuf',
+        new Uint8Array([1]),
+        { 'X-Forwarded-For': '' }
+      ),
+      'traces',
+      'node'
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('Retry-After')).toBe('60');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('uses the Cloudflare profile header instead of spoofed X-Forwarded-For values', async () => {

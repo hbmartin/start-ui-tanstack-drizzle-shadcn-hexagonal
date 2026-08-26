@@ -20,7 +20,8 @@ export type HttpConfig = {
    * and Cloudflare use their profile-owned single-value headers instead. Must
    * match the Node deployment topology to avoid trusting attacker-controlled
    * X-Forwarded-For entries. Local/test defaults to `1`; production has no
-   * default and fails trusted-IP resolution until explicitly configured.
+   * default and causes Node production startup to fail until explicitly
+   * configured.
    * `0` disables Node proxy trust.
    */
   trustedProxyDepth: number | undefined;

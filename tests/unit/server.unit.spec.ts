@@ -93,6 +93,7 @@ describe('server entry', () => {
     await import('@/server');
 
     expect(mocks.validateServerConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.validateServerConfig).toHaveBeenCalledWith('node');
   });
 
   it('installs telemetry before TanStack evaluates and does so once', async () => {

@@ -2,7 +2,10 @@ import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields'
 
 import { getAuthUseCases } from '@/composition/auth';
 import { getKernel } from '@/composition/kernel';
-import { getHttpConfig } from '@/modules/kernel/backend';
+import {
+  getHttpConfig,
+  isProdRuntimeEnvironment,
+} from '@/modules/kernel/backend';
 import { getTelemetryConfig } from '@/modules/kernel/infrastructure/config/telemetry';
 import {
   appendBrowserMutationVaryHeader,
@@ -95,6 +98,15 @@ const tooManyRequests = (retryAfterSeconds: number) =>
     status: 429,
   });
 
+const rateLimiterUnavailable = () =>
+  new Response(JSON.stringify({ error: 'rate_limiter_unavailable' }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Retry-After': '60',
+    },
+    status: 503,
+  });
+
 const unauthorized = () =>
   new Response(JSON.stringify({ error: 'unauthorized' }), {
     headers: { 'Content-Type': 'application/json' },
@@ -128,7 +140,7 @@ const validateTelemetryMutationRequest = (
 };
 
 /**
- * Best-effort per-IP rate limit. The same-origin guard is a CSRF control, not
+ * Per-IP rate limit. The same-origin guard is a CSRF control, not
  * authentication, so these endpoints still accept forgeable non-browser
  * traffic; this caps abuse/cost amplification per process. The entrypoint-owned
  * runtime profile selects the only trusted header source. Node additionally
@@ -147,11 +159,17 @@ const enforceTelemetryRateLimit = (
   runtimeProfile: RuntimeProfile
 ) => {
   const { rateLimitPerMinute } = getTelemetryConfig();
-  const ip =
-    createTrustedClientIpAdapter({
-      runtimeProfile,
-      trustedProxyDepth: getHttpConfig().trustedProxyDepth,
-    }).resolve(request) ?? 'unknown';
+  const trustedIp = createTrustedClientIpAdapter({
+    runtimeProfile,
+    trustedProxyDepth: getHttpConfig().trustedProxyDepth,
+  }).resolve(request);
+  if (!trustedIp && isProdRuntimeEnvironment()) {
+    return withTelemetryVary(rateLimiterUnavailable());
+  }
+
+  // Direct localhost requests have no reverse-proxy header. A single local
+  // bucket keeps developer telemetry usable without weakening production.
+  const ip = trustedIp ?? 'local-unattributed';
   const result = defaultRateLimiter.check(
     `telemetry:${scope}:${ip}`,
     rateLimitPerMinute,

@@ -39,7 +39,7 @@ type ResendWebhookHandlerDeps = {
   maxBodyBytes?: number;
   verifier: ResendWebhookVerifier;
   /** Profile-owned, entrypoint-selected client-IP provenance. */
-  trustedClientIpAdapter?: TrustedClientIpAdapter;
+  trustedClientIpAdapter: TrustedClientIpAdapter;
   /** Per-IP webhook hits allowed per minute before returning HTTP 429. */
   rateLimitPerMinute?: number;
   /** Injectable limiter; defaults to the shared process-wide limiter. */
@@ -49,7 +49,7 @@ type ResendWebhookHandlerDeps = {
 const DEFAULT_RESEND_WEBHOOK_MAX_BYTES = 1_000_000;
 
 /**
- * Best-effort per-IP cap on inbound Resend webhook requests, applied BEFORE the
+ * Fail-closed per-IP cap on inbound Resend webhook requests, applied BEFORE the
  * (more expensive) Svix signature verification so unsigned floods are shed
  * cheaply. Fail-closed verification and replay dedupe still run afterwards. This
  * limiter is in-memory/per-process; durable cross-instance limits belong at the
@@ -265,8 +265,23 @@ export const createResendWebhookHandlers = ({
       : DEFAULT_RESEND_WEBHOOK_RATE_LIMIT_PER_MINUTE;
 
   const enforceRateLimit = (request: Request) => {
-    const ip = trustedClientIpAdapter?.resolve(request);
-    if (!ip) return undefined;
+    const ip = trustedClientIpAdapter.resolve(request);
+    if (!ip) {
+      logger?.warn({
+        details: {
+          provider: EMAIL_PROVIDER_RESEND,
+          reason: 'client_ip_unavailable',
+        },
+        event: 'security.webhook_rate_limiter_unavailable',
+      });
+      return Response.json(
+        { ok: false, error: 'rate_limiter_unavailable' },
+        {
+          status: 503,
+          headers: { 'Retry-After': '60' },
+        }
+      );
+    }
 
     const result = rateLimiter.check(
       `webhook:resend:${ip}`,

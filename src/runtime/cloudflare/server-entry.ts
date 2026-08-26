@@ -19,7 +19,7 @@ const { initializeCloudflareSentryApplication, runWithCloudflareSentry } =
 const { application, sentryRequestIsolationReady } =
   await initializeCloudflareSentryApplication(Sentry, async () => {
     const kernel = await import('@/modules/kernel/backend');
-    kernel.validateServerConfig();
+    kernel.validateServerConfig('cloudflare');
     const { createApplicationServerEntry } =
       await import('../create-application-server-entry');
     return createApplicationServerEntry('cloudflare');
