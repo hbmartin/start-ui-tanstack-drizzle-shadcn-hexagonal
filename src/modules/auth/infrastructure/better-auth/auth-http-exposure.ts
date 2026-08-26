@@ -18,13 +18,14 @@ export const withTrustedAuthClientIp = (
   request: Request,
   adapter: TrustedClientIpAdapter
 ) => {
-  const trustedRequest = request.clone();
-  trustedRequest.headers.delete(TRUSTED_AUTH_CLIENT_IP_HEADER);
+  const clonedRequest = request.clone();
+  const headers = new Headers(clonedRequest.headers);
+  headers.delete(TRUSTED_AUTH_CLIENT_IP_HEADER);
   const clientIp = adapter.resolve(request);
   if (clientIp) {
-    trustedRequest.headers.set(TRUSTED_AUTH_CLIENT_IP_HEADER, clientIp);
+    headers.set(TRUSTED_AUTH_CLIENT_IP_HEADER, clientIp);
   }
-  return trustedRequest;
+  return new Request(clonedRequest, { headers });
 };
 
 type JsonRecord = Record<string, unknown>;

@@ -72,7 +72,7 @@ describe('Better Auth HTTP policy', () => {
     }
   });
 
-  it('clones a runtime-compatible request without passing it through the global Request constructor', () => {
+  it('copies guarded runtime request headers only after cloning', async () => {
     const backingRequest = new Request(
       'http://localhost/api/auth/sign-in/social',
       {
@@ -85,7 +85,15 @@ describe('Better Auth HTTP policy', () => {
       }
     );
     const runtimeRequest = {
-      clone: () => backingRequest.clone(),
+      clone: () => {
+        const clonedRequest = backingRequest.clone();
+        Object.defineProperty(clonedRequest.headers, 'delete', {
+          value: () => {
+            throw new TypeError('immutable request headers');
+          },
+        });
+        return clonedRequest;
+      },
       headers: backingRequest.headers,
     } as Request;
 
@@ -98,6 +106,28 @@ describe('Better Auth HTTP policy', () => {
       '203.0.113.10'
     );
     expect(runtimeRequest.headers.get(TRUSTED_AUTH_CLIENT_IP_HEADER)).toBe(
+      '198.51.100.1'
+    );
+    await expect(trusted.json()).resolves.toEqual({ provider: 'github' });
+  });
+
+  it('removes an attacker-supplied trusted client IP when the adapter resolves no identity', () => {
+    const request = new Request('http://localhost/api/auth/sign-in/social', {
+      body: JSON.stringify({ provider: 'github' }),
+      headers: {
+        'content-type': 'application/json',
+        [TRUSTED_AUTH_CLIENT_IP_HEADER]: '198.51.100.1',
+      },
+      method: 'POST',
+    });
+
+    const trusted = withTrustedAuthClientIp(request, {
+      kind: 'trusted-proxy-chain',
+      resolve: () => undefined,
+    });
+
+    expect(trusted.headers.has(TRUSTED_AUTH_CLIENT_IP_HEADER)).toBe(false);
+    expect(request.headers.get(TRUSTED_AUTH_CLIENT_IP_HEADER)).toBe(
       '198.51.100.1'
     );
   });
