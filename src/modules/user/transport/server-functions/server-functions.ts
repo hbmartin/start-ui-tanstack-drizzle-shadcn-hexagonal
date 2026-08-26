@@ -6,6 +6,7 @@ import {
 } from '@/platform/lib/tanstack-start/server-function-handler';
 
 import type { ProtectedContext } from '@/modules/auth/backend';
+import { serverFnValidator } from '@/modules/kernel/server';
 
 import {
   createUserHandlers,
@@ -65,7 +66,7 @@ const runFreshMutation = createServerFunctionInvoker({
 });
 
 export const userGetAll = createServerFn({ method: 'GET' })
-  .validator(zGetAllInput())
+  .validator(serverFnValidator(zGetAllInput()))
   .handler(async ({ data }) =>
     runProtected.withOperation('user.getAll')(
       data,
@@ -74,7 +75,7 @@ export const userGetAll = createServerFn({ method: 'GET' })
   );
 
 export const userGetById = createServerFn({ method: 'GET' })
-  .validator(zGetByIdInput())
+  .validator(serverFnValidator(zGetByIdInput()))
   .handler(async ({ data }) =>
     runProtected.withOperation('user.getById')(
       data,
@@ -83,7 +84,7 @@ export const userGetById = createServerFn({ method: 'GET' })
   );
 
 export const userUpdateById = createServerFn({ method: 'POST' })
-  .validator(zUpdateByIdInput())
+  .validator(serverFnValidator(zUpdateByIdInput()))
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.updateById')(
       data,
@@ -96,7 +97,7 @@ export const userUpdateById = createServerFn({ method: 'POST' })
 // other destructive admin mutations — otherwise a stale/hijacked admin session
 // could provision a durable backdoor account. (CWE-287 / CWE-269.)
 export const userCreate = createServerFn({ method: 'POST' })
-  .validator(zCreateInput())
+  .validator(serverFnValidator(zCreateInput()))
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.create')(
       data,
@@ -105,7 +106,7 @@ export const userCreate = createServerFn({ method: 'POST' })
   );
 
 export const userDeleteById = createServerFn({ method: 'POST' })
-  .validator(zDeleteByIdInput())
+  .validator(serverFnValidator(zDeleteByIdInput()))
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.deleteById')(
       data,
@@ -114,7 +115,7 @@ export const userDeleteById = createServerFn({ method: 'POST' })
   );
 
 export const userGetUserSessions = createServerFn({ method: 'GET' })
-  .validator(zGetUserSessionsInput())
+  .validator(serverFnValidator(zGetUserSessionsInput()))
   .handler(async ({ data }) =>
     runProtected.withOperation('user.getUserSessions')(
       data,
@@ -123,7 +124,7 @@ export const userGetUserSessions = createServerFn({ method: 'GET' })
   );
 
 export const userRevokeUserSessions = createServerFn({ method: 'POST' })
-  .validator(zRevokeUserSessionsInput())
+  .validator(serverFnValidator(zRevokeUserSessionsInput()))
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.revokeUserSessions')(
       data,
@@ -132,7 +133,7 @@ export const userRevokeUserSessions = createServerFn({ method: 'POST' })
   );
 
 export const userRevokeUserSession = createServerFn({ method: 'POST' })
-  .validator(zRevokeUserSessionInput())
+  .validator(serverFnValidator(zRevokeUserSessionInput()))
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.revokeUserSession')(
       data,

@@ -26,7 +26,9 @@ import { BookCover } from '../book-cover';
 import { getBookCoverViewTransitionName } from '../book-cover-transition';
 
 const isNotFoundError = (error: unknown) =>
-  isServerFnError(error) && error.code === 'NOT_FOUND';
+  isServerFnError(error) &&
+  error.target === 'book' &&
+  error.reason === 'not_found';
 
 export const PageBook = (props: { bookId: BookId }) => {
   const { t } = useTranslation(['book']);

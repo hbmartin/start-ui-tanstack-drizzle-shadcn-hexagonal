@@ -11,14 +11,19 @@ describe('TanStack Start instance', () => {
     const browserMutationGuard = options.requestMiddleware[3] as ExplicitAny;
     const serverFnBodyLimit = options.requestMiddleware[4] as ExplicitAny;
     const csrf = options.requestMiddleware[5] as ExplicitAny;
+    const serverFnErrorBoundary = options.functionMiddleware[0] as ExplicitAny;
 
-    expect(options.functionMiddleware).toEqual([]);
+    expect(options.functionMiddleware).toHaveLength(1);
+    expect(options.serializationAdapters).toEqual([
+      expect.objectContaining({ key: 'start-ui/server-error-v1' }),
+    ]);
     expect(telemetry.type).toBe('request');
     expect(securityHeaders.type).toBe('request');
     expect(authContext.type).toBe('request');
     expect(browserMutationGuard.type).toBe('request');
     expect(serverFnBodyLimit.type).toBe('request');
     expect(csrf.type).toBe('csrf');
+    expect(serverFnErrorBoundary.type).toBe('middleware');
     expect(csrf.options.filter({ handlerType: 'serverFn' })).toBe(true);
     expect(csrf.options.filter({ handlerType: 'router' })).toBe(false);
     expect(csrf.options.secFetchSite).toBe('same-origin');

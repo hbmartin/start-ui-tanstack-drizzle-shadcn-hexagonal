@@ -7,6 +7,7 @@ import {
 
 import type { ProtectedContext } from '@/modules/auth/backend';
 import { assertCapabilityAvailable } from '@/modules/kernel/backend';
+import { serverFnValidator } from '@/modules/kernel/server';
 
 import {
   type BookHandlers,
@@ -63,7 +64,7 @@ const runMutation = createServerFunctionInvoker({
 });
 
 export const bookGetAll = createServerFn({ method: 'GET' })
-  .validator(zGetAllInput())
+  .validator(serverFnValidator(zGetAllInput()))
   .handler(async ({ data }) =>
     runProtected.withOperation('book.getAll')(
       data,
@@ -72,7 +73,7 @@ export const bookGetAll = createServerFn({ method: 'GET' })
   );
 
 export const bookGetById = createServerFn({ method: 'GET' })
-  .validator(zGetByIdInput())
+  .validator(serverFnValidator(zGetByIdInput()))
   .handler(async ({ data }) =>
     runProtected.withOperation('book.getById')(
       data,
@@ -81,7 +82,7 @@ export const bookGetById = createServerFn({ method: 'GET' })
   );
 
 export const bookCreate = createServerFn({ method: 'POST' })
-  .validator(zCreateInput())
+  .validator(serverFnValidator(zCreateInput()))
   .handler(async ({ data }) =>
     runMutation.withOperation('book.create')(data, ({ handlers }, ctx, input) =>
       handlers.create(ctx, input)
@@ -89,7 +90,7 @@ export const bookCreate = createServerFn({ method: 'POST' })
   );
 
 export const bookUpdateById = createServerFn({ method: 'POST' })
-  .validator(zUpdateByIdInput())
+  .validator(serverFnValidator(zUpdateByIdInput()))
   .handler(async ({ data }) =>
     runMutation.withOperation('book.updateById')(
       data,
@@ -98,7 +99,7 @@ export const bookUpdateById = createServerFn({ method: 'POST' })
   );
 
 export const bookDeleteById = createServerFn({ method: 'POST' })
-  .validator(zDeleteByIdInput())
+  .validator(serverFnValidator(zDeleteByIdInput()))
   .handler(async ({ data }) =>
     runMutation.withOperation('book.deleteById')(
       data,

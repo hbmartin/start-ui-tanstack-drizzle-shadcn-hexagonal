@@ -7,6 +7,7 @@ import {
 
 import type { ProtectedContext } from '@/modules/auth/backend';
 import { assertCapabilityAvailable } from '@/modules/kernel/backend';
+import { serverFnValidator } from '@/modules/kernel/server';
 
 import {
   createGenreHandlers,
@@ -49,7 +50,7 @@ const runProtected = createServerFunctionInvoker({
 });
 
 export const genreGetAll = createServerFn({ method: 'GET' })
-  .validator(zGetAllInput())
+  .validator(serverFnValidator(zGetAllInput()))
   .handler(async ({ data }) =>
     runProtected.withOperation('genre.getAll')(
       data,

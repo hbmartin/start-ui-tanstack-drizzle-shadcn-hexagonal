@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createShutdownGuard,
   createVerificationEnvironment,
+  parseServerFunctionId,
   parseGeneratedCapabilityPreset,
   terminateChild,
   verifyNodeHtmlResponse,
@@ -86,6 +87,16 @@ describe('verifyNodeHtmlResponse', () => {
 });
 
 describe('Node verification configuration', () => {
+  it('reads the requested server function ID from a built resolver', () => {
+    const functionId = 'a'.repeat(64);
+    const resolver = `${JSON.stringify(functionId)}: { functionName: "bookGetById_createServerFn_handler" }`;
+
+    expect(
+      parseServerFunctionId(resolver, 'bookGetById_createServerFn_handler')
+    ).toBe(functionId);
+    expect(parseServerFunctionId(resolver, 'missing_handler')).toBeUndefined();
+  });
+
   it.each(['core', 'demo'])('reads the generated %s preset', (preset) => {
     expect(
       parseGeneratedCapabilityPreset(

@@ -47,9 +47,8 @@ export const PageUserNew = () => {
     onError: (error, _vars, _ctx) => {
       if (
         isServerFnError(error) &&
-        error.code === 'CONFLICT' &&
-        Array.isArray(error.data?.target) &&
-        error.data.target.includes('email')
+        error.reason === 'already_exists' &&
+        error.target === 'user.email'
       ) {
         form.setFieldMeta('email', (prev) => ({
           ...prev,

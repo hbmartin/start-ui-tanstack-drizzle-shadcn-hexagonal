@@ -252,6 +252,7 @@
     "oxlint": "1.71.0",
     "oxlint-tsgolint": "7.0.2001",
     "playwright": "1.61.1",
+    "seroval": "1.5.4",
     "srvx": "0.11.17",
     "ts-plugin-sort-import-suggestions": "1.0.4",
     "tsx": "^4.22.4",

@@ -90,15 +90,16 @@ type BookHandlerDeps = {
 const bookDuplicateConfig = {
   book_duplicate: {
     code: 'CONFLICT',
-    message: 'Unique constraint violation',
-    data: { target: ['title', 'author'] },
+    reason: 'already_exists',
+    target: 'book.title',
   },
 } as const;
 
 const bookCoverUnownedConfig = {
   book_cover_unowned: {
     code: 'BAD_REQUEST',
-    message: 'Cover upload is no longer valid; please re-upload the cover.',
+    reason: 'upload_invalid',
+    target: 'book.cover',
   },
 } as const;
 
@@ -110,7 +111,11 @@ const bookListConfig = {
 const bookGetConfig = {
   book_forbidden: 'FORBIDDEN',
   book_found: (outcome) => outcome.book,
-  book_not_found: 'NOT_FOUND',
+  book_not_found: {
+    code: 'NOT_FOUND',
+    reason: 'not_found',
+    target: 'book',
+  },
 } as const satisfies OutcomeHandlerConfig<BookGetOutcome, Book>;
 
 const bookCreateConfig = {
@@ -122,7 +127,11 @@ const bookCreateConfig = {
 
 const bookUpdateConfig = {
   book_forbidden: 'FORBIDDEN',
-  book_not_found: 'NOT_FOUND',
+  book_not_found: {
+    code: 'NOT_FOUND',
+    reason: 'not_found',
+    target: 'book',
+  },
   book_updated: (outcome) => outcome.book,
   ...bookDuplicateConfig,
   ...bookCoverUnownedConfig,
@@ -131,7 +140,11 @@ const bookUpdateConfig = {
 const bookDeleteConfig = {
   book_deleted: () => undefined,
   book_forbidden: 'FORBIDDEN',
-  book_not_found: 'NOT_FOUND',
+  book_not_found: {
+    code: 'NOT_FOUND',
+    reason: 'not_found',
+    target: 'book',
+  },
 } as const satisfies OutcomeHandlerConfig<BookDeleteOutcome, void>;
 
 export const createBookHandlers = ({ getUseCases }: BookHandlerDeps) => {

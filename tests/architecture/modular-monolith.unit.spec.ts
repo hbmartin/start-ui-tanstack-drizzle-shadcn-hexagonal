@@ -714,13 +714,14 @@ describe('strict modular monolith layout', () => {
       .flatMap((file) => {
         const source = fs.readFileSync(file, 'utf8');
         const relative = path.relative(root, file);
-        const allowedServerFnSupportReexport =
+        const allowedServerFnSupportReexportPattern =
           relative === path.join('src', 'modules', 'kernel', 'server.ts')
-            ? /^export\s+\{[\s\S]*?\}\s+from\s+['"]\.\/transport\/tanstack\/server-fn-error['"];?\n?/m
+            ? /^export\s+\{[\s\S]*?\}\s+from\s+['"]\.\/transport\/tanstack\/server-fn-(?:error|validator)['"];?\n?/gm
             : undefined;
-        const sourceWithoutAllowedSupport = allowedServerFnSupportReexport
-          ? source.replace(allowedServerFnSupportReexport, '')
-          : source;
+        const sourceWithoutAllowedSupport =
+          allowedServerFnSupportReexportPattern
+            ? source.replace(allowedServerFnSupportReexportPattern, '')
+            : source;
         const reexportsServerFunctions =
           /^export\s+\*\s+from\s+['"]\.\/transport\/server-functions\/server-functions['"];?$/.test(
             sourceWithoutAllowedSupport.trim()

@@ -36,6 +36,7 @@ vi.mock('@tanstack/react-start/server', () => ({
   getRequestHeaders: () => new Headers(),
   setCookie: vi.fn(),
   setResponseHeader: vi.fn(),
+  setResponseStatus: vi.fn(),
 }));
 
 vi.mock('@/platform/env/client', () => {

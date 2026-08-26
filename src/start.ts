@@ -7,7 +7,8 @@ import {
 import { observeHttpRequest } from '@/composition/telemetry/request-observability';
 import type { AuthSession } from '@/modules/auth';
 import type { Logger } from '@/modules/kernel';
-import { isProdRuntimeEnvironment } from '@/modules/kernel/backend';
+import { serverFnErrorSerializationAdapter } from '@/modules/kernel/client';
+import { serverFnErrorBoundaryMiddleware } from '@/modules/kernel/middleware';
 import { envClient } from '@/platform/env/client';
 import {
   appendBrowserMutationVaryHeader,
@@ -17,6 +18,7 @@ import {
 import { createCspNonce } from '@/platform/http/csp-nonce-server';
 import { violatesServerFnBodyLimit } from '@/platform/http/request-body-limit';
 import { applySecurityHeaders } from '@/platform/http/security-headers';
+import { isProdRuntimeEnvironment } from '@/platform/env/runtime';
 import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
 import {
   createNoOpTelemetry,
@@ -253,6 +255,7 @@ const csrfMiddleware = createCsrfMiddleware({
 });
 
 export const startInstance = createStart(() => ({
+  serializationAdapters: [serverFnErrorSerializationAdapter],
   requestMiddleware: [
     telemetryRequestMiddleware,
     securityHeadersMiddleware,
@@ -261,7 +264,7 @@ export const startInstance = createStart(() => ({
     serverFnBodyLimitMiddleware,
     csrfMiddleware,
   ],
-  functionMiddleware: [],
+  functionMiddleware: [serverFnErrorBoundaryMiddleware],
 }));
 
 export {

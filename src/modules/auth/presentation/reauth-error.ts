@@ -9,6 +9,4 @@ import { AUTH_REAUTH_REQUIRED } from '../domain/session-policy';
  * re-login and retry instead of showing a generic error.
  */
 export const isReauthRequiredError = (error: unknown): boolean =>
-  isServerFnError(error) &&
-  (error.data as { reason?: unknown } | undefined)?.reason ===
-    AUTH_REAUTH_REQUIRED;
+  isServerFnError(error) && error.reason === AUTH_REAUTH_REQUIRED;

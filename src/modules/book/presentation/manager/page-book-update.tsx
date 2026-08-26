@@ -59,19 +59,16 @@ export const PageBookUpdate = (props: { bookId: BookId }) => {
       navigateBack({ ignoreBlocker: true });
     },
     onError: (error) => {
-      if (isServerFnError(error) && error.code === 'CONFLICT') {
-        const target = error.data?.target;
-        const isTitleConflict =
-          target === 'title' ||
-          (Array.isArray(target) && target.includes('title'));
-
-        if (isTitleConflict) {
-          form.setFieldMeta('title', (prev) => ({
-            ...prev,
-            errorMap: { onSubmit: t('book:manager.form.titleAlreadyExist') },
-          }));
-          return;
-        }
+      if (
+        isServerFnError(error) &&
+        error.reason === 'already_exists' &&
+        error.target === 'book.title'
+      ) {
+        form.setFieldMeta('title', (prev) => ({
+          ...prev,
+          errorMap: { onSubmit: t('book:manager.form.titleAlreadyExist') },
+        }));
+        return;
       }
 
       toast.error(t('book:manager.update.updateError'));

@@ -14,7 +14,7 @@
     "src/runtime/*/server-entry.ts",
     "src/routes/**/*.{ts,tsx}",
     "src/app/**/{index,presentation}.{ts,tsx}",
-    "src/modules/*/{index,server,backend,client,presentation,testing,manifest,persistence}.{ts,tsx}",
+    "src/modules/*/{index,server,backend,client,middleware,presentation,testing,manifest,persistence}.{ts,tsx}",
     "src/platform/components/**/*.{ts,tsx}",
     "src/platform/runtime-config/{client,presentation,testing}.ts",
     "tests/e2e/visual/screenshot.css",
@@ -37,7 +37,7 @@
 
   "ignoreExports": [
     {
-      "file": "src/modules/*/{index,server,backend,client,presentation,testing,manifest,persistence}.{ts,tsx}",
+      "file": "src/modules/*/{index,server,backend,client,middleware,presentation,testing,manifest,persistence}.{ts,tsx}",
       "exports": ["*"],
     },
     { "file": "src/platform/**/index.{ts,tsx}", "exports": ["*"] },
@@ -339,6 +339,7 @@
           "src/modules/kernel/server.ts",
           "src/modules/kernel/backend.ts",
           "src/modules/kernel/client.ts",
+          "src/modules/kernel/middleware.ts",
         ],
       },
       {

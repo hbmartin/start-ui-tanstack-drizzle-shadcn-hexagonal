@@ -78,16 +78,17 @@ type UserHandlerDeps = {
 const userDuplicateConfig = {
   user_duplicate: {
     code: 'CONFLICT',
-    message: 'Unique constraint violation',
-    data: { target: ['email'] },
+    reason: 'already_exists',
+    target: 'user.email',
   },
 } as const;
 
-const userSelfConfig = (options?: { selfMessage?: string }) =>
+const userSelfConfig = () =>
   ({
     user_self: {
       code: 'BAD_REQUEST',
-      message: options?.selfMessage ?? 'You cannot target yourself',
+      reason: 'self_action_forbidden',
+      target: 'user',
     },
   }) as const;
 
@@ -99,7 +100,11 @@ const userListConfig = {
 const userGetConfig = {
   user_forbidden: 'FORBIDDEN',
   user_found: (outcome) => outcome.user,
-  user_not_found: 'NOT_FOUND',
+  user_not_found: {
+    code: 'NOT_FOUND',
+    reason: 'not_found',
+    target: 'user',
+  },
 } as const satisfies OutcomeHandlerConfig<UserGetOutcome, User>;
 
 const userCreateConfig = {
@@ -110,17 +115,25 @@ const userCreateConfig = {
 
 const userUpdateConfig = {
   user_forbidden: 'FORBIDDEN',
-  user_not_found: 'NOT_FOUND',
+  user_not_found: {
+    code: 'NOT_FOUND',
+    reason: 'not_found',
+    target: 'user',
+  },
   user_updated: (outcome) => outcome.user,
   ...userDuplicateConfig,
 } as const satisfies OutcomeHandlerConfig<UserUpdateOutcome, User>;
 
-const userDeleteConfig = (options?: { selfMessage?: string }) =>
+const userDeleteConfig = () =>
   ({
     user_deleted: () => undefined,
     user_forbidden: 'FORBIDDEN',
-    user_not_found: 'NOT_FOUND',
-    ...userSelfConfig(options),
+    user_not_found: {
+      code: 'NOT_FOUND',
+      reason: 'not_found',
+      target: 'user',
+    },
+    ...userSelfConfig(),
   }) as const satisfies OutcomeHandlerConfig<UserDeleteOutcome, void>;
 
 const userSessionsListConfig = {
@@ -131,20 +144,24 @@ const userSessionsListConfig = {
   UserSessionListPage
 >;
 
-const userRevokeSessionsConfig = (options?: { selfMessage?: string }) =>
+const userRevokeSessionsConfig = () =>
   ({
     user_forbidden: 'FORBIDDEN',
     user_sessions_revoked: () => undefined,
     user_sessions_unchanged: () => undefined,
-    ...userSelfConfig(options),
+    ...userSelfConfig(),
   }) as const satisfies OutcomeHandlerConfig<UserRevokeSessionsOutcome, void>;
 
-const userRevokeSessionConfig = (options?: { selfMessage?: string }) =>
+const userRevokeSessionConfig = () =>
   ({
     user_forbidden: 'FORBIDDEN',
-    user_session_not_found: 'NOT_FOUND',
+    user_session_not_found: {
+      code: 'NOT_FOUND',
+      reason: 'not_found',
+      target: 'user.session',
+    },
     user_session_revoked: () => undefined,
-    ...userSelfConfig(options),
+    ...userSelfConfig(),
   }) as const satisfies OutcomeHandlerConfig<UserRevokeSessionOutcome, void>;
 
 export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
@@ -222,7 +239,7 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
         currentUserId: ctx.scope.userId,
         id: data.id,
       }),
-      userDeleteConfig({ selfMessage: 'You cannot delete yourself' })
+      userDeleteConfig()
     );
   };
 
@@ -251,9 +268,7 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
         currentUserId: ctx.scope.userId,
         id: data.id,
       }),
-      userRevokeSessionsConfig({
-        selfMessage: 'You cannot revoke your own sessions',
-      })
+      userRevokeSessionsConfig()
     );
   };
 
@@ -269,9 +284,7 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
         id: data.id,
         sessionId: data.sessionId,
       }),
-      userRevokeSessionConfig({
-        selfMessage: 'You cannot revoke your current session',
-      })
+      userRevokeSessionConfig()
     );
   };
 

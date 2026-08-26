@@ -7,5 +7,10 @@ export const assertCapabilityAvailable = (
   capabilityId: string,
   isEnabled: CapabilityLookup = isCapabilityEnabled
 ) => {
-  if (!isEnabled(capabilityId)) throw new ServerFnError('NOT_FOUND');
+  if (!isEnabled(capabilityId)) {
+    throw new ServerFnError('NOT_FOUND', {
+      reason: 'capability_disabled',
+      target: 'capability',
+    });
+  }
 };

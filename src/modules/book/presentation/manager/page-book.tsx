@@ -30,7 +30,9 @@ import type { BookId } from '@/modules/kernel/domain/ids';
 import { BookCover } from '../book-cover';
 
 const isNotFoundError = (error: unknown) =>
-  isServerFnError(error) && error.code === 'NOT_FOUND';
+  isServerFnError(error) &&
+  error.target === 'book' &&
+  error.reason === 'not_found';
 
 export const PageBook = (props: { bookId: BookId }) => {
   const { t } = useTranslation(['book']);

@@ -6,6 +6,7 @@ import {
 } from '@/platform/lib/tanstack-start/server-function-handler';
 
 import type { ProtectedContext } from '@/modules/auth/backend';
+import { serverFnValidator } from '@/modules/kernel/server';
 
 import {
   type ProfileHandlers,
@@ -48,7 +49,7 @@ const runMutation = createServerFunctionInvoker({
 });
 
 export const profileSubmitOnboarding = createServerFn({ method: 'POST' })
-  .validator(zSubmitOnboardingInput())
+  .validator(serverFnValidator(zSubmitOnboardingInput()))
   .handler(async ({ data }) =>
     runMutation.withOperation('profile.submitOnboarding')(
       data,
@@ -57,7 +58,7 @@ export const profileSubmitOnboarding = createServerFn({ method: 'POST' })
   );
 
 export const profileUpdateInfo = createServerFn({ method: 'POST' })
-  .validator(zUpdateInfoInput())
+  .validator(serverFnValidator(zUpdateInfoInput()))
   .handler(async ({ data }) =>
     runMutation.withOperation('profile.updateInfo')(
       data,

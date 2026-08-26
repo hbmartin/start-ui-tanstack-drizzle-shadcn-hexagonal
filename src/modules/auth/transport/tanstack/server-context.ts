@@ -33,11 +33,12 @@ import {
 } from '@/modules/kernel';
 import { getBetterAuthConfig } from '@/modules/kernel/backend';
 import {
-  isServerFnError,
-  SERVER_FN_ERROR_CODES,
+  normalizeServerFnError,
+  serverFnCauseChainForLog,
+} from '@/modules/kernel/middleware';
+import {
+  isOpaquePublicCorrelationId,
   ServerFnError,
-  type ServerFnErrorCode,
-  type ServerFnErrorData,
 } from '@/modules/kernel/server';
 import { timingStore } from '@/modules/kernel/transport/tanstack/timing-store';
 import { cachePrivateNoStore } from '@/platform/http/cache-control';
@@ -140,27 +141,37 @@ const finalize = (
   appendServerTiming(allTimings);
 };
 
-const handleError = (error: unknown, procedureLogger: ProcedureLogger) => {
-  const mappedError = mapTransportError(error);
-  const shouldLogOriginalError =
-    mappedError instanceof ServerFnError &&
-    mappedError.message === 'Unhandled error' &&
-    mappedError !== error;
-
+const handleError = (
+  error: unknown,
+  procedureLogger: ProcedureLogger,
+  correlationId: CorrelationId
+) => {
+  const mappedError = normalizeServerFnError(error, correlationId);
+  const shouldCaptureUnexpected = mappedError.status >= 500;
   const captureState = getStartRequestExceptionCaptureState();
-  if (
-    shouldLogOriginalError &&
-    (!captureState || claimRequestException(captureState, error))
-  ) {
+  const shouldOwnExceptionCapture =
+    shouldCaptureUnexpected &&
+    (!captureState || claimRequestException(captureState, error));
+  const internalLog = {
+    correlationId,
+    details: {
+      causeChain: serverFnCauseChainForLog(error),
+      mappedCode: mappedError.code,
+      mappedReason: mappedError.reason,
+      mappedStatus: mappedError.status,
+      mappedTarget: mappedError.target,
+    },
+    direction: 'inbound' as const,
+    error: mappedError.reason,
+    event: 'server_fn.error.internal',
+    ...(shouldOwnExceptionCapture ? { exception: error } : {}),
+  };
+  if (shouldCaptureUnexpected) {
     procedureLogger.error({
-      event: 'server_fn.error.unhandled',
-      direction: 'inbound',
-      error:
-        error instanceof Error
-          ? error.message
-          : 'Unhandled error before mapping',
-      exception: error,
+      ...internalLog,
     });
+  } else {
+    procedureLogger.warn(internalLog);
   }
 
   const logLevel: LogLevel = (() => {
@@ -181,7 +192,9 @@ const handleError = (error: unknown, procedureLogger: ProcedureLogger) => {
       direction: 'inbound',
       details: {
         code: mappedError.code,
+        reason: mappedError.reason,
         status: mappedError.status,
+        target: mappedError.target,
       },
     });
   }
@@ -193,52 +206,16 @@ const handleError = (error: unknown, procedureLogger: ProcedureLogger) => {
       mappedError instanceof ServerFnError
         ? {
             code: mappedError.code,
-            data: mappedError.data,
+            correlationId: mappedError.correlationId,
+            reason: mappedError.reason,
             status: mappedError.status,
+            target: mappedError.target,
           }
         : { value: mappedError },
   });
 
-  return mappedError;
+  return mappedError.asReported();
 };
-
-const serverFnErrorCodes = new Set<ServerFnErrorCode>(SERVER_FN_ERROR_CODES);
-
-const isServerFnErrorCode = (code: unknown): code is ServerFnErrorCode =>
-  typeof code === 'string' && serverFnErrorCodes.has(code as ServerFnErrorCode);
-
-const getServerFnErrorCode = (
-  error: unknown
-): ServerFnErrorCode | undefined => {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code = (error as { code?: unknown }).code;
-  return isServerFnErrorCode(code) ? code : undefined;
-};
-
-const getServerFnErrorData = (error: unknown) => {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const data = (error as { data?: unknown }).data;
-  return typeof data === 'object' && data !== null
-    ? (data as ServerFnErrorData)
-    : undefined;
-};
-
-function mapTransportError(error: unknown): unknown {
-  if (error instanceof ServerFnError) return error;
-  const code =
-    isServerFnError(error) && isServerFnErrorCode(error.code)
-      ? error.code
-      : getServerFnErrorCode(error);
-  if (code) {
-    return new ServerFnError(code, {
-      data: getServerFnErrorData(error),
-      message: error instanceof Error ? error.message : code,
-    });
-  }
-  return new ServerFnError('INTERNAL_SERVER_ERROR', {
-    message: 'Unhandled error',
-  });
-}
 
 const getStartRequestContext = (): AppStartRequestContextLike | undefined => {
   try {
@@ -260,7 +237,7 @@ const getStartRequestExceptionCaptureState = ():
 
 const getStartRequestId = () => {
   const requestId = getStartRequestContext()?.requestId;
-  if (typeof requestId !== 'string') return undefined;
+  if (!isOpaquePublicCorrelationId(requestId)) return undefined;
 
   const parsed = toRequestId(requestId);
   return parsed.isOk() ? parsed.get() : undefined;
@@ -379,7 +356,7 @@ export const createServerContextTools = ({
         };
         return await fn(ctx);
       } catch (error) {
-        throw handleError(error, procedureLogger);
+        throw handleError(error, procedureLogger, correlationId);
       } finally {
         finalize(procedureLogger, timings, start);
       }
@@ -433,7 +410,8 @@ export const createServerContextTools = ({
           direction: 'inbound',
         });
         throw new ServerFnError('FORBIDDEN', {
-          data: { reason: AUTH_REAUTH_REQUIRED },
+          reason: AUTH_REAUTH_REQUIRED,
+          target: 'authentication',
         });
       }
       return fn(ctx);

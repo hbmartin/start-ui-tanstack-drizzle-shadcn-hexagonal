@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { readFile, readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import pg from 'pg';
 import { chromium } from 'playwright';
+import { createPlugin, fromCrossJSON, toJSONAsync } from 'seroval';
 
 import {
   createVerificationEnvironment,
@@ -23,6 +25,8 @@ const responseTimeoutMs = 8_000;
 const startupTimeoutMs = 15_000;
 const shutdownTimeoutMs = 5_000;
 const cspNoncePlaceholder = '__START_UI_CSP_NONCE__';
+const publicErrorCorrelationIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const activeChildren = new Set();
 let activeCleanup;
 let activeDiagnostics = [];
@@ -34,6 +38,37 @@ const fail = (message) => {
 const assert = (condition, message) => {
   if (!condition) fail(message);
 };
+
+const publicServerErrorPlugin = createPlugin({
+  tag: '$TSR/t/start-ui/server-error-v1',
+  test: () => false,
+  parse: {
+    sync(value, context) {
+      return { v: context.parse(value) };
+    },
+  },
+  serialize: undefined,
+  deserialize(node, context) {
+    return context.deserialize(node.v);
+  },
+});
+
+export const parseServerFunctionId = (manifestSource, functionName) => {
+  const escapedFunctionName = functionName.replace(
+    /[.*+?^${}()|[\]\\]/gu,
+    '\\$&'
+  );
+  const match = manifestSource.match(
+    new RegExp(
+      `"([a-f0-9]{64})"\\s*:\\s*\\{\\s*functionName:\\s*"${escapedFunctionName}"`,
+      'u'
+    )
+  );
+  return match?.[1];
+};
+
+export const decodeServerFunctionResponse = (payload) =>
+  fromCrossJSON(payload, { plugins: [publicServerErrorPlugin] });
 
 export const createShutdownGuard = () => {
   let shutdownRequested = false;
@@ -667,6 +702,95 @@ const fetchVerifiedLogin = async (appPort, requestNumber) => {
   }
 };
 
+const readBuiltServerFunctionId = async (functionName) => {
+  const serverOutput = path.join(root, '.output/node/server');
+  const resolverFile = (await readdir(serverOutput)).find((file) =>
+    file.startsWith('__23tanstack-start-server-fn-resolver-')
+  );
+  assert(resolverFile, 'the Node server-function resolver was not built');
+  const source = await readFile(path.join(serverOutput, resolverFile), 'utf8');
+  const functionId = parseServerFunctionId(source, functionName);
+  assert(functionId, `the Node build omitted ${functionName}`);
+  return functionId;
+};
+
+const verifyBuiltNodeServerFunctionErrorContract = async (appPort) => {
+  const functionId = await readBuiltServerFunctionId(
+    'bookGetById_createServerFn_handler'
+  );
+  const hostileInput = 'hostile-wire-secret';
+  const serializedPayload = JSON.stringify(
+    await Promise.resolve(
+      toJSONAsync({
+        data: {
+          id: '   ',
+          hostile: hostileInput,
+          provider: { apiKey: 'provider-wire-secret' },
+        },
+      })
+    )
+  );
+  const url = new URL(`http://localhost:${appPort}/_serverFn/${functionId}`);
+  url.searchParams.set('payload', serializedPayload);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), responseTimeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        Referer: `http://localhost:${appPort}/login`,
+        'Sec-Fetch-Site': 'same-origin',
+        'x-tsr-serverFn': 'true',
+      },
+      signal: controller.signal,
+    });
+    const rawBody = await response.text();
+    assert(
+      response.status === 400,
+      `invalid server-function input was HTTP ${response.status}, expected HTTP 400`
+    );
+    assert(
+      response.headers.get('x-tss-serialized') === 'true',
+      'invalid server-function input bypassed TanStack serialization'
+    );
+    assert(
+      !/hostile-wire-secret|provider-wire-secret|apiKey|"message"|"stack"|"cause"/iu.test(
+        rawBody
+      ),
+      'the built server-function response exposed an open-ended error field'
+    );
+    const decoded = decodeServerFunctionResponse(JSON.parse(rawBody));
+    const error = decoded?.error;
+    assert(
+      error && typeof error === 'object',
+      'the built server-function response omitted its public error'
+    );
+    assert(
+      JSON.stringify(Object.keys(error).toSorted()) ===
+        JSON.stringify(['correlationId', 'reason', 'target', 'version']),
+      'the built server-function response changed the four-field DTO'
+    );
+    assert(
+      error.version === 1,
+      'the built server-function DTO version changed'
+    );
+    assert(
+      error.target === 'request' && error.reason === 'invalid_input',
+      'the built server-function DTO changed validation classification'
+    );
+    assert(
+      publicErrorCorrelationIdPattern.test(error.correlationId),
+      'the built server-function DTO did not contain an opaque correlation ID'
+    );
+    console.log(
+      'Verified built Node server-function validation: HTTP 400 and exact closed error DTO.'
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
 const verifyNodeLoginResponses = async ({
   appPort,
   application,
@@ -713,11 +837,16 @@ const verifyStrictCspBrowserHydration = async (appPort) => {
   try {
     const page = await browser.newPage();
     page.on('console', (message) => {
-      if (isCspConsoleViolation(message.text())) {
+      if (message.type() === 'error' || isCspConsoleViolation(message.text())) {
         browserFailures.push(message.text());
       }
     });
     page.on('pageerror', (error) => browserFailures.push(error.message));
+    page.on('requestfailed', (request) => {
+      browserFailures.push(
+        `${request.method()} ${new URL(request.url()).pathname}: ${request.failure()?.errorText ?? 'request failed'}`
+      );
+    });
 
     const response = await page.goto(`http://localhost:${appPort}/login`, {
       timeout: responseTimeoutMs,
@@ -728,9 +857,14 @@ const verifyStrictCspBrowserHydration = async (appPort) => {
     const csp = readResponseCspNonces(
       new Headers({ 'content-security-policy': policy })
     );
-    await page
-      .locator('[data-testid="auth-login-form"][data-hydrated="true"]')
-      .waitFor({ timeout: responseTimeoutMs });
+    try {
+      await page
+        .locator('[data-testid="auth-login-form"][data-hydrated="true"]')
+        .waitFor({ timeout: responseTimeoutMs });
+    } catch {
+      const details = browserFailures.slice(0, 5).join(' | ');
+      fail(`strict-CSP login did not hydrate${details ? `: ${details}` : ''}`);
+    }
     await page.locator('input[type="email"]').fill('csp@example.test');
 
     // React hoists styles that declare href + precedence and exposes the
@@ -829,6 +963,7 @@ export const verifyNodeRuntime = async () => {
       env,
     });
     await verifyNodeLoginResponses({ appPort, application, pglite, preset });
+    await verifyBuiltNodeServerFunctionErrorContract(appPort);
     await verifyStrictCspBrowserHydration(appPort);
     assertChildRunning(application, 'Node application');
     assertChildRunning(pglite, 'PGlite');

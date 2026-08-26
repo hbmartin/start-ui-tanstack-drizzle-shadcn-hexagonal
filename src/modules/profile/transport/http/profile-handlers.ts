@@ -14,8 +14,16 @@ type ProfileHandlerDeps = {
 };
 
 const profileReasonConfig = {
-  profile_forbidden: { code: 'FORBIDDEN', message: 'Forbidden' },
-  profile_not_found: { code: 'NOT_FOUND', message: 'Profile not found' },
+  profile_forbidden: {
+    code: 'FORBIDDEN',
+    reason: 'permission_denied',
+    target: 'profile',
+  },
+  profile_not_found: {
+    code: 'NOT_FOUND',
+    reason: 'not_found',
+    target: 'profile',
+  },
   profile_updated: () => undefined,
 } as const;
 
