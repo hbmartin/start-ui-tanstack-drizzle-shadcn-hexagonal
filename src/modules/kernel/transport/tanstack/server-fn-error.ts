@@ -136,12 +136,9 @@ const reasonSet = new Set<string>(PUBLIC_SERVER_ERROR_REASONS);
 const publicDtoKeys = ['correlationId', 'reason', 'target', 'version'] as const;
 const opaqueCorrelationIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const DESERIALIZATION_FAILURE_CAUSE = new AppError({
-  category: 'bad_request',
-  code: 'SERIALIZED_PAYLOAD_INVALID',
-  message: 'Malformed serialized server-function error payload',
-  status: 400,
-});
+const DESERIALIZATION_FAILURE_CAUSE_BRAND = Symbol(
+  'start-ui.deserialization-failure-cause'
+);
 const MAX_CAUSE_CHAIN_DEPTH = 16;
 const DEFAULT_RETRY_AFTER_SECONDS = 60;
 const MIN_RETRY_AFTER_SECONDS = 1;
@@ -149,12 +146,39 @@ const MAX_RETRY_AFTER_SECONDS = 60;
 
 // Clone and mapper paths must preserve their original cause so this
 // direction-neutral provenance survives without widening the public DTO.
+const createDeserializationFailureCause = () => {
+  const cause = new AppError({
+    category: 'bad_request',
+    code: 'SERIALIZED_PAYLOAD_INVALID',
+    message: 'Malformed serialized server-function error payload',
+    status: 400,
+  });
+  Object.defineProperty(cause, DESERIALIZATION_FAILURE_CAUSE_BRAND, {
+    value: true,
+  });
+  return cause;
+};
+
+const isDeserializationFailureCause = (value: unknown) => {
+  if (typeof value !== 'object' || value === null) return false;
+  try {
+    return (
+      Object.getOwnPropertyDescriptor(
+        value,
+        DESERIALIZATION_FAILURE_CAUSE_BRAND
+      )?.value === true
+    );
+  } catch {
+    return false;
+  }
+};
+
 const hasDeserializationFailureCause = (value: unknown) => {
   let current = value;
   const seen = new Set<object>();
 
   for (let depth = 0; depth < MAX_CAUSE_CHAIN_DEPTH; depth += 1) {
-    if (current === DESERIALIZATION_FAILURE_CAUSE) return true;
+    if (isDeserializationFailureCause(current)) return true;
     if (!(current instanceof Error) || seen.has(current)) return false;
 
     seen.add(current);
@@ -334,7 +358,7 @@ export const serverFnErrorSerializationAdapter = createSerializationAdapter<
       // expose direction, so the internal marker must not be treated as proof
       // of tampering; it can also represent version skew on a client.
       return new ServerFnError('BAD_REQUEST', {
-        cause: DESERIALIZATION_FAILURE_CAUSE,
+        cause: createDeserializationFailureCause(),
         reason: 'serialized_payload_invalid',
         target: 'system',
       });

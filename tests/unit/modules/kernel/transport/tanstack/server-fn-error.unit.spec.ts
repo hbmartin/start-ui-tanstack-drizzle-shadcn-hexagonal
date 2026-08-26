@@ -229,4 +229,27 @@ describe('public server-function error contract', () => {
       expect(reported.reported).toBe(true);
     }
   );
+
+  it('uses fresh branded causes and never trusts a peer reason as provenance', () => {
+    const malformed = { reason: 'not_closed' } as never;
+    const first = serverFnErrorSerializationAdapter.fromSerializable(malformed);
+    const second =
+      serverFnErrorSerializationAdapter.fromSerializable(malformed);
+    const peerClassified = serverFnErrorSerializationAdapter.fromSerializable({
+      correlationId: CORRELATION_ID,
+      reason: 'serialized_payload_invalid',
+      target: 'system',
+      version: 1,
+    });
+
+    expect(first.cause).not.toBe(second.cause);
+    expect(first.cause).toMatchObject({
+      code: 'SERIALIZED_PAYLOAD_INVALID',
+      status: 400,
+    });
+    expect(first.deserializationFailure).toBe(true);
+    expect(second.deserializationFailure).toBe(true);
+    expect(peerClassified.reason).toBe('serialized_payload_invalid');
+    expect(peerClassified.deserializationFailure).toBe(false);
+  });
 });
