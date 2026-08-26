@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 import {
   isAllowedBetterAuthHttpRequest,
   isBlockedBetterAuthHttpRequest,
+  TRUSTED_AUTH_CLIENT_IP_HEADER,
+  withTrustedAuthClientIp,
 } from '@/modules/auth/infrastructure/better-auth/auth-http-exposure';
 
 describe('Better Auth HTTP policy', () => {
@@ -68,5 +70,35 @@ describe('Better Auth HTTP policy', () => {
         false
       );
     }
+  });
+
+  it('clones a runtime-compatible request without passing it through the global Request constructor', () => {
+    const backingRequest = new Request(
+      'http://localhost/api/auth/sign-in/social',
+      {
+        body: JSON.stringify({ provider: 'github' }),
+        headers: {
+          'content-type': 'application/json',
+          [TRUSTED_AUTH_CLIENT_IP_HEADER]: '198.51.100.1',
+        },
+        method: 'POST',
+      }
+    );
+    const runtimeRequest = {
+      clone: () => backingRequest.clone(),
+      headers: backingRequest.headers,
+    } as Request;
+
+    const trusted = withTrustedAuthClientIp(runtimeRequest, {
+      kind: 'trusted-proxy-chain',
+      resolve: () => '203.0.113.10',
+    });
+
+    expect(trusted.headers.get(TRUSTED_AUTH_CLIENT_IP_HEADER)).toBe(
+      '203.0.113.10'
+    );
+    expect(runtimeRequest.headers.get(TRUSTED_AUTH_CLIENT_IP_HEADER)).toBe(
+      '198.51.100.1'
+    );
   });
 });

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
     kind: 'trusted-proxy-chain' as const,
     resolve: vi.fn(() => '203.0.113.10'),
   },
+  createTrustedClientIpAdapter: vi.fn(),
   createHandlers: vi.fn(),
   production: true,
   receive: vi.fn(async () => new Response(null, { status: 204 })),
@@ -20,7 +21,7 @@ vi.mock('@/modules/kernel/backend', () => ({
 }));
 
 vi.mock('@/platform/http/get-client-ip', () => ({
-  createTrustedClientIpAdapter: vi.fn(() => mocks.adapter),
+  createTrustedClientIpAdapter: mocks.createTrustedClientIpAdapter,
 }));
 
 vi.mock('@/modules/email/transport/http/resend-webhook-handlers', () => ({
@@ -38,6 +39,7 @@ describe('email backend runtime policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.production = true;
+    mocks.createTrustedClientIpAdapter.mockReturnValue(mocks.adapter);
     mocks.createHandlers.mockReturnValue({ receive: mocks.receive });
   });
 
@@ -65,6 +67,10 @@ describe('email backend runtime policy', () => {
           trustedClientIpAdapter: mocks.adapter,
         })
       );
+      expect(mocks.createTrustedClientIpAdapter).toHaveBeenCalledWith({
+        runtimeProfile: 'node',
+        trustedProxyDepth: 1,
+      });
     }
   );
 });

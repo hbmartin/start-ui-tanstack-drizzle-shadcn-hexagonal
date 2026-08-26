@@ -880,6 +880,47 @@ const verifyNodeLoginResponses = async ({
   );
 };
 
+const verifyNodeTrustedAuthClientIp = async (appPort) => {
+  const url = `http://localhost:${appPort}/api/auth/sign-in/social`;
+  const body = JSON.stringify({ provider: 'github' });
+  const mutationHeaders = {
+    'Content-Type': 'application/json',
+    Origin: `http://localhost:${appPort}`,
+    'Sec-Fetch-Site': 'same-origin',
+  };
+  const unavailable = await fetch(url, {
+    body,
+    headers: mutationHeaders,
+    method: 'POST',
+    signal: AbortSignal.timeout(responseTimeoutMs),
+  });
+  assert(
+    unavailable.status === 503,
+    `headerless production auth was HTTP ${unavailable.status}, expected HTTP 503`
+  );
+  assert(
+    unavailable.headers.get('retry-after') === '60',
+    'headerless production auth omitted its bounded Retry-After'
+  );
+
+  const trusted = await fetch(url, {
+    body,
+    headers: {
+      ...mutationHeaders,
+      'X-Forwarded-For': '203.0.113.10',
+    },
+    method: 'POST',
+    signal: AbortSignal.timeout(responseTimeoutMs),
+  });
+  assert(
+    trusted.status !== 503 && trusted.status !== 404,
+    `one-hop trusted production auth did not pass ingress: HTTP ${trusted.status}`
+  );
+  console.log(
+    `Verified Node trusted client-IP ingress: headerless HTTP 503 and one-hop provider HTTP ${trusted.status}.`
+  );
+};
+
 const isCspConsoleViolation = (message) =>
   /content security policy|refused to (?:apply|execute|load)/iu.test(message);
 
@@ -1026,6 +1067,7 @@ export const verifyNodeRuntime = async () => {
       env,
     });
     await verifyNodeLoginResponses({ appPort, application, pglite, preset });
+    await verifyNodeTrustedAuthClientIp(appPort);
     await verifyBuiltNodeServerFunctionErrorContract(appPort);
     await verifyStrictCspBrowserHydration(appPort);
     assertChildRunning(application, 'Node application');
