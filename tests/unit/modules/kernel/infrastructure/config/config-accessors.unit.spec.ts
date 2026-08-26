@@ -872,6 +872,15 @@ describe('server config accessors', () => {
     expect(getHttpConfig().trustedProxyDepth).toBe(1);
   });
 
+  it('does not implicitly trust caller XFF in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TRUSTED_PROXY_DEPTH', undefined);
+    const { getHttpConfig } =
+      await import('@/modules/kernel/infrastructure/config/http');
+
+    expect(getHttpConfig().trustedProxyDepth).toBeUndefined();
+  });
+
   it('accepts zero to disable proxy-header trust at a direct origin', async () => {
     vi.stubEnv('TRUSTED_PROXY_DEPTH', '0');
     const { getHttpConfig } =

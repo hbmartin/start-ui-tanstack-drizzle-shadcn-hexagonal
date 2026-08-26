@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => {
     createAuth: vi.fn(() => ({ handler })),
     handler,
     isProd: false,
-    trustedProxyDepth: 1,
+    trustedProxyDepth: 1 as number | undefined,
   };
 });
 
@@ -106,7 +106,8 @@ describe('auth HTTP gateway exposure policy', () => {
     const response = await gateway.handle(
       new Request('http://localhost/api/auth/admin/remove-user', {
         method: 'POST',
-      })
+      }),
+      'node'
     );
 
     expect(response.status).toBe(404);
@@ -125,7 +126,8 @@ describe('auth HTTP gateway exposure policy', () => {
           'x-forwarded-for': '203.0.113.7',
         },
         method: 'POST',
-      })
+      }),
+      'node'
     );
 
     await expect(response.text()).resolves.toBe('provider');
@@ -137,7 +139,8 @@ describe('auth HTTP gateway exposure policy', () => {
 
     const gateway = getAuthHttpGateway({ authEmailPort });
     const response = await gateway.handle(
-      new Request('http://localhost/api/auth/sign-in/email-otp')
+      new Request('http://localhost/api/auth/sign-in/email-otp'),
+      'node'
     );
 
     expect(response.status).toBe(404);
@@ -159,7 +162,8 @@ describe('auth HTTP gateway exposure policy', () => {
     );
 
     const response = await getAuthHttpGateway({ authEmailPort }).handle(
-      request
+      request,
+      'node'
     );
 
     await expect(response.json()).resolves.toEqual({
@@ -186,7 +190,8 @@ describe('auth HTTP gateway exposure policy', () => {
     );
 
     const response = await getAuthHttpGateway({ authEmailPort }).handle(
-      request
+      request,
+      'node'
     );
 
     expect(response.status).toBe(404);
@@ -205,12 +210,111 @@ describe('auth HTTP gateway exposure policy', () => {
       method: 'POST',
     });
 
-    await getAuthHttpGateway({ authEmailPort }).handle(request);
+    await getAuthHttpGateway({ authEmailPort }).handle(request, 'node');
 
     const forwardedRequest = mocks.handler.mock.calls[0]?.[0] as Request;
     expect(forwardedRequest.headers.get('x-start-ui-client-ip')).toBe(
       '203.0.113.7'
     );
+  });
+
+  it.each([
+    {
+      expected: '203.0.113.8',
+      headers: {
+        'cf-connecting-ip': '192.0.2.1',
+        'x-forwarded-for': '198.51.100.1',
+        'x-vercel-forwarded-for': '203.0.113.8',
+      },
+      profile: 'vercel' as const,
+    },
+    {
+      expected: '203.0.113.9',
+      headers: {
+        'cf-connecting-ip': '203.0.113.9',
+        'x-forwarded-for': '198.51.100.2',
+        'x-vercel-forwarded-for': '192.0.2.2',
+      },
+      profile: 'cloudflare' as const,
+    },
+  ])(
+    'trusts only the $profile client-IP header',
+    async ({ expected, headers, profile }) => {
+      const { getAuthHttpGateway } = await import('@/composition/auth');
+
+      await getAuthHttpGateway({ authEmailPort }).handle(
+        new Request('http://localhost/api/auth/sign-in/email-otp', {
+          body: JSON.stringify({ email: 'user@example.com', otp: '123456' }),
+          headers: {
+            ...headers,
+            'content-type': 'application/json',
+            'x-start-ui-client-ip': '192.0.2.99',
+          },
+          method: 'POST',
+        }),
+        profile
+      );
+
+      const forwardedRequest = mocks.handler.mock.calls[0]?.[0] as Request;
+      expect(forwardedRequest.headers.get('x-start-ui-client-ip')).toBe(
+        expected
+      );
+    }
+  );
+
+  it('fails production auth closed when profile-owned IP provenance is absent', async () => {
+    mocks.isProd = true;
+    const secondaryStore = makeSecondaryStore();
+    const { getAuthHttpGateway } = await import('@/composition/auth');
+
+    const response = await getAuthHttpGateway({
+      authEmailPort,
+      secondaryStore,
+    }).handle(
+      new Request('http://localhost/api/auth/sign-in/email-otp', {
+        body: JSON.stringify({ email: 'user@example.com', otp: '123456' }),
+        headers: {
+          'content-type': 'application/json',
+          'x-forwarded-for': '203.0.113.7',
+        },
+        method: 'POST',
+      }),
+      'vercel'
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('Retry-After')).toBe('60');
+    await expect(response.json()).resolves.toEqual({
+      error: 'rate_limiter_unavailable',
+    });
+    expect(secondaryStore.consumeRateLimit).not.toHaveBeenCalled();
+    expect(mocks.handler).not.toHaveBeenCalled();
+  });
+
+  it('does not accept caller XFF when Node production proxy trust is unset', async () => {
+    mocks.isProd = true;
+    mocks.trustedProxyDepth = undefined;
+    const secondaryStore = makeSecondaryStore();
+    const { getAuthHttpGateway } = await import('@/composition/auth');
+
+    const response = await getAuthHttpGateway({
+      authEmailPort,
+      secondaryStore,
+    }).handle(
+      new Request('http://localhost/api/auth/sign-in/email-otp', {
+        body: JSON.stringify({ email: 'user@example.com', otp: '123456' }),
+        headers: {
+          'content-type': 'application/json',
+          'x-forwarded-for': '203.0.113.7',
+        },
+        method: 'POST',
+      }),
+      'node'
+    );
+
+    expect(response.status).toBe(503);
+    expect(secondaryStore.consumeRateLimit).not.toHaveBeenCalled();
+    expect(mocks.handler).not.toHaveBeenCalled();
   });
 
   it('adds a bounded standard Retry-After header to provider 429 responses', async () => {
@@ -227,7 +331,8 @@ describe('auth HTTP gateway exposure policy', () => {
         body: JSON.stringify({ email: 'user@example.com', otp: '123456' }),
         headers: { 'content-type': 'application/json' },
         method: 'POST',
-      })
+      }),
+      'node'
     );
 
     expect(response.status).toBe(429);
@@ -250,7 +355,8 @@ describe('auth HTTP gateway exposure policy', () => {
           'x-forwarded-for': '203.0.113.7',
         },
         method: 'POST',
-      })
+      }),
+      'node'
     );
 
     expect(response.status).toBe(200);
@@ -278,7 +384,8 @@ describe('auth HTTP gateway exposure policy', () => {
           'x-forwarded-for': '203.0.113.7',
         },
         method: 'POST',
-      })
+      }),
+      'node'
     );
 
     expect(response.status).toBe(200);
@@ -327,7 +434,8 @@ describe('auth HTTP gateway exposure policy', () => {
           'x-forwarded-for': '203.0.113.7',
         },
         method: 'POST',
-      })
+      }),
+      'node'
     );
 
     expect(response.status).toBe(429);
@@ -353,7 +461,8 @@ describe('auth HTTP gateway exposure policy', () => {
           body: JSON.stringify({ email: 'user@example.com', otp: '123456' }),
           headers: { 'content-type': 'application/json' },
           method: 'POST',
-        })
+        }),
+        'node'
       )
     ).rejects.toBe(failure);
     expect(mocks.handler).not.toHaveBeenCalled();

@@ -6,9 +6,10 @@ import { handleResendWebhookRequest } from '@/modules/email/backend';
 export const Route = createFileRoute('/api/webhooks/resend')({
   server: {
     handlers: {
-      POST: ({ request }) => {
+      POST: ({ request, context }) => {
         return handleResendWebhookRequest(request, {
           logger: getKernel().logger,
+          runtimeProfile: context.runtimeProfile,
         });
       },
     },

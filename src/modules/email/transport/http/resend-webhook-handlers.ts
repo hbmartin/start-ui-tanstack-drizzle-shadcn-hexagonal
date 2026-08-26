@@ -14,7 +14,7 @@ import {
   toEmailRecipientList,
   toEmailWebhookEventId,
 } from '@/modules/kernel/domain/ids';
-import { getClientIp } from '@/platform/http/get-client-ip';
+import type { TrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 import {
   defaultRateLimiter,
   type RateLimiter,
@@ -38,8 +38,8 @@ type ResendWebhookHandlerDeps = {
   logger?: Pick<Logger, 'warn'>;
   maxBodyBytes?: number;
   verifier: ResendWebhookVerifier;
-  /** Trusted reverse-proxy hops in front of the app (see `getClientIp`). */
-  trustedProxyDepth?: number;
+  /** Profile-owned, entrypoint-selected client-IP provenance. */
+  trustedClientIpAdapter?: TrustedClientIpAdapter;
   /** Per-IP webhook hits allowed per minute before returning HTTP 429. */
   rateLimitPerMinute?: number;
   /** Injectable limiter; defaults to the shared process-wide limiter. */
@@ -252,7 +252,7 @@ export const createResendWebhookHandlers = ({
   logger,
   maxBodyBytes,
   verifier,
-  trustedProxyDepth,
+  trustedClientIpAdapter,
   rateLimitPerMinute,
   rateLimiter = defaultRateLimiter,
 }: ResendWebhookHandlerDeps) => {
@@ -265,7 +265,7 @@ export const createResendWebhookHandlers = ({
       : DEFAULT_RESEND_WEBHOOK_RATE_LIMIT_PER_MINUTE;
 
   const enforceRateLimit = (request: Request) => {
-    const ip = getClientIp(request, { trustedProxyDepth });
+    const ip = trustedClientIpAdapter?.resolve(request);
     if (!ip) return undefined;
 
     const result = rateLimiter.check(

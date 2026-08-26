@@ -12,6 +12,7 @@ import {
 } from '@/modules/auth/infrastructure/better-auth/auth';
 import {
   isBlockedBetterAuthHttpRequest,
+  TRUSTED_AUTH_CLIENT_IP_HEADER,
   withTrustedAuthClientIp,
 } from '@/modules/auth/infrastructure/better-auth/auth-http-exposure';
 import { AuthorizationGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/authorization-gateway-better-auth';
@@ -29,6 +30,7 @@ import {
   getRedisConfig,
   isProdRuntimeEnvironment,
 } from '@/modules/kernel/backend';
+import { createTrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 
 import { AuthEmailPortEmailGateway } from './auth-email-port';
 import { getEmailGateway } from './email';
@@ -155,11 +157,26 @@ const buildAuthHttpGateway = (
   });
 
   return {
-    handle: async (request) => {
+    handle: async (request, runtimeProfile) => {
       if (await isBlockedBetterAuthHttpRequest(request)) {
         return new Response('Not Found', { status: 404 });
       }
-      const trustedRequest = withTrustedAuthClientIp(request, getHttpConfig());
+      const trustedRequest = withTrustedAuthClientIp(
+        request,
+        createTrustedClientIpAdapter({
+          runtimeProfile,
+          trustedProxyDepth: getHttpConfig().trustedProxyDepth,
+        })
+      );
+      if (
+        isProdRuntimeEnvironment() &&
+        !trustedRequest.headers.has(TRUSTED_AUTH_CLIENT_IP_HEADER)
+      ) {
+        return Response.json(
+          { error: 'rate_limiter_unavailable' },
+          { headers: { 'Retry-After': '60' }, status: 503 }
+        );
+      }
       const rateLimited = await rateLimiter.check(trustedRequest);
       if (rateLimited) return rateLimited;
       return withStandardRetryAfter(await authInstance.handler(trustedRequest));

@@ -60,7 +60,7 @@ describe('auth backend handlers', () => {
       method: 'POST',
     });
 
-    await expect(handleAuthRequest(request)).resolves.toBe(response);
+    await expect(handleAuthRequest(request, 'vercel')).resolves.toBe(response);
 
     expect(authBackendMocks.telemetry.startSpan).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -76,7 +76,8 @@ describe('auth backend handlers', () => {
       expect.any(Function)
     );
     expect(authBackendMocks.authHttpGateway.handle).toHaveBeenCalledWith(
-      request
+      request,
+      'vercel'
     );
   });
 });

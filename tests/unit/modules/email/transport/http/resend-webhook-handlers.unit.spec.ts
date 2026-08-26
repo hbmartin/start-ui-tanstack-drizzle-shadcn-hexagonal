@@ -9,6 +9,7 @@ import {
   toEmailWebhookEventId,
 } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
+import { createTrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 import { createRateLimiter } from '@/platform/http/rate-limiter';
 
 const makeRequest = (body = 'raw-body', headers?: HeadersInit) =>
@@ -94,15 +95,24 @@ describe('Resend webhook HTTP handlers', () => {
       logger,
       rateLimiter: createRateLimiter(),
       rateLimitPerMinute: 1,
+      trustedClientIpAdapter: createTrustedClientIpAdapter({
+        runtimeProfile: 'cloudflare',
+        trustedProxyDepth: 1,
+      }),
       verifier,
     });
-    const headers = { 'X-Forwarded-For': '203.0.113.5' };
 
     const first = await handlers.receive(
-      makeRequest('{"type":"email.delivered"}', headers)
+      makeRequest('{"type":"email.delivered"}', {
+        'CF-Connecting-IP': '203.0.113.5',
+        'X-Forwarded-For': '198.51.100.1',
+      })
     );
     const second = await handlers.receive(
-      makeRequest('{"type":"email.delivered"}', headers)
+      makeRequest('{"type":"email.delivered"}', {
+        'CF-Connecting-IP': '203.0.113.5',
+        'X-Forwarded-For': '198.51.100.2',
+      })
     );
 
     expect(first.status).toBe(200);

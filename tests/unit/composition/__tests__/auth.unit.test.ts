@@ -78,7 +78,7 @@ describe('auth composition', () => {
     });
     const request = new Request('http://localhost/api/auth/session');
 
-    await expect(gateway.handle(request)).resolves.toBe(response);
-    expect(handle).toHaveBeenCalledWith(request);
+    await expect(gateway.handle(request, 'node')).resolves.toBe(response);
+    expect(handle).toHaveBeenCalledWith(request, 'node');
   });
 });

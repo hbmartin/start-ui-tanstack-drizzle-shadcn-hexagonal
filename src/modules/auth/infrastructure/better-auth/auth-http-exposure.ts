@@ -8,7 +8,7 @@
  * audit policy. Focused in-process provider adapters remain separately scoped.
  */
 
-import { getClientIp } from '@/platform/http/get-client-ip';
+import type { TrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 
 const BETTER_AUTH_BASE_PATH = '/api/auth';
 const MAX_AUTH_HTTP_BODY_BYTES = 8 * 1024;
@@ -16,11 +16,11 @@ export const TRUSTED_AUTH_CLIENT_IP_HEADER = 'x-start-ui-client-ip';
 
 export const withTrustedAuthClientIp = (
   request: Request,
-  options: { trustedProxyDepth: number }
+  adapter: TrustedClientIpAdapter
 ) => {
   const headers = new Headers(request.headers);
   headers.delete(TRUSTED_AUTH_CLIENT_IP_HEADER);
-  const clientIp = getClientIp(request, options);
+  const clientIp = adapter.resolve(request);
   if (clientIp) headers.set(TRUSTED_AUTH_CLIENT_IP_HEADER, clientIp);
   return new Request(request, { headers });
 };

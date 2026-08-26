@@ -62,10 +62,15 @@ const sameOriginHeaders = (contentType: string) => ({
   'Sec-Fetch-Site': 'same-origin',
 });
 
-const request = (path: string, contentType: string, body: BodyInit) =>
+const request = (
+  path: string,
+  contentType: string,
+  body: BodyInit,
+  headers: HeadersInit = {}
+) =>
   new Request(`http://localhost${path}`, {
     body,
-    headers: sameOriginHeaders(contentType),
+    headers: { ...sameOriginHeaders(contentType), ...headers },
     method: 'POST',
   });
 
@@ -96,7 +101,8 @@ describe('telemetry transport handlers', () => {
         'application/x-protobuf',
         new Uint8Array([1, 2, 3])
       ),
-      'traces'
+      'traces',
+      'node'
     );
 
     expect(response.status).toBe(204);
@@ -123,7 +129,8 @@ describe('telemetry transport handlers', () => {
         'application/x-protobuf',
         new Uint8Array([1])
       ),
-      'metrics'
+      'metrics',
+      'node'
     );
 
     expect(response.status).toBe(202);
@@ -145,7 +152,8 @@ describe('telemetry transport handlers', () => {
 
     const response = await handleOtlpProxyRequest(
       request('/api/telemetry/otel/v1/traces', 'application/json', '{}'),
-      'traces'
+      'traces',
+      'node'
     );
 
     expect(response.status).toBe(415);
@@ -181,7 +189,11 @@ describe('telemetry transport handlers', () => {
     const { handleOtlpProxyRequest } =
       await import('@/composition/telemetry/transport');
 
-    const response = await handleOtlpProxyRequest(streamingRequest, 'traces');
+    const response = await handleOtlpProxyRequest(
+      streamingRequest,
+      'traces',
+      'node'
+    );
 
     expect(response.status).toBe(413);
     expect(arrayBufferSpy).not.toHaveBeenCalled();
@@ -200,7 +212,11 @@ describe('telemetry transport handlers', () => {
       await import('@/composition/telemetry/transport');
 
     try {
-      const response = await handleOtlpProxyRequest(lockedRequest, 'traces');
+      const response = await handleOtlpProxyRequest(
+        lockedRequest,
+        'traces',
+        'node'
+      );
 
       expect(response.status).toBe(400);
       expect(fetch).not.toHaveBeenCalled();
@@ -220,7 +236,8 @@ describe('telemetry transport handlers', () => {
         '/api/telemetry/sentry-tunnel',
         'application/x-sentry-envelope',
         'envelope'
-      )
+      ),
+      'node'
     );
 
     expect(response.status).toBe(202);
@@ -253,7 +270,8 @@ describe('telemetry transport handlers', () => {
             },
           ],
         })
-      )
+      ),
+      'node'
     );
 
     expect(response.status).toBe(202);
@@ -295,7 +313,8 @@ describe('telemetry transport handlers', () => {
         'application/x-protobuf',
         new Uint8Array([1])
       ),
-      'traces'
+      'traces',
+      'node'
     );
     const second = await handleOtlpProxyRequest(
       request(
@@ -303,12 +322,49 @@ describe('telemetry transport handlers', () => {
         'application/x-protobuf',
         new Uint8Array([1])
       ),
-      'traces'
+      'traces',
+      'node'
     );
 
     expect(first.status).toBe(204);
     expect(second.status).toBe(429);
     expect(second.headers.get('Retry-After')).toBeTruthy();
+  });
+
+  it('uses the Cloudflare profile header instead of spoofed X-Forwarded-For values', async () => {
+    configMock.rateLimitPerMinute = 1;
+    const { handleOtlpProxyRequest } =
+      await import('@/composition/telemetry/transport');
+
+    const first = await handleOtlpProxyRequest(
+      request(
+        '/api/telemetry/otel/v1/traces',
+        'application/x-protobuf',
+        new Uint8Array([1]),
+        {
+          'CF-Connecting-IP': '203.0.113.7',
+          'X-Forwarded-For': '198.51.100.1',
+        }
+      ),
+      'traces',
+      'cloudflare'
+    );
+    const second = await handleOtlpProxyRequest(
+      request(
+        '/api/telemetry/otel/v1/traces',
+        'application/x-protobuf',
+        new Uint8Array([1]),
+        {
+          'CF-Connecting-IP': '203.0.113.7',
+          'X-Forwarded-For': '198.51.100.2',
+        }
+      ),
+      'traces',
+      'cloudflare'
+    );
+
+    expect(first.status).toBe(204);
+    expect(second.status).toBe(429);
   });
 
   it('rejects frontend logs without an authenticated session', async () => {
@@ -323,7 +379,8 @@ describe('telemetry transport handlers', () => {
         '/api/telemetry/logs',
         'application/json',
         JSON.stringify({ records: [] })
-      )
+      ),
+      'node'
     );
 
     expect(response.status).toBe(401);
@@ -345,7 +402,8 @@ describe('telemetry transport handlers', () => {
         'application/x-protobuf',
         new Uint8Array([1])
       ),
-      'traces'
+      'traces',
+      'node'
     );
 
     expect(response.status).toBe(401);
@@ -366,7 +424,8 @@ describe('telemetry transport handlers', () => {
         '/api/telemetry/sentry-tunnel',
         'application/x-sentry-envelope',
         'envelope'
-      )
+      ),
+      'node'
     );
 
     expect(response.status).toBe(401);
@@ -386,7 +445,8 @@ describe('telemetry transport handlers', () => {
         'application/x-protobuf',
         new Uint8Array([1])
       ),
-      'traces'
+      'traces',
+      'node'
     );
 
     expect(response.status).toBe(202);

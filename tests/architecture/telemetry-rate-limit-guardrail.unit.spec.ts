@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
  *
  * The OTLP and Sentry-tunnel handlers accept forgeable non-browser traffic, so
  * they must stay behind the per-IP `enforceTelemetryRateLimit` throttle, and the
- * client IP must be derived only through the depth-aware `getClientIp` resolver
- * (never a raw, spoofable `X-Forwarded-For` read). This source-level check fails
+ * client IP must be derived only through a profile-owned trusted adapter (never
+ * a raw, spoofable proxy-header read). This source-level check fails
  * loudly if a future edit drops the throttle or the sanctioned IP resolver from
  * any handler. The runtime 429 behaviour itself is covered by
  * tests/unit/composition/telemetry/transport.unit.spec.ts.
@@ -43,9 +43,10 @@ const handlersMissingThrottle = rateLimitedHandlers.filter(
 );
 
 describe('telemetry transport rate limiting (regression guardrail)', () => {
-  it('derives the client IP only through the sanctioned getClientIp resolver', () => {
+  it('derives the client IP only through the sanctioned profile adapter', () => {
     expect(source).toContain("from '@/platform/http/get-client-ip'");
-    expect(source).toContain('getClientIp(');
+    expect(source).toContain('createTrustedClientIpAdapter({');
+    expect(source).toContain('runtimeProfile');
   });
 
   it('keeps the per-IP rate-limit enforcement wiring', () => {

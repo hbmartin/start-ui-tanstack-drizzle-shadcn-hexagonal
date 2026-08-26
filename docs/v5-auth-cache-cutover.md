@@ -9,8 +9,12 @@ network, and normalized identity limits. The in-memory adapter is restricted to
 local development and tests. Better Auth's built-in IP limiter is disabled so
 requests without trusted client-IP provenance never collapse into a shared
 provider bucket; the app gateway remains the single fail-closed distributed
-limit owner. `TRUSTED_PROXY_DEPTH=0` disables network bucketing for a directly
-exposed origin while retaining global and identity limits.
+limit owner. Production auth fails closed when its runtime-profile adapter
+cannot establish trusted network provenance. `TRUSTED_PROXY_DEPTH=0` is
+therefore a local/test-only direct-origin setting; Vercel and Cloudflare ignore
+that setting and use their managed platform headers.
+Node production has no implicit proxy-depth default: configure the exact chain
+and restrict direct origin access before enabling auth traffic.
 
 Applications upgrading from a pre-v5 revision that configured Upstash must
 remove the old session snapshots and verification records during a drained
