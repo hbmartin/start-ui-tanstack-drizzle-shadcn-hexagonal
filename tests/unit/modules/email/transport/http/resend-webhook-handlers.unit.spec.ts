@@ -20,16 +20,17 @@ const testTrustedClientIpAdapter = {
 const createHandlers = (
   deps: Omit<
     Parameters<typeof createResendWebhookHandlers>[0],
-    'trustedClientIpAdapter'
+    'requireTrustedClientIp' | 'trustedClientIpAdapter'
   > &
     Partial<
       Pick<
         Parameters<typeof createResendWebhookHandlers>[0],
-        'trustedClientIpAdapter'
+        'requireTrustedClientIp' | 'trustedClientIpAdapter'
       >
     >
 ) =>
   createResendWebhookHandlers({
+    requireTrustedClientIp: false,
     trustedClientIpAdapter: testTrustedClientIpAdapter,
     ...deps,
   });
@@ -147,7 +148,36 @@ describe('Resend webhook HTTP handlers', () => {
     );
   });
 
-  it('fails closed when trusted client IP provenance is unavailable', async () => {
+  it('fails closed in production when trusted client IP provenance is unavailable', async () => {
+    const verifier = { verify: vi.fn(() => makeEmailEvent()) };
+    const processStatusEvent = vi.fn(async () =>
+      Result.Ok({
+        type: 'email_status_event_processed' as const,
+        record: {} as ExplicitAny,
+      })
+    );
+    const handlers = createHandlers({
+      getUseCases: () => ({ processStatusEvent }),
+      rateLimiter: createRateLimiter(),
+      rateLimitPerMinute: 1,
+      requireTrustedClientIp: true,
+      trustedClientIpAdapter: createTrustedClientIpAdapter({
+        runtimeProfile: 'node',
+        trustedProxyDepth: 1,
+      }),
+      verifier,
+    });
+
+    const first = await handlers.receive(makeRequest());
+    const second = await handlers.receive(makeRequest());
+
+    expect(first.status).toBe(503);
+    expect(second.status).toBe(503);
+    expect(first.headers.get('Retry-After')).toBe('60');
+    expect(verifier.verify).not.toHaveBeenCalled();
+  });
+
+  it('uses a bounded local bucket when non-production provenance is unavailable', async () => {
     const verifier = { verify: vi.fn(() => makeEmailEvent()) };
     const processStatusEvent = vi.fn(async () =>
       Result.Ok({
@@ -169,10 +199,9 @@ describe('Resend webhook HTTP handlers', () => {
     const first = await handlers.receive(makeRequest());
     const second = await handlers.receive(makeRequest());
 
-    expect(first.status).toBe(503);
-    expect(second.status).toBe(503);
-    expect(first.headers.get('Retry-After')).toBe('60');
-    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(429);
+    expect(verifier.verify).toHaveBeenCalledOnce();
   });
 
   it('rejects requests missing Svix signature headers before reading the body', async () => {

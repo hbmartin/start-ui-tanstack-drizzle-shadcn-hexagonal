@@ -40,6 +40,8 @@ type ResendWebhookHandlerDeps = {
   verifier: ResendWebhookVerifier;
   /** Profile-owned, entrypoint-selected client-IP provenance. */
   trustedClientIpAdapter: TrustedClientIpAdapter;
+  /** Fail closed when trusted client-IP provenance is absent. */
+  requireTrustedClientIp: boolean;
   /** Per-IP webhook hits allowed per minute before returning HTTP 429. */
   rateLimitPerMinute?: number;
   /** Injectable limiter; defaults to the shared process-wide limiter. */
@@ -49,7 +51,8 @@ type ResendWebhookHandlerDeps = {
 const DEFAULT_RESEND_WEBHOOK_MAX_BYTES = 1_000_000;
 
 /**
- * Fail-closed per-IP cap on inbound Resend webhook requests, applied BEFORE the
+ * Production-fail-closed per-IP cap on inbound Resend webhook requests, applied
+ * BEFORE the
  * (more expensive) Svix signature verification so unsigned floods are shed
  * cheaply. Fail-closed verification and replay dedupe still run afterwards. This
  * limiter is in-memory/per-process; durable cross-instance limits belong at the
@@ -253,6 +256,7 @@ export const createResendWebhookHandlers = ({
   maxBodyBytes,
   verifier,
   trustedClientIpAdapter,
+  requireTrustedClientIp,
   rateLimitPerMinute,
   rateLimiter = defaultRateLimiter,
 }: ResendWebhookHandlerDeps) => {
@@ -265,8 +269,8 @@ export const createResendWebhookHandlers = ({
       : DEFAULT_RESEND_WEBHOOK_RATE_LIMIT_PER_MINUTE;
 
   const enforceRateLimit = (request: Request) => {
-    const ip = trustedClientIpAdapter.resolve(request);
-    if (!ip) {
+    const trustedIp = trustedClientIpAdapter.resolve(request);
+    if (!trustedIp && requireTrustedClientIp) {
       logger?.warn({
         details: {
           provider: EMAIL_PROVIDER_RESEND,
@@ -282,6 +286,10 @@ export const createResendWebhookHandlers = ({
         }
       );
     }
+
+    // Direct local webhook replays do not traverse a reverse proxy. Keep them
+    // in one bounded development bucket without weakening production.
+    const ip = trustedIp ?? 'local-unattributed';
 
     const result = rateLimiter.check(
       `webhook:resend:${ip}`,

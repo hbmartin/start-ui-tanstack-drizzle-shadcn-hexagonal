@@ -5,6 +5,7 @@ import {
   getDefaultDbClient,
   getEmailConfig,
   getHttpConfig,
+  isProdRuntimeEnvironment,
 } from '@/modules/kernel/backend';
 import { createTrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
@@ -75,6 +76,7 @@ const getDeps = (deps: ResendWebhookRequestDeps): EmailServerRuntimeDeps => ({
     getUseCases: createDefaultEmailUseCases,
     logger: deps.logger,
     maxBodyBytes: getEmailConfig().resendWebhookMaxBytes,
+    requireTrustedClientIp: isProdRuntimeEnvironment(),
     trustedClientIpAdapter: createTrustedClientIpAdapter({
       runtimeProfile: deps.runtimeProfile,
       trustedProxyDepth: getHttpConfig().trustedProxyDepth,

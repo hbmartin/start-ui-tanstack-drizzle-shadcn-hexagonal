@@ -75,6 +75,23 @@ describe('validateServerConfig fails closed on insecure production config', () =
     expect(() => validateServerConfig('node')).toThrow(ConfigurationError);
     expect(() => validateServerConfig('node')).toThrow('TRUSTED_PROXY_DEPTH');
   });
+
+  it('rejects disabled Node proxy trust but never requires the Node setting for managed profiles', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+
+    const { validateTrustedClientIpConfiguration } =
+      await import('@/modules/kernel/infrastructure/config/server');
+
+    expect(() => validateTrustedClientIpConfiguration('node', 0)).toThrow(
+      'positive integer'
+    );
+    expect(() =>
+      validateTrustedClientIpConfiguration('vercel', undefined)
+    ).not.toThrow();
+    expect(() =>
+      validateTrustedClientIpConfiguration('cloudflare', undefined)
+    ).not.toThrow();
+  });
 });
 
 /**

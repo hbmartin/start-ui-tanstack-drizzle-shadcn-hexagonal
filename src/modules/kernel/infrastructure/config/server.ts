@@ -15,17 +15,17 @@ import { getRedisConfig } from './redis';
 import { getStorageConfig } from './storage';
 import { getTelemetryConfig } from './telemetry';
 
-const validateTrustedClientIpConfiguration = (
+export const validateTrustedClientIpConfiguration = (
   runtimeProfile: RuntimeProfile,
   trustedProxyDepth: number | undefined
 ) => {
   if (
     runtimeProfile === 'node' &&
     isProdRuntimeEnvironment() &&
-    trustedProxyDepth === undefined
+    (trustedProxyDepth === undefined || trustedProxyDepth < 1)
   ) {
     throw new ConfigurationError(
-      'Node production startup requires TRUSTED_PROXY_DEPTH to match the trusted reverse-proxy topology.'
+      'Node production startup requires TRUSTED_PROXY_DEPTH to be a positive integer matching the trusted reverse-proxy topology.'
     );
   }
 };

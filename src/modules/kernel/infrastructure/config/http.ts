@@ -21,8 +21,8 @@ export type HttpConfig = {
    * match the Node deployment topology to avoid trusting attacker-controlled
    * X-Forwarded-For entries. Local/test defaults to `1`; production has no
    * default and causes Node production startup to fail until explicitly
-   * configured.
-   * `0` disables Node proxy trust.
+   * configured. `0` disables Node proxy trust only for local/test use and is
+   * rejected at production startup.
    */
   trustedProxyDepth: number | undefined;
 };

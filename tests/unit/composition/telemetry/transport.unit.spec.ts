@@ -306,7 +306,7 @@ describe('telemetry transport handlers', () => {
     expect(telemetryMock.captureException).not.toHaveBeenCalled();
   });
 
-  it('rate limits telemetry ingest once the per-minute cap is exceeded', async () => {
+  it('uses a bounded local bucket when non-production provenance is unavailable', async () => {
     configMock.rateLimitPerMinute = 1;
     const { handleOtlpProxyRequest } =
       await import('@/composition/telemetry/transport');
