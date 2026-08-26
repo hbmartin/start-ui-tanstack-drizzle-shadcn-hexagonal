@@ -66,8 +66,8 @@ describe('tanstack result mapper', () => {
   it.each([
     { expected: 17, retryAfterSeconds: 17 },
     { expected: 60, retryAfterSeconds: 9_999 },
-    { expected: 1, retryAfterSeconds: -1 },
-    { expected: 1, retryAfterSeconds: Number.NaN },
+    { expected: 60, retryAfterSeconds: -1 },
+    { expected: 60, retryAfterSeconds: Number.NaN },
     { expected: 2, retryAfterSeconds: 1.1 },
   ])(
     'bounds $retryAfterSeconds to $expected while mapping rate-limit app errors',

@@ -49,6 +49,26 @@ describe('kernel primitives', () => {
     expect(error.message).toBe('TEST');
   });
 
+  it.each([
+    { expected: 17, retryAfterSeconds: 17 },
+    { expected: 60, retryAfterSeconds: 9_999 },
+    { expected: 60, retryAfterSeconds: -1 },
+    { expected: 60, retryAfterSeconds: Number.NaN },
+    { expected: 2, retryAfterSeconds: 1.1 },
+  ])(
+    'normalizes AppError retry advice from $retryAfterSeconds to $expected',
+    ({ expected, retryAfterSeconds }) => {
+      const error = new AppError({
+        code: 'RATE_LIMITED',
+        category: 'rate_limit',
+        status: 429,
+        retryAfterSeconds,
+      });
+
+      expect(error.retryAfterSeconds).toBe(expected);
+    }
+  );
+
   it('creates bad request domain errors', () => {
     const cause = new Error('invalid field');
     const error = new DomainError('INVALID_DOMAIN_VALUE', {

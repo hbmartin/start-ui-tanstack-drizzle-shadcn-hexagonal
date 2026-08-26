@@ -1,6 +1,9 @@
 import { createSerializationAdapter } from '@tanstack/react-router';
 
-import { AppError } from '@/modules/kernel/domain/errors/app-error';
+import {
+  AppError,
+  normalizeRetryAfterSeconds,
+} from '@/modules/kernel/domain/errors/app-error';
 
 export const SERVER_FN_ERROR_CODES = [
   'BAD_REQUEST',
@@ -134,8 +137,23 @@ const reasonSet = new Set<string>(PUBLIC_SERVER_ERROR_REASONS);
 const publicDtoKeys = ['correlationId', 'reason', 'target', 'version'] as const;
 const opaqueCorrelationIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const DEFAULT_RETRY_AFTER_SECONDS = 1;
-const MAX_RETRY_AFTER_SECONDS = 60;
+const DESERIALIZATION_FAILURE_CAUSE = Object.freeze({});
+const MAX_CAUSE_CHAIN_DEPTH = 16;
+
+const hasDeserializationFailureCause = (value: unknown) => {
+  let current = value;
+  const seen = new Set<object>();
+
+  for (let depth = 0; depth < MAX_CAUSE_CHAIN_DEPTH; depth += 1) {
+    if (current === DESERIALIZATION_FAILURE_CAUSE) return true;
+    if (!(current instanceof Error) || seen.has(current)) return false;
+
+    seen.add(current);
+    current = current.cause;
+  }
+
+  return false;
+};
 
 const isPublicServerErrorTarget = (
   value: unknown
@@ -190,21 +208,9 @@ export type ServerFnErrorOptions = Readonly<{
   reason?: PublicServerErrorReason;
   correlationId?: string;
   cause?: unknown;
-  deserializationFailure?: boolean;
   reported?: boolean;
   retryAfterSeconds?: number;
 }>;
-
-const boundedRetryAfterSeconds = (value: number | undefined) =>
-  Math.min(
-    MAX_RETRY_AFTER_SECONDS,
-    Math.max(
-      1,
-      Number.isFinite(value)
-        ? Math.ceil(value as number)
-        : DEFAULT_RETRY_AFTER_SECONDS
-    )
-  );
 
 export class ServerFnError extends AppError {
   static readonly NAME = 'ServerFnError';
@@ -242,11 +248,11 @@ export class ServerFnError extends AppError {
     this.target = target;
     this.reason = reason;
     this.correlationId = correlationId;
-    this.deserializationFailure = options.deserializationFailure ?? false;
+    this.deserializationFailure = hasDeserializationFailureCause(options.cause);
     this.reported = options.reported ?? false;
     this.retryAfterSeconds =
       code === 'TOO_MANY_REQUESTS'
-        ? boundedRetryAfterSeconds(options.retryAfterSeconds)
+        ? normalizeRetryAfterSeconds(options.retryAfterSeconds)
         : undefined;
   }
 
@@ -256,7 +262,6 @@ export class ServerFnError extends AppError {
       reason: this.reason,
       correlationId,
       cause: this.cause,
-      deserializationFailure: this.deserializationFailure,
       reported: this.reported,
       retryAfterSeconds: this.retryAfterSeconds,
     });
@@ -269,7 +274,6 @@ export class ServerFnError extends AppError {
       reason: this.reason,
       correlationId: this.correlationId,
       cause: this.cause,
-      deserializationFailure: this.deserializationFailure,
       reported: true,
       retryAfterSeconds: this.retryAfterSeconds,
     });
@@ -306,9 +310,11 @@ export const serverFnErrorSerializationAdapter = createSerializationAdapter<
     if (!isPublicServerErrorDto(value)) {
       // Symmetric adapters also deserialize client-authored server-function
       // arguments. Return a closed client-error sentinel rather than throwing
-      // a pre-middleware 5xx for a forged or malformed adapter tag.
+      // a pre-middleware 5xx for a malformed adapter tag. The API does not
+      // expose direction, so the internal marker must not be treated as proof
+      // of tampering; it can also represent version skew on a client.
       return new ServerFnError('BAD_REQUEST', {
-        deserializationFailure: true,
+        cause: DESERIALIZATION_FAILURE_CAUSE,
       });
     }
     return ServerFnError.fromPublicDto(value);

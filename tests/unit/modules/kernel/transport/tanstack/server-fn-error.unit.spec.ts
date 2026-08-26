@@ -187,11 +187,11 @@ describe('public server-function error contract', () => {
 
       expect(revived).toMatchObject({
         code: 'BAD_REQUEST',
-        deserializationFailure: true,
         reason: 'invalid_input',
         status: 400,
         target: 'request',
       });
+      expect(revived.deserializationFailure).toBe(true);
       expect(Object.keys(revived.toJSON()).toSorted()).toEqual([
         'correlationId',
         'reason',
@@ -199,6 +199,12 @@ describe('public server-function error contract', () => {
         'version',
       ]);
       expect(JSON.stringify(revived)).not.toContain('deserializationFailure');
+      const correlated = revived.withCorrelationId(CORRELATION_ID);
+      const reported = revived.asReported();
+      expect(correlated.correlationId).toBe(CORRELATION_ID);
+      expect(correlated.deserializationFailure).toBe(true);
+      expect(reported.deserializationFailure).toBe(true);
+      expect(reported.reported).toBe(true);
     }
   );
 });
