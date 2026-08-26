@@ -187,6 +187,7 @@ describe('public server-function error contract', () => {
 
       expect(revived).toMatchObject({
         code: 'BAD_REQUEST',
+        deserializationFailure: true,
         reason: 'invalid_input',
         status: 400,
         target: 'request',
@@ -197,6 +198,7 @@ describe('public server-function error contract', () => {
         'target',
         'version',
       ]);
+      expect(JSON.stringify(revived)).not.toContain('deserializationFailure');
     }
   );
 });

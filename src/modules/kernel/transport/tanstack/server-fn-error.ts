@@ -190,6 +190,7 @@ export type ServerFnErrorOptions = Readonly<{
   reason?: PublicServerErrorReason;
   correlationId?: string;
   cause?: unknown;
+  deserializationFailure?: boolean;
   reported?: boolean;
   retryAfterSeconds?: number;
 }>;
@@ -211,6 +212,7 @@ export class ServerFnError extends AppError {
   readonly target: PublicServerErrorTarget;
   readonly reason: PublicServerErrorReason;
   readonly correlationId: string;
+  readonly deserializationFailure: boolean;
   readonly reported: boolean;
   readonly retryAfterSeconds?: number;
 
@@ -240,6 +242,7 @@ export class ServerFnError extends AppError {
     this.target = target;
     this.reason = reason;
     this.correlationId = correlationId;
+    this.deserializationFailure = options.deserializationFailure ?? false;
     this.reported = options.reported ?? false;
     this.retryAfterSeconds =
       code === 'TOO_MANY_REQUESTS'
@@ -253,6 +256,7 @@ export class ServerFnError extends AppError {
       reason: this.reason,
       correlationId,
       cause: this.cause,
+      deserializationFailure: this.deserializationFailure,
       reported: this.reported,
       retryAfterSeconds: this.retryAfterSeconds,
     });
@@ -265,6 +269,7 @@ export class ServerFnError extends AppError {
       reason: this.reason,
       correlationId: this.correlationId,
       cause: this.cause,
+      deserializationFailure: this.deserializationFailure,
       reported: true,
       retryAfterSeconds: this.retryAfterSeconds,
     });
@@ -302,7 +307,9 @@ export const serverFnErrorSerializationAdapter = createSerializationAdapter<
       // Symmetric adapters also deserialize client-authored server-function
       // arguments. Return a closed client-error sentinel rather than throwing
       // a pre-middleware 5xx for a forged or malformed adapter tag.
-      return new ServerFnError('BAD_REQUEST');
+      return new ServerFnError('BAD_REQUEST', {
+        deserializationFailure: true,
+      });
     }
     return ServerFnError.fromPublicDto(value);
   },

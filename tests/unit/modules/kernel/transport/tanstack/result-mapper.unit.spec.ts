@@ -63,29 +63,38 @@ describe('tanstack result mapper', () => {
     });
   });
 
-  it('carries bounded retry metadata from rate-limit app errors', async () => {
-    await expect(
-      unwrapApplicationResult(
-        Promise.resolve(
-          Result.Error(
-            new AppError({
-              code: 'RATE_LIMITED',
-              category: 'rate_limit',
-              status: 429,
-              retryAfterSeconds: 17,
-            })
-          )
-        ),
-        handlers
-      )
-    ).rejects.toMatchObject({
-      code: 'TOO_MANY_REQUESTS',
-      reason: 'rate_limited',
-      retryAfterSeconds: 17,
-      status: 429,
-      target: 'request',
-    });
-  });
+  it.each([
+    { expected: 17, retryAfterSeconds: 17 },
+    { expected: 60, retryAfterSeconds: 9_999 },
+    { expected: 1, retryAfterSeconds: -1 },
+    { expected: 1, retryAfterSeconds: Number.NaN },
+    { expected: 2, retryAfterSeconds: 1.1 },
+  ])(
+    'bounds $retryAfterSeconds to $expected while mapping rate-limit app errors',
+    async ({ expected, retryAfterSeconds }) => {
+      await expect(
+        unwrapApplicationResult(
+          Promise.resolve(
+            Result.Error(
+              new AppError({
+                code: 'RATE_LIMITED',
+                category: 'rate_limit',
+                status: 429,
+                retryAfterSeconds,
+              })
+            )
+          ),
+          handlers
+        )
+      ).rejects.toMatchObject({
+        code: 'TOO_MANY_REQUESTS',
+        reason: 'rate_limited',
+        retryAfterSeconds: expected,
+        status: 429,
+        target: 'request',
+      });
+    }
+  );
 
   it('ignores code-specific public overrides when the category disagrees', async () => {
     await expect(
