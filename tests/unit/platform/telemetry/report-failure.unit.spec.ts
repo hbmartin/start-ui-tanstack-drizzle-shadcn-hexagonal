@@ -40,4 +40,22 @@ describe('reportTelemetryFailure', () => {
       reportTelemetryFailure('telemetry.test', hostile)
     ).not.toThrow();
   });
+
+  it('maps hostile custom error names to a closed low-cardinality type', () => {
+    const error = vi
+      .spyOn(globalThis.console, 'error')
+      .mockImplementation(() => undefined);
+    const failure = new Error('message-secret');
+    failure.name = 'Bearer-api-key-DO-NOT-LOG';
+
+    reportTelemetryFailure('telemetry.test', failure);
+
+    expect(error).toHaveBeenCalledWith('telemetry.report_failure', {
+      errorType: 'Error',
+      source: 'telemetry.test',
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toMatch(
+      /api-key-DO-NOT-LOG|message-secret/u
+    );
+  });
 });

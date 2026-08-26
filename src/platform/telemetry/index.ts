@@ -1,7 +1,11 @@
 export { forceFlushTelemetry } from './flush';
 export type { TelemetryFlushOutcome } from './flush';
 export { createNoOpTelemetry } from './no-op';
-export { reportTelemetryFailure } from './report-failure';
+export {
+  reportTelemetryFailure,
+  safeTelemetryErrorTypeName,
+  safeTelemetryFailureType,
+} from './report-failure';
 export {
   bindRequestExceptionState,
   claimRequestException,

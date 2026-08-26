@@ -35,6 +35,11 @@ export const resolveViteRuntimeProfile = (
   );
 };
 
+export const shouldInstallNodeNitroFatalOwner = (
+  config: Pick<ConfigEnv, 'command'>,
+  profile: RuntimeProfile
+) => config.command === 'build' && profile === 'node';
+
 export const createRuntimeServerEntrySource = ({
   profile,
   root,

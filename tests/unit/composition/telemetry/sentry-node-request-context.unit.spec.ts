@@ -25,7 +25,7 @@ const runProbe = (script: string) =>
   );
 
 describe('Sentry Node request context', () => {
-  it('rejects an unrelated installed global context manager', () => {
+  it('rejects an unrelated global manager for provider-specific acceptance', () => {
     const result = runProbe(`
       const { context } = await import('@opentelemetry/api');
       const Sentry = await import('@sentry/node');
@@ -47,6 +47,210 @@ describe('Sentry Node request context', () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ claim: false });
+  });
+
+  it('reuses a functional preinstalled Node context without taking ownership', () => {
+    const result = runProbe(`
+      const { context, createContextKey } = await import('@opentelemetry/api');
+      const Sentry = await import('@sentry/node');
+      const { initializeSentryNodeRequestContext } =
+        await import(${JSON.stringify(requestContextUrl)});
+      Sentry.setNodeAsyncContextStrategy();
+      const preinstalled = new Sentry.SentryContextManager();
+      preinstalled.enable();
+      if (!context.setGlobalContextManager(preinstalled)) {
+        throw new Error('preinstalled test context unavailable');
+      }
+      const claim = await initializeSentryNodeRequestContext();
+      if (!claim) throw new Error('functional preinstalled context was rejected');
+      const key = createContextKey('preinstalled-context-test');
+      const marker = {};
+      const propagates = () => {
+        let active = false;
+        context.with(context.active().setValue(key, marker), () => {
+          active = context.active().getValue(key) === marker;
+        });
+        return active;
+      };
+      const beforeRelease = propagates();
+      claim.release();
+      const afterRelease = propagates();
+      context.disable();
+      process.stdout.write(JSON.stringify({ afterRelease, beforeRelease }));
+    `);
+
+    expect(result.error).toBeUndefined();
+    expect({ status: result.status, stderr: result.stderr }).toEqual({
+      status: 0,
+      stderr: '',
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      afterRelease: true,
+      beforeRelease: true,
+    });
+  });
+
+  it('rejects a synchronous stack manager that loses concurrent async context', () => {
+    const result = runProbe(`
+      const { context, ROOT_CONTEXT } = await import('@opentelemetry/api');
+      const { initializeSentryNodeRequestContext } =
+        await import(${JSON.stringify(requestContextUrl)});
+      class StackContextManager {
+        stack = [];
+        active() {
+          return this.stack.at(-1) ?? ROOT_CONTEXT;
+        }
+        bind(_context, target) {
+          return target;
+        }
+        disable() {
+          this.stack = [];
+          return this;
+        }
+        enable() {
+          return this;
+        }
+        with(activeContext, operation, thisArg, ...args) {
+          this.stack.push(activeContext);
+          try {
+            return operation.call(thisArg, ...args);
+          } finally {
+            this.stack.pop();
+          }
+        }
+      }
+      const preinstalled = new StackContextManager();
+      if (!context.setGlobalContextManager(preinstalled)) {
+        throw new Error('preinstalled stack context unavailable');
+      }
+      const claim = await initializeSentryNodeRequestContext();
+      context.disable();
+      process.stdout.write(JSON.stringify({ claim: Boolean(claim) }));
+    `);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ claim: false });
+  });
+
+  it('rejects a generic async manager that does not isolate Sentry scopes', () => {
+    const result = runProbe(`
+      const { AsyncLocalStorage } = await import('node:async_hooks');
+      const { context, ROOT_CONTEXT } = await import('@opentelemetry/api');
+      const { initializeSentryNodeRequestContext } =
+        await import(${JSON.stringify(requestContextUrl)});
+      class GenericAsyncContextManager {
+        storage = new AsyncLocalStorage();
+        active() {
+          return this.storage.getStore() ?? ROOT_CONTEXT;
+        }
+        bind(_context, target) {
+          return target;
+        }
+        disable() {
+          this.storage.disable();
+          return this;
+        }
+        enable() {
+          return this;
+        }
+        with(activeContext, operation, thisArg, ...args) {
+          return this.storage.run(
+            activeContext,
+            operation.bind(thisArg, ...args)
+          );
+        }
+      }
+      const preinstalled = new GenericAsyncContextManager().enable();
+      if (!context.setGlobalContextManager(preinstalled)) {
+        throw new Error('preinstalled async context unavailable');
+      }
+      const claim = await initializeSentryNodeRequestContext();
+      context.disable();
+      process.stdout.write(JSON.stringify({ claim: Boolean(claim) }));
+    `);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ claim: false });
+  });
+
+  it('degrades safely when a hostile preinstalled manager throws during probing', () => {
+    const result = runProbe(`
+      const { context } = await import('@opentelemetry/api');
+      const { initializeSentryNodeRequestContext } =
+        await import(${JSON.stringify(requestContextUrl)});
+      const hostile = {
+        active() {
+          throw new Error('hostile active');
+        },
+        bind(_context, target) {
+          return target;
+        },
+        disable() {
+          return this;
+        },
+        enable() {
+          return this;
+        },
+        with() {
+          throw new Error('hostile with');
+        },
+      };
+      if (!context.setGlobalContextManager(hostile)) {
+        throw new Error('hostile test context unavailable');
+      }
+      const claim = await initializeSentryNodeRequestContext();
+      context.disable();
+      process.stdout.write(JSON.stringify({ claim: Boolean(claim) }));
+    `);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ claim: false });
+  });
+
+  it('bounds a preinstalled manager that never completes a context operation', () => {
+    const result = runProbe(`
+      const { context, ROOT_CONTEXT } = await import('@opentelemetry/api');
+      const { initializeSentryNodeRequestContext } =
+        await import(${JSON.stringify(requestContextUrl)});
+      const stalled = {
+        active() {
+          return ROOT_CONTEXT;
+        },
+        bind(_context, target) {
+          return target;
+        },
+        disable() {
+          return this;
+        },
+        enable() {
+          return this;
+        },
+        with() {
+          return new Promise(() => undefined);
+        },
+      };
+      if (!context.setGlobalContextManager(stalled)) {
+        throw new Error('stalled test context unavailable');
+      }
+      const startedAt = Date.now();
+      const claim = await initializeSentryNodeRequestContext();
+      const elapsedMs = Date.now() - startedAt;
+      context.disable();
+      process.stdout.write(JSON.stringify({ claim: Boolean(claim), elapsedMs }));
+    `);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout) as {
+      claim: boolean;
+      elapsedMs: number;
+    };
+    expect(output.claim).toBe(false);
+    expect(output.elapsedMs).toBeGreaterThanOrEqual(200);
+    expect(output.elapsedMs).toBeLessThan(2_000);
   });
 
   it('integrates with the real Vercel trace owner without duplicate context registration', () => {

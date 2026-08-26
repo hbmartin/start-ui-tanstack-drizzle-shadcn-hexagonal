@@ -5,6 +5,7 @@ import {
   createRuntimeServerEntrySource,
   resolveViteRuntimeProfile,
   runtimeServerEntryPaths,
+  shouldInstallNodeNitroFatalOwner,
 } from '../../../scripts/runtime-profile-vite';
 
 describe('runtime profile Vite selection', () => {
@@ -29,6 +30,18 @@ describe('runtime profile Vite selection', () => {
     expect(resolveViteRuntimeProfile({ command: 'serve' }, undefined)).toBe(
       'node'
     );
+  });
+
+  it('installs fatal ownership only for production Node builds', () => {
+    expect(shouldInstallNodeNitroFatalOwner({ command: 'build' }, 'node')).toBe(
+      true
+    );
+    expect(shouldInstallNodeNitroFatalOwner({ command: 'serve' }, 'node')).toBe(
+      false
+    );
+    expect(
+      shouldInstallNodeNitroFatalOwner({ command: 'build' }, 'vercel')
+    ).toBe(false);
   });
 
   it.each([

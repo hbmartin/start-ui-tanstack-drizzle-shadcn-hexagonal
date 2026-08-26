@@ -16,24 +16,27 @@ import {
   installPersistentTelemetryLifecycle,
 } from './process-lifecycle';
 
-let initialized = false;
+let initialization: Promise<void> | undefined;
 
 export const runWithNodeSentryRequestIsolation =
   runWithSentryNodeRequestIsolation;
 
-export const initNodeTelemetry = () => {
-  if (initialized) return;
-
+const initNodeTelemetry = async () => {
   const telemetryConfig = getTelemetryConfig();
   setLocalTelemetrySummaryRecorder(persistLocalTelemetrySummary);
-  const requestContext = initializeSentryNodeRequestContext();
+  const requestContext = await initializeSentryNodeRequestContext();
   let openTelemetry: ReturnType<typeof initOpenTelemetryServer>;
-  if (!telemetryConfig.otelSdkDisabled) {
+  if (!telemetryConfig.otelSdkDisabled && requestContext) {
     try {
       openTelemetry = initOpenTelemetryServer();
     } catch (failure) {
       reportTelemetryFailure('otel.node.initialize', failure);
     }
+  } else if (!telemetryConfig.otelSdkDisabled) {
+    reportTelemetryFailure(
+      'otel.node.context_unavailable',
+      new Error('A functional async context owner is required')
+    );
   }
 
   const installedTelemetry = installServerTelemetry({
@@ -57,5 +60,11 @@ export const initNodeTelemetry = () => {
   if (persistentRuntime) {
     installPersistentTelemetryLifecycle(persistentRuntime);
   }
-  initialized = true;
 };
+
+const initializeNodeTelemetryOnce = (): Promise<void> => {
+  initialization ??= initNodeTelemetry();
+  return initialization;
+};
+
+export { initializeNodeTelemetryOnce as initNodeTelemetry };

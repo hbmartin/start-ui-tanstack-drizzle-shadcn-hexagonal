@@ -32,6 +32,7 @@ const { createCloudflareTelemetryAdapter } =
 const { configureCloudflareRequestTelemetry } =
   await import('./request-telemetry');
 const { scheduleCloudflareRequestFlush } = await import('./request-lifecycle');
+let lastKnownNativeTelemetry = createNoOpTelemetry();
 
 const fetchCloudflareApplication = ({
   context,
@@ -64,12 +65,13 @@ const entry = {
     environment: CloudflareEnvironment,
     context: CloudflareExecutionContext
   ) {
-    let nativeTelemetry = createNoOpTelemetry();
+    let nativeTelemetry = lastKnownNativeTelemetry;
     try {
       nativeTelemetry = createCloudflareTelemetryAdapter({
         analytics: environment.START_UI_TELEMETRY_METRICS,
         tracing,
       });
+      lastKnownNativeTelemetry = nativeTelemetry;
     } catch (failure) {
       reportTelemetryFailure('otel.cloudflare.configure', failure);
     }

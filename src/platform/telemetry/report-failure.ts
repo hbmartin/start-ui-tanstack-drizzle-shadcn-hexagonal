@@ -1,10 +1,22 @@
-const safeFailureType = (failure: unknown): string => {
+const SAFE_ERROR_TYPES = new Set([
+  'AggregateError',
+  'Error',
+  'EvalError',
+  'RangeError',
+  'ReferenceError',
+  'SyntaxError',
+  'TypeError',
+  'URIError',
+]);
+
+export const safeTelemetryErrorTypeName = (value: unknown): string =>
+  typeof value === 'string' && SAFE_ERROR_TYPES.has(value) ? value : 'Error';
+
+export const safeTelemetryFailureType = (failure: unknown): string => {
   try {
     if (failure instanceof Error) {
       const name: unknown = failure.name;
-      return typeof name === 'string' && name.length > 0 && name.length <= 64
-        ? name
-        : 'Error';
+      return safeTelemetryErrorTypeName(name);
     }
 
     return failure === null ? 'null' : typeof failure;
@@ -30,7 +42,7 @@ export const reportTelemetryFailure = (
     if (typeof report !== 'function') return;
 
     report.call(consoleLike, 'telemetry.report_failure', {
-      errorType: safeFailureType(failure),
+      errorType: safeTelemetryFailureType(failure),
       source,
     });
   } catch {

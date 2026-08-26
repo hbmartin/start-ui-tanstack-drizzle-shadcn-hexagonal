@@ -72,7 +72,7 @@ const readJson = (filePath) => {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 };
 
-const readApplicationServerEntryCalls = (filePath) => {
+const readParsedModule = (filePath) => {
   assertFile(filePath);
   const source = fs.readFileSync(filePath, 'utf8');
   const parsed = parseSync(filePath, source, { sourceType: 'module' });
@@ -80,6 +80,11 @@ const readApplicationServerEntryCalls = (filePath) => {
     parsed.errors.length === 0,
     `${filePath} must be parseable before checking server entry ownership`
   );
+  return { program: parsed.program, source };
+};
+
+const readApplicationServerEntryCalls = (filePath) => {
+  const { program } = readParsedModule(filePath);
   const calls = [];
   new Visitor({
     CallExpression(node) {
@@ -90,7 +95,7 @@ const readApplicationServerEntryCalls = (filePath) => {
         calls.push(node);
       }
     },
-  }).visit(parsed.program);
+  }).visit(program);
   return calls;
 };
 
@@ -114,6 +119,273 @@ const assertServerEntryOwners = (filePath, profile) => {
   assert(
     actualOwner === expectedOwner,
     `${filePath} must contain ${profile} server entry owner ${expectedOwner}`
+  );
+};
+
+const propertyLocalName = (property) => identifierName(property?.value);
+
+const literalString = (node) => {
+  if (node?.type !== 'Literal') return undefined;
+  return typeof node.value === 'string' ? node.value : undefined;
+};
+
+const unwrapAwaitExpression = (node) =>
+  node?.type === 'AwaitExpression' ? node.argument : node;
+
+const dynamicImportSource = (declarator) => {
+  const importExpression = unwrapAwaitExpression(declarator.init);
+  if (importExpression?.type !== 'ImportExpression') return undefined;
+  return literalString(importExpression.source);
+};
+
+const findTopLevelDynamicImport = (program, localName) => {
+  const matches = program.body.flatMap((statement) =>
+    statement.type === 'VariableDeclaration'
+      ? statement.declarations.filter(
+          (declarator) =>
+            declarator.id?.type === 'ObjectPattern' &&
+            declarator.id.properties.some(
+              (property) => propertyLocalName(property) === localName
+            ) &&
+            dynamicImportSource(declarator)
+        )
+      : []
+  );
+  return matches.length === 1 ? dynamicImportSource(matches[0]) : undefined;
+};
+
+const topLevelAwaitedExpression = (statement) => {
+  if (statement.type !== 'ExpressionStatement') return undefined;
+  if (statement.expression.type !== 'AwaitExpression') return undefined;
+  return statement.expression.argument;
+};
+
+const isAwaitedTopLevelCall = (statement, localName) => {
+  const call = topLevelAwaitedExpression(statement);
+  if (call?.type !== 'CallExpression') return false;
+  return identifierName(call.callee) === localName;
+};
+
+const isWithinDirectory = (filePath, directoryPath) => {
+  const relativePath = path.relative(directoryPath, filePath);
+  return (
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath)
+  );
+};
+
+const resolveLinkedModule = (fromFile, specifier, artifactRoot) => {
+  assert(
+    specifier.startsWith('.'),
+    `${fromFile} must import Node telemetry from its artifact`
+  );
+  const linkedFile = path.resolve(path.dirname(fromFile), specifier);
+  assert(
+    isWithinDirectory(linkedFile, artifactRoot),
+    `${fromFile} must keep Node telemetry inside its artifact`
+  );
+  assertFile(linkedFile);
+  return linkedFile;
+};
+
+const staticImportForBinding = (statement, localName) => {
+  if (statement.type !== 'ImportDeclaration') return undefined;
+  const specifier = statement.specifiers.find(
+    (candidate) => identifierName(candidate.local) === localName
+  );
+  if (specifier?.type !== 'ImportSpecifier') return undefined;
+  return {
+    importedName: identifierName(specifier.imported),
+    source: literalString(statement.source),
+  };
+};
+
+const findStaticImport = (program, localName) =>
+  program.body
+    .map((statement) => staticImportForBinding(statement, localName))
+    .find(Boolean);
+
+const isFunctionExpression = (node) =>
+  node?.type === 'ArrowFunctionExpression' ||
+  node?.type === 'FunctionExpression';
+
+const variableFunctionEntry = (declarator) => {
+  if (declarator.id.type !== 'Identifier') return [];
+  return isFunctionExpression(declarator.init)
+    ? [[declarator.id.name, declarator.init]]
+    : [];
+};
+
+const topLevelFunctionEntries = (statement) => {
+  if (statement.type === 'VariableDeclaration') {
+    return statement.declarations.flatMap(variableFunctionEntry);
+  }
+  if (statement.type !== 'FunctionDeclaration') return [];
+  return statement.id ? [[statement.id.name, statement]] : [];
+};
+
+const namedExportEntry = (specifier) => {
+  const exportedName = identifierName(specifier.exported);
+  const localName = identifierName(specifier.local);
+  return exportedName && localName ? [[exportedName, localName]] : [];
+};
+
+const namedExportEntries = (statement) =>
+  statement.type === 'ExportNamedDeclaration'
+    ? statement.specifiers.flatMap(namedExportEntry)
+    : [];
+
+const nestedFunctionRanges = (functionNode) => {
+  const ranges = [];
+  const recordNestedRange = (node) => {
+    if (node !== functionNode) ranges.push([node.start, node.end]);
+  };
+  new Visitor({
+    ArrowFunctionExpression: recordNestedRange,
+    FunctionDeclaration: recordNestedRange,
+    FunctionExpression: recordNestedRange,
+  }).visit(functionNode);
+  return ranges;
+};
+
+const isInsideNestedFunction = (node, ranges) =>
+  ranges.some(([start, end]) => start <= node.start && node.end <= end);
+
+const directFunctionCalls = (functionNode, nestedRanges) => {
+  const calls = new Set();
+  new Visitor({
+    CallExpression(node) {
+      if (isInsideNestedFunction(node, nestedRanges)) return;
+      const name = identifierName(node.callee);
+      if (name) calls.add(name);
+    },
+  }).visit(functionNode);
+  return calls;
+};
+
+const constructedIdentifierName = (node) => {
+  const directName = identifierName(node.callee);
+  return directName || identifierName(node.callee.property);
+};
+
+const directlyConstructsSentryContext = (functionNode, nestedRanges) => {
+  let constructsSentryContext = false;
+  new Visitor({
+    NewExpression(node) {
+      if (isInsideNestedFunction(node, nestedRanges)) return;
+      if (constructedIdentifierName(node) === 'SentryContextManager') {
+        constructsSentryContext = true;
+      }
+    },
+  }).visit(functionNode);
+  return constructsSentryContext;
+};
+
+const inspectFunction = (functionNode) => {
+  const nestedRanges = nestedFunctionRanges(functionNode);
+  return {
+    calls: directFunctionCalls(functionNode, nestedRanges),
+    constructsSentryContext: directlyConstructsSentryContext(
+      functionNode,
+      nestedRanges
+    ),
+  };
+};
+
+const reachableFunctions = (functions, initialName) => {
+  const pending = [initialName];
+  const visited = new Set();
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (visited.has(name)) continue;
+    const functionNode = functions.get(name);
+    if (!functionNode) continue;
+    visited.add(name);
+    const { calls } = inspectFunction(functionNode);
+    pending.push(...calls.values().filter((call) => functions.has(call)));
+  }
+  return visited;
+};
+
+const ownsNodeAsyncContext = (program, exportedBinding) => {
+  const functions = new Map(program.body.flatMap(topLevelFunctionEntries));
+  const exports = new Map(program.body.flatMap(namedExportEntries));
+  const initialName = exports.get(exportedBinding) ?? exportedBinding;
+  const evidence = [...reachableFunctions(functions, initialName)].map((name) =>
+    inspectFunction(functions.get(name))
+  );
+  return (
+    evidence.some(({ calls }) =>
+      calls.has('initializeSentryNodeRequestContext')
+    ) && evidence.some(({ constructsSentryContext }) => constructsSentryContext)
+  );
+};
+
+const localBindingForExport = (program, exportedBinding) => {
+  const exports = new Map(program.body.flatMap(namedExportEntries));
+  return exports.get(exportedBinding) ?? exportedBinding;
+};
+
+const nextTelemetryLink = (program, currentBinding) => {
+  const localBinding = localBindingForExport(program, currentBinding);
+  const linkedImport = findStaticImport(program, localBinding);
+  if (!linkedImport) return undefined;
+  if (!linkedImport.importedName) return undefined;
+  if (!linkedImport.source) return undefined;
+  return {
+    binding: linkedImport.importedName,
+    source: linkedImport.source,
+  };
+};
+
+const findLinkedNodeAsyncContextOwner = (
+  initialFile,
+  artifactRoot,
+  initialBinding
+) => {
+  let currentFile = initialFile;
+  let currentBinding = initialBinding;
+  for (let depth = 0; depth < 5; depth += 1) {
+    const { program } = readParsedModule(currentFile);
+    if (ownsNodeAsyncContext(program, currentBinding)) return true;
+    const nextLink = nextTelemetryLink(program, currentBinding);
+    if (!nextLink) return false;
+    currentFile = resolveLinkedModule(
+      currentFile,
+      nextLink.source,
+      artifactRoot
+    );
+    currentBinding = nextLink.binding;
+  }
+  return false;
+};
+
+const assertNodeAsyncContextOwner = (entryFile, artifactRoot) => {
+  const { program: entryProgram } = readParsedModule(entryFile);
+  const entryImport = findTopLevelDynamicImport(
+    entryProgram,
+    'initNodeTelemetry'
+  );
+  assert(
+    entryImport,
+    `${entryFile} must import its Node telemetry initializer`
+  );
+  assert(
+    entryProgram.body.some((statement) =>
+      isAwaitedTopLevelCall(statement, 'initNodeTelemetry')
+    ),
+    `${entryFile} must await its imported Node telemetry initializer`
+  );
+
+  const initialFile = resolveLinkedModule(entryFile, entryImport, artifactRoot);
+  assert(
+    findLinkedNodeAsyncContextOwner(
+      initialFile,
+      artifactRoot,
+      'initNodeTelemetry'
+    ),
+    `${entryFile} must link its Node async-context owner`
   );
 };
 
@@ -162,6 +434,7 @@ const verifyNode = (root) => {
   const applicationEntry = path.join(output, 'server/_ssr/ssr.mjs');
   assertOnlyProfileMarker(applicationEntry, 'node');
   assertServerEntryOwners(applicationEntry, 'node');
+  assertNodeAsyncContextOwner(applicationEntry, path.join(output, 'server'));
   assertRequiredRuntimeTokens(path.join(output, 'server'), 'node');
   assertNoForbiddenRuntimeTokens(path.join(output, 'server'), 'node');
 };

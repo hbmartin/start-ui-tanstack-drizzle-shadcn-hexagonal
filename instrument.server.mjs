@@ -2,7 +2,10 @@ import * as Sentry from '@sentry/node';
 
 import { sanitizeSentryEvent } from './src/composition/telemetry/sentry-adapter.ts';
 import { createExceptionOnlyIntegrations } from './src/composition/telemetry/sentry-exception-integrations.ts';
-import { reportTelemetryFailure } from './src/platform/telemetry/report-failure.ts';
+import {
+  reportTelemetryFailure,
+  safeTelemetryFailureType,
+} from './src/platform/telemetry/report-failure.ts';
 
 const dsn = process.env.SENTRY_DSN;
 const environment =
@@ -33,9 +36,12 @@ const instrumentationState = globalThis[instrumentationStateKey] ?? {
 };
 globalThis[instrumentationStateKey] = instrumentationState;
 
-const reportFatalRuntimeFailure = (source) => {
+const reportFatalRuntimeFailure = (source, failure) => {
   try {
-    console.error('runtime.fatal', { source });
+    console.error('runtime.fatal', {
+      errorType: safeTelemetryFailureType(failure),
+      source,
+    });
   } catch {
     // The process is already terminal; never surface the original value here.
   }
@@ -47,7 +53,7 @@ const exitAfterSentryFlush = (source, failure) => {
     return;
   }
   instrumentationState.fatalExitStarted = true;
-  reportFatalRuntimeFailure(source);
+  reportFatalRuntimeFailure(source, failure);
 
   if (!instrumentationState.sentryReady) {
     process.exit(1);
@@ -92,6 +98,13 @@ const installFatalHandlers = () => {
   instrumentationState.handlersInstalled = true;
   const guard = instrumentationState.fatalListenerGuard;
   globalThis[fatalOwnerReady] = false;
+  let guardDetached = false;
+  const detachGuard = () => {
+    if (guardDetached) return;
+    guardDetached = true;
+    process.removeListener('newListener', guard.listener);
+    globalThis[fatalOwnerReady] = true;
+  };
 
   const uncaughtExceptionHandler = (failure) => {
     exitAfterSentryFlush('runtime.uncaught_exception', failure);
@@ -116,10 +129,7 @@ const installFatalHandlers = () => {
     guard.suppressedEvents.add(event);
     queueMicrotask(() => {
       process.removeListener(event, listener);
-      if (guard.suppressedEvents.size === 2) {
-        process.removeListener('newListener', guard.listener);
-        globalThis[fatalOwnerReady] = true;
-      }
+      if (guard.suppressedEvents.size === 2) detachGuard();
     });
   };
 
@@ -127,6 +137,7 @@ const installFatalHandlers = () => {
   // after this plugin evaluates. Suppress only that bootstrap pair, then
   // detach so later monitoring and cleanup hooks remain possible.
   process.on('newListener', guard.listener);
+  setImmediate(detachGuard).unref();
 };
 
 if (globalThis[nodeNitroFatalOwner]) installFatalHandlers();

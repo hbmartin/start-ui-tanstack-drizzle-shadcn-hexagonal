@@ -32,7 +32,17 @@ const createNodeArtifact = (root) => {
   write(
     root,
     '.output/node/server/_ssr/ssr.mjs',
-    'createApplicationServerEntry("node", undefined, runWithNodeSentryRequestIsolation);NodeTracerProvider'
+    'const {initNodeTelemetry}=await import("../_libs/telemetry-bridge.mjs");await initNodeTelemetry();createApplicationServerEntry("node", undefined, runWithNodeSentryRequestIsolation);NodeTracerProvider'
+  );
+  write(
+    root,
+    '.output/node/server/_libs/telemetry-bridge.mjs',
+    'import {n as initializeNodeTelemetryOnce} from "../_ssr/telemetry-owner.mjs";export {initializeNodeTelemetryOnce as initNodeTelemetry};'
+  );
+  write(
+    root,
+    '.output/node/server/_ssr/telemetry-owner.mjs',
+    'const initializeSentryNodeRequestContext=()=>{};const create=()=>new SentryContextManager();const initNodeTelemetry=async()=>{await initializeSentryNodeRequestContext();create()};export {initNodeTelemetry as n};'
   );
   fs.mkdirSync(path.join(root, '.output/node/public'));
 };
@@ -172,17 +182,80 @@ describe('runtime artifact verifier', () => {
           .readFileSync(entryPath, 'utf8')
           .replace(owner, 'undefined')};const detachedOwner = "${owner}"`
       );
-      write(
-        root,
-        `${path.dirname(entry)}/sentry-library.mjs`,
-        'class SentryContextManager {}'
-      );
-
       expect(() => verifyRuntimeProfile(profile, root)).toThrow(
         `${profile} server entry owner ${owner}`
       );
     }
   );
+
+  it('rejects a Node artifact without its async-context owner', () => {
+    const root = fixture();
+    createNodeArtifact(root);
+    const owner = '.output/node/server/_ssr/telemetry-owner.mjs';
+    const ownerPath = path.join(root, owner);
+    write(
+      root,
+      owner,
+      fs
+        .readFileSync(ownerPath, 'utf8')
+        .replace('new SentryContextManager()', 'new MissingContextOwner()')
+    );
+    write(
+      root,
+      '.output/node/server/vendor/unused-sentry.mjs',
+      'export class SentryContextManager {}'
+    );
+
+    expect(() => verifyRuntimeProfile('node', root)).toThrow(
+      'must link its Node async-context owner'
+    );
+  });
+
+  it('rejects async-context symbols that are unreachable from the initializer', () => {
+    const root = fixture();
+    createNodeArtifact(root);
+    write(
+      root,
+      '.output/node/server/_ssr/telemetry-owner.mjs',
+      'const initializeSentryNodeRequestContext=()=>{};const unused=()=>new SentryContextManager();const alsoUnused=()=>initializeSentryNodeRequestContext();const initNodeTelemetry=async()=>{};export {initNodeTelemetry as n};'
+    );
+
+    expect(() => verifyRuntimeProfile('node', root)).toThrow(
+      'must link its Node async-context owner'
+    );
+  });
+
+  it('rejects async-context symbols inside an uncalled nested helper', () => {
+    const root = fixture();
+    createNodeArtifact(root);
+    write(
+      root,
+      '.output/node/server/_ssr/telemetry-owner.mjs',
+      'const initializeSentryNodeRequestContext=()=>{};const initNodeTelemetry=async()=>{const unused=()=>{initializeSentryNodeRequestContext();new SentryContextManager()}};export {initNodeTelemetry as n};'
+    );
+
+    expect(() => verifyRuntimeProfile('node', root)).toThrow(
+      'must link its Node async-context owner'
+    );
+  });
+
+  it('rejects a Node artifact that does not await telemetry initialization', () => {
+    const root = fixture();
+    createNodeArtifact(root);
+    const entry = '.output/node/server/_ssr/ssr.mjs';
+    const entryPath = path.join(root, entry);
+    write(
+      root,
+      entry,
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace('await initNodeTelemetry()', 'initNodeTelemetry()')
+    );
+
+    expect(() => verifyRuntimeProfile('node', root)).toThrow(
+      'must await its imported Node telemetry initializer'
+    );
+  });
 
   it.each([
     [

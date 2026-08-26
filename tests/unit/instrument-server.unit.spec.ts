@@ -67,6 +67,7 @@ const runFatalProcessProbe = async (
     await import(${JSON.stringify(instrumentationUrl)});
     setImmediate(() => {
       const failure = new Error(${JSON.stringify(secret)});
+      failure.name = 'Bearer-' + ${JSON.stringify(secret)};
       if (${JSON.stringify(failureMode)} === 'throw') throw failure;
       void Promise.reject(failure);
     });
@@ -304,6 +305,32 @@ describe('server instrumentation', () => {
     );
   });
 
+  it('bounds the Nitro listener guard when only one bootstrap listener appears', async () => {
+    await import('../../instrument.server.mjs');
+    const nitroUncaughtListener = vi.fn();
+
+    process.on('uncaughtException', nitroUncaughtListener);
+    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(process.listeners('uncaughtException')).not.toContain(
+      nitroUncaughtListener
+    );
+    expect(
+      globalThis[
+        Symbol.for('start-ui-web.telemetry.fatal-owner-ready') as never
+      ]
+    ).toBe(true);
+
+    const laterRejectionListener = vi.fn();
+    process.on('unhandledRejection', laterRejectionListener);
+    await Promise.resolve();
+
+    expect(process.listeners('unhandledRejection')).toContain(
+      laterRejectionListener
+    );
+  });
+
   it('does not abort optional server bootstrap when Sentry initialization fails', async () => {
     vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
     sentry.init.mockImplementationOnce(() => {
@@ -409,7 +436,7 @@ describe('server instrumentation', () => {
       const Sentry = await import('@sentry/node');
       const { initializeSentryNodeRequestContext, runWithSentryNodeRequestIsolation } =
         await import(${JSON.stringify(requestContextUrl)});
-      const requestContext = initializeSentryNodeRequestContext();
+      const requestContext = await initializeSentryNodeRequestContext();
       if (!requestContext) throw new Error('request context unavailable');
       const { createSentryTelemetryAdapter } = await import(${JSON.stringify(adapterUrl)});
       const adapter = createSentryTelemetryAdapter(Sentry);
@@ -476,6 +503,7 @@ describe('server instrumentation', () => {
       expect(result).toMatchObject({ code: 1, signal: null });
       expect(result.stderr).toContain('runtime.fatal');
       expect(result.stderr).toContain(expectedSource);
+      expect(result.stderr).toContain('Error');
       expect(result.stderr).not.toContain(result.secret);
       expect(result.envelopes).toHaveLength(1);
       const envelope = decodedEnvelope(result.envelopes[0]!);
@@ -496,6 +524,7 @@ describe('server instrumentation', () => {
       expect(result).toMatchObject({ code: 1, signal: null, envelopes: [] });
       expect(result.stderr).toContain('runtime.fatal');
       expect(result.stderr).toContain(expectedSource);
+      expect(result.stderr).toContain('Error');
       expect(result.stderr).not.toContain(result.secret);
     },
     15_000

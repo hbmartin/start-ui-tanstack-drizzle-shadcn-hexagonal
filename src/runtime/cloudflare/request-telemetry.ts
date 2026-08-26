@@ -16,7 +16,6 @@ type CloudflareSentryApi = Parameters<typeof createCloudflareSentryOptions>[0] &
   Parameters<typeof createSentryTelemetryAdapter>[0];
 
 export type CloudflareRequestTelemetryConfiguration = {
-  sentryEnabled: boolean;
   sentryOptions?: CloudflareOptions;
 };
 
@@ -39,7 +38,7 @@ export const configureCloudflareRequestTelemetry = ({
 }): CloudflareRequestTelemetryConfiguration => {
   setTelemetry(nativeTelemetry);
   if (!environment.SENTRY_DSN || !sentryRequestIsolationReady) {
-    return { sentryEnabled: false };
+    return {};
   }
 
   try {
@@ -54,9 +53,9 @@ export const configureCloudflareRequestTelemetry = ({
     setTelemetry(
       createTelemetryAdapterChain([nativeTelemetry, sentryTelemetry])
     );
-    return { sentryEnabled: true, sentryOptions };
+    return { sentryOptions };
   } catch (failure) {
     reportTelemetryFailure('sentry.cloudflare.configure', failure);
-    return { sentryEnabled: false };
+    return {};
   }
 };

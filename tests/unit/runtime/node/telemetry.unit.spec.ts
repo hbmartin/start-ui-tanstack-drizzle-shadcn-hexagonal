@@ -70,7 +70,7 @@ describe('Node telemetry owner', () => {
   it('keeps Sentry isolation but skips every app-owned OTel provider when disabled', async () => {
     const { initNodeTelemetry } = await import('@/runtime/node/telemetry');
 
-    initNodeTelemetry();
+    await initNodeTelemetry();
 
     expect(mocks.initOpenTelemetryServer).not.toHaveBeenCalled();
     expect(mocks.initializeSentryNodeRequestContext).toHaveBeenCalledOnce();
@@ -86,12 +86,40 @@ describe('Node telemetry owner', () => {
     mocks.config.otelSdkDisabled = false;
     const { initNodeTelemetry } = await import('@/runtime/node/telemetry');
 
-    initNodeTelemetry();
+    await initNodeTelemetry();
 
     expect(mocks.initOpenTelemetryServer).toHaveBeenCalledOnce();
     expect(mocks.installServerTelemetry).toHaveBeenCalledWith({
       openTelemetry: expect.any(Object),
       sentry: expect.any(Object),
     });
+  });
+
+  it('does not install OTel providers without a functional async context owner', async () => {
+    mocks.config.otelSdkDisabled = false;
+    mocks.initializeSentryNodeRequestContext.mockReturnValueOnce(undefined);
+    const { initNodeTelemetry } = await import('@/runtime/node/telemetry');
+
+    await initNodeTelemetry();
+
+    expect(mocks.initOpenTelemetryServer).not.toHaveBeenCalled();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledWith(
+      'otel.node.context_unavailable',
+      expect.any(Error)
+    );
+    expect(mocks.installServerTelemetry).toHaveBeenCalledWith({
+      openTelemetry: undefined,
+      sentry: undefined,
+    });
+  });
+
+  it('shares one initialization across concurrent bootstrap callers', async () => {
+    const { initNodeTelemetry } = await import('@/runtime/node/telemetry');
+
+    await Promise.all([initNodeTelemetry(), initNodeTelemetry()]);
+
+    expect(mocks.initializeSentryNodeRequestContext).toHaveBeenCalledOnce();
+    expect(mocks.installServerTelemetry).toHaveBeenCalledOnce();
+    expect(mocks.setLocalTelemetrySummaryRecorder).toHaveBeenCalledOnce();
   });
 });

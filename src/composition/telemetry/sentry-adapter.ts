@@ -1,7 +1,7 @@
 import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields';
-
 import {
   reportTelemetryFailure,
+  safeTelemetryErrorTypeName,
   type TelemetryAdapter,
   type TelemetryCorrelation,
   toTelemetryStringTags,
@@ -242,7 +242,7 @@ const projectSentryExceptionValue = (
     'stacktrace',
     projectSentryStacktrace(record.stacktrace)
   );
-  assignDefined(projected, 'type', boundedSafeLabel(record.type));
+  assignDefined(projected, 'type', safeTelemetryErrorTypeName(record.type));
 
   return projected;
 };

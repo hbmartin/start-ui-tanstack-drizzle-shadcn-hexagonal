@@ -55,7 +55,7 @@ describe('Cloudflare request telemetry configuration', () => {
       sentryRequestIsolationReady: true,
     });
 
-    expect(result).toEqual({ sentryEnabled: false });
+    expect(result).toEqual({});
     expect(integrationFactory).not.toHaveBeenCalled();
     expect(getTelemetry()).toBe(nativeTelemetry);
   });

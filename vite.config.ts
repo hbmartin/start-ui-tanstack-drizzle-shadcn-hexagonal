@@ -14,6 +14,7 @@ import {
   resolveViteRuntimeProfile,
   RUNTIME_PROFILE_ENV_KEY,
   runtimeServerEntryPlugin,
+  shouldInstallNodeNitroFatalOwner,
 } from './scripts/runtime-profile-vite.js';
 import { BROWSER_TELEMETRY_BUILD_TARGET } from './scripts/browser-telemetry-target.js';
 import { shouldEnableSentryBuildPlugin } from './scripts/sentry-build-plugin.js';
@@ -21,6 +22,7 @@ import { loadViteBuildEnvironment } from './scripts/vite-build-environment.js';
 import type { RuntimeProfile } from './src/platform/runtime/runtime-profile.js';
 
 const createRuntimeBuildPlugins = (
+  command: 'build' | 'serve',
   runtimeProfile: RuntimeProfile,
   root: string
 ) => {
@@ -36,12 +38,14 @@ const createRuntimeBuildPlugins = (
             publicDir: '.output/node/public',
             serverDir: '.output/node/server',
           },
-          plugins: [
-            path.resolve(
-              root,
-              'src/runtime/node/nitro-instrumentation-plugin.ts'
-            ),
-          ],
+          plugins: shouldInstallNodeNitroFatalOwner({ command }, runtimeProfile)
+            ? [
+                path.resolve(
+                  root,
+                  'src/runtime/node/nitro-instrumentation-plugin.ts'
+                ),
+              ]
+            : [],
           preset: 'node-server',
         }
       : {
@@ -140,7 +144,11 @@ export default defineConfig(({ command, mode }) => {
         authToken: sentryEnv.SENTRY_AUTH_TOKEN,
       })
     : [];
-  const runtimeBuildPlugins = createRuntimeBuildPlugins(runtimeProfile, root);
+  const runtimeBuildPlugins = createRuntimeBuildPlugins(
+    command,
+    runtimeProfile,
+    root
+  );
 
   return {
     envDir,
