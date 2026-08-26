@@ -25,47 +25,26 @@ const { application, sentryRequestIsolationReady } =
     return createApplicationServerEntry('cloudflare');
   });
 const { tracing } = await import('cloudflare:workers');
-const { createSentryTelemetryAdapter } =
-  await import('@/composition/telemetry/sentry-adapter');
-const { createTelemetryAdapterChain } =
-  await import('@/composition/telemetry/adapter-chain');
-const { setTelemetry } = await import('@/platform/telemetry');
+const { createNoOpTelemetry, reportTelemetryFailure } =
+  await import('@/platform/telemetry');
 const { createCloudflareTelemetryAdapter } =
   await import('./telemetry-adapter');
-const { createCloudflareSentryOptions } =
-  await import('@/composition/telemetry/sentry-cloudflare-options');
+const { configureCloudflareRequestTelemetry } =
+  await import('./request-telemetry');
 const { scheduleCloudflareRequestFlush } = await import('./request-lifecycle');
-
-const installCloudflareRequestTelemetry = (
-  nativeTelemetry: ReturnType<typeof createCloudflareTelemetryAdapter>,
-  sentryEnabled: boolean
-) => {
-  const sentryTelemetry = sentryEnabled
-    ? createSentryTelemetryAdapter(Sentry, {
-        flushOwner: 'request-wrapper',
-      })
-    : undefined;
-  setTelemetry(
-    sentryTelemetry
-      ? createTelemetryAdapterChain([nativeTelemetry, sentryTelemetry])
-      : nativeTelemetry
-  );
-};
 
 const fetchCloudflareApplication = ({
   context,
   handle,
   request,
-  sentryEnabled,
   sentryOptions,
 }: {
   context: CloudflareExecutionContext;
   handle: () => Promise<Response> | Response;
   request: Request;
-  sentryEnabled: boolean;
-  sentryOptions: CloudflareOptions;
+  sentryOptions?: CloudflareOptions;
 }) =>
-  sentryEnabled
+  sentryOptions
     ? runWithCloudflareSentry({
         api: Sentry,
         handle,
@@ -85,15 +64,22 @@ const entry = {
     environment: CloudflareEnvironment,
     context: CloudflareExecutionContext
   ) {
-    const nativeTelemetry = createCloudflareTelemetryAdapter({
-      analytics: environment.START_UI_TELEMETRY_METRICS,
-      tracing,
+    let nativeTelemetry = createNoOpTelemetry();
+    try {
+      nativeTelemetry = createCloudflareTelemetryAdapter({
+        analytics: environment.START_UI_TELEMETRY_METRICS,
+        tracing,
+      });
+    } catch (failure) {
+      reportTelemetryFailure('otel.cloudflare.configure', failure);
+    }
+    const { sentryOptions } = configureCloudflareRequestTelemetry({
+      environment,
+      nativeTelemetry,
+      request,
+      sentry: Sentry,
+      sentryRequestIsolationReady,
     });
-    const sentryOptions = createCloudflareSentryOptions(request, environment);
-    const sentryEnabled = Boolean(
-      environment.SENTRY_DSN && sentryRequestIsolationReady
-    );
-    installCloudflareRequestTelemetry(nativeTelemetry, sentryEnabled);
 
     const handle = () =>
       application.fetch(request, { context: undefined as never });
@@ -102,7 +88,6 @@ const entry = {
         context,
         handle,
         request,
-        sentryEnabled,
         sentryOptions,
       });
     } finally {

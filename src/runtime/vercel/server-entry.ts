@@ -1,7 +1,8 @@
 await import('../../../instrument.server.mjs');
 const kernel = await import('@/modules/kernel/backend');
 kernel.validateServerConfig();
-const { initVercelTelemetry } = await import('./telemetry');
+const { initVercelTelemetry, runWithVercelSentryRequestIsolation } =
+  await import('./telemetry');
 initVercelTelemetry();
 const { vercelRequestLifecycle } = await import('./request-lifecycle');
 const { createApplicationServerEntry } =
@@ -9,5 +10,6 @@ const { createApplicationServerEntry } =
 
 export default await createApplicationServerEntry(
   'vercel',
-  vercelRequestLifecycle
+  vercelRequestLifecycle,
+  runWithVercelSentryRequestIsolation
 );

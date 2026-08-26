@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseSync, Visitor } from 'oxc-parser';
 
 const profileNames = ['node', 'vercel', 'cloudflare'];
 const profiles = new Set(profileNames);
@@ -34,8 +35,12 @@ const forbiddenRuntimeTokens = {
 };
 const requiredRuntimeTokens = {
   cloudflare: ['cloudflare:workers', 'START_UI_TELEMETRY_METRICS'],
-  node: ['NodeTracerProvider', '@opentelemetry/context-async-hooks'],
+  node: ['NodeTracerProvider'],
   vercel: ['@vercel/functions', '@vercel/otel'],
+};
+const requiredServerEntryOwner = {
+  node: 'runWithNodeSentryRequestIsolation',
+  vercel: 'runWithVercelSentryRequestIsolation',
 };
 
 const fail = (message) => {
@@ -67,19 +72,49 @@ const readJson = (filePath) => {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 };
 
-const assertOnlyProfileMarker = (filePath, expectedProfile) => {
+const readApplicationServerEntryCalls = (filePath) => {
   assertFile(filePath);
   const source = fs.readFileSync(filePath, 'utf8');
-  for (const profile of profileNames) {
-    const marker = new RegExp(
-      `createApplicationServerEntry\\(["']${profile}["'](?:\\s*[,\\)])`,
-      'u'
-    );
-    assert(
-      profile === expectedProfile ? marker.test(source) : !marker.test(source),
-      `${filePath} must contain only the ${expectedProfile} profile marker`
-    );
-  }
+  const parsed = parseSync(filePath, source, { sourceType: 'module' });
+  assert(
+    parsed.errors.length === 0,
+    `${filePath} must be parseable before checking server entry ownership`
+  );
+  const calls = [];
+  new Visitor({
+    CallExpression(node) {
+      if (
+        node.callee?.type === 'Identifier' &&
+        node.callee.name === 'createApplicationServerEntry'
+      ) {
+        calls.push(node);
+      }
+    },
+  }).visit(parsed.program);
+  return calls;
+};
+
+const assertOnlyProfileMarker = (filePath, expectedProfile) => {
+  const calls = readApplicationServerEntryCalls(filePath);
+  assert(
+    calls.length === 1 &&
+      calls[0].arguments?.[0]?.type === 'Literal' &&
+      calls[0].arguments[0].value === expectedProfile,
+    `${filePath} must contain exactly one ${expectedProfile} profile marker`
+  );
+};
+
+const identifierName = (node) =>
+  node?.type === 'Identifier' ? node.name : undefined;
+
+const assertServerEntryOwners = (filePath, profile) => {
+  const [entryCall] = readApplicationServerEntryCalls(filePath);
+  const expectedOwner = requiredServerEntryOwner[profile];
+  const actualOwner = identifierName(entryCall.arguments[2]);
+  assert(
+    actualOwner === expectedOwner,
+    `${filePath} must contain ${profile} server entry owner ${expectedOwner}`
+  );
 };
 
 const findFilesNamedLike = (directoryPath, predicate) => {
@@ -124,7 +159,9 @@ const verifyNode = (root) => {
   assert(manifest.publicDir === 'public', 'Node public directory');
   assertFile(path.join(output, manifest.serverEntry));
   assertDirectory(path.join(output, manifest.publicDir));
-  assertOnlyProfileMarker(path.join(output, 'server/_ssr/ssr.mjs'), 'node');
+  const applicationEntry = path.join(output, 'server/_ssr/ssr.mjs');
+  assertOnlyProfileMarker(applicationEntry, 'node');
+  assertServerEntryOwners(applicationEntry, 'node');
   assertRequiredRuntimeTokens(path.join(output, 'server'), 'node');
   assertNoForbiddenRuntimeTokens(path.join(output, 'server'), 'node');
 };
@@ -146,10 +183,12 @@ const verifyVercel = (root) => {
   assert(functionConfig.supportsResponseStreaming, 'Vercel response streaming');
   assertFile(path.join(output, manifest.serverEntry));
   assertDirectory(path.join(output, manifest.publicDir));
-  assertOnlyProfileMarker(
-    path.join(output, 'functions/__server.func/_ssr/ssr.mjs'),
-    'vercel'
+  const applicationEntry = path.join(
+    output,
+    'functions/__server.func/_ssr/ssr.mjs'
   );
+  assertOnlyProfileMarker(applicationEntry, 'vercel');
+  assertServerEntryOwners(applicationEntry, 'vercel');
   assertRequiredRuntimeTokens(
     path.join(output, 'functions/__server.func'),
     'vercel'

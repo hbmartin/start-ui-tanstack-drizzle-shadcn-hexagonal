@@ -279,6 +279,49 @@ const makeRuntimeTelemetryBoundaryFixture = () => {
   return root;
 };
 
+const makeSentryProviderPolicyFixture = () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fallow-sentry-policy-'));
+  tempDirectories.push(root);
+  writeFixture(
+    root,
+    '.fallowrc.json',
+    JSON.stringify({
+      entry: ['instrument.server.mjs', 'src/**/*.ts'],
+      rulePacks: ['rules.json'],
+      rules: { 'policy-violation': 'error' },
+    })
+  );
+  writeFixture(
+    root,
+    'rules.json',
+    fs.readFileSync(
+      path.join(projectRoot, 'rule-packs/start-ui-web.json'),
+      'utf8'
+    )
+  );
+  writeFixture(
+    root,
+    'instrument.server.mjs',
+    `import '@sentry/tanstackstart-react';\n`
+  );
+  writeFixture(
+    root,
+    'src/composition/telemetry/sentry.client.ts',
+    `import '@sentry/cloudflare';\n`
+  );
+  writeFixture(
+    root,
+    'src/composition/telemetry/sentry-cloudflare-options.ts',
+    `import '@sentry/node';\n`
+  );
+  writeFixture(
+    root,
+    'src/composition/telemetry/adjacent.ts',
+    `import '@sentry/tanstackstart-react';\n`
+  );
+  return root;
+};
+
 afterEach(() => {
   for (const directory of tempDirectories.splice(0)) {
     fs.rmSync(directory, { force: true, recursive: true });
@@ -301,14 +344,17 @@ describe('Fallow guardrails', () => {
     const report = JSON.parse(result.stdout) as BoundaryReport;
     expect(report.kind).toBe('list-boundaries');
     expect(report.boundaries.configured).toBe(true);
-    expect(report.boundaries.zones).toHaveLength(44);
+    expect(report.boundaries.zones).toHaveLength(47);
     for (const runtimeZone of [
       'runtime-cloudflare',
       'runtime-node',
       'runtime-node-platform',
       'runtime-shared',
       'runtime-vercel',
+      'composition-telemetry-browser',
+      'composition-telemetry-cloudflare',
       'composition-telemetry-node',
+      'composition-telemetry-sentry-node',
       'composition-telemetry-server',
     ]) {
       expect(
@@ -396,6 +442,66 @@ describe('Fallow guardrails', () => {
     }
   });
 
+  it('keeps browser and Cloudflare telemetry in distinct provider zones', () => {
+    const result = runFallow([
+      'guard',
+      'src/composition/telemetry/sentry.client.ts',
+      'src/composition/telemetry/sentry-cloudflare-options.ts',
+      'src/composition/telemetry/sentry-node-request-context.ts',
+      'src/runtime/cloudflare/server-entry.ts',
+      'src/runtime/vercel/telemetry.ts',
+      'src/router.tsx',
+      '--format',
+      'json',
+      '--quiet',
+      '--no-cache',
+      '--no-type-aware',
+    ]);
+
+    expect(result.status).toBe(0);
+    const report = JSON.parse(result.stdout) as GuardReport;
+    expect(
+      report.files.find(
+        ({ path }) => path === 'src/composition/telemetry/sentry.client.ts'
+      )?.zone
+    ).toMatchObject({ name: 'composition-telemetry-browser' });
+    expect(
+      report.files.find(
+        ({ path }) =>
+          path === 'src/composition/telemetry/sentry-cloudflare-options.ts'
+      )?.zone
+    ).toMatchObject({ name: 'composition-telemetry-cloudflare' });
+    expect(
+      report.files.find(
+        ({ path }) =>
+          path === 'src/composition/telemetry/sentry-node-request-context.ts'
+      )?.zone
+    ).toMatchObject({ name: 'composition-telemetry-sentry-node' });
+    const cloudflareRuntime = report.files.find(
+      ({ path }) => path === 'src/runtime/cloudflare/server-entry.ts'
+    );
+    expect(cloudflareRuntime?.boundary.allowed_zones).toContain(
+      'composition-telemetry-cloudflare'
+    );
+    expect(cloudflareRuntime?.boundary.allowed_zones).not.toContain(
+      'composition-telemetry-browser'
+    );
+    expect(
+      report.files.find(({ path }) => path === 'src/router.tsx')?.boundary
+        .allowed_zones
+    ).toContain('composition-telemetry-browser');
+    expect(
+      report.files.find(
+        ({ path }) => path === 'src/runtime/vercel/telemetry.ts'
+      )?.boundary.allowed_zones
+    ).toContain('composition-telemetry-sentry-node');
+    expect(
+      report.files.find(
+        ({ path }) => path === 'src/runtime/vercel/telemetry.ts'
+      )?.boundary.allowed_zones
+    ).not.toContain('composition-telemetry-node');
+  });
+
   it('detects boundary, provider-policy, duplication, and health regressions', () => {
     const root = makeNegativeFixture();
     const deadCode = runFallow(
@@ -445,7 +551,7 @@ describe('Fallow guardrails', () => {
       ['dead-code', '--format', 'json', '--quiet', '--no-cache'],
       fixture
     );
-    expect(result.status).toBe(1);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
     expect(result.stdout).toContain('boundary_violations');
     expect(result.stdout).toContain('src/routes/books.ts');
     expect(result.stdout).toContain(
@@ -465,5 +571,31 @@ describe('Fallow guardrails', () => {
     expect(result.stdout).toContain('src/runtime/cloudflare/telemetry.ts');
     expect(result.stdout).toContain('src/runtime/vercel/telemetry.ts');
     expect(result.stdout).toContain('src/composition/telemetry/otel.server.ts');
+  });
+
+  it('rejects cross-provider and adjacent Sentry imports', () => {
+    const fixture = makeSentryProviderPolicyFixture();
+    const result = runFallow(
+      ['dead-code', '--format', 'json', '--quiet', '--no-cache'],
+      fixture
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    expect(result.stdout).toContain('policy_violations');
+    for (const path of [
+      'instrument.server.mjs',
+      'src/composition/telemetry/adjacent.ts',
+      'src/composition/telemetry/sentry-cloudflare-options.ts',
+      'src/composition/telemetry/sentry.client.ts',
+    ]) {
+      expect(result.stdout).toContain(path);
+    }
+    expect(result.stdout).toContain(
+      'sentry-browser-sdk-owned-by-browser-composition'
+    );
+    expect(result.stdout).toContain(
+      'sentry-cloudflare-sdk-owned-by-cloudflare-runtime'
+    );
+    expect(result.stdout).toContain('sentry-node-sdk-owned-by-node-runtimes');
   });
 });

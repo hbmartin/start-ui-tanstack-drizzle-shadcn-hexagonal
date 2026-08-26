@@ -502,6 +502,146 @@ const startNodeApplication = async ({
   return application;
 };
 
+const fatalProbeImportUrl = (mode, secret) => {
+  const source = `
+    const ready = Symbol.for('start-ui-web.telemetry.fatal-owner-ready');
+    const trigger = () => {
+      if (!globalThis[ready]) process.exit(9);
+      const failure = new Error(${JSON.stringify(secret)});
+      if (${JSON.stringify(mode)} === 'reject') {
+        void Promise.reject(failure);
+      } else {
+        throw failure;
+      }
+    };
+    process.once('SIGUSR2', trigger);
+  `;
+  return `data:text/javascript,${encodeURIComponent(source)}`;
+};
+
+const createFatalCollector = () => {
+  const envelopes = [];
+  const server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    envelopes.push(Buffer.concat(chunks).toString('utf8'));
+    response.end('ok');
+  });
+  return { envelopes, server };
+};
+
+const captureFatalChildOutput = (child) => {
+  const output = { stderr: '', stdout: '' };
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    output.stdout += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    output.stderr += chunk;
+  });
+  return output;
+};
+
+const assertBuiltNodeFatalResult = ({
+  child,
+  envelopes,
+  mode,
+  output,
+  secret,
+}) => {
+  assert(
+    child.exitCode === 1,
+    `built Node ${mode} fatal probe exited ${child.exitCode}; stdout: ${output.stdout}; stderr: ${output.stderr}`
+  );
+  assert(
+    output.stderr.includes('runtime.fatal'),
+    `built Node ${mode} fatal probe omitted the safe diagnostic`
+  );
+  assert(
+    output.stderr.match(/runtime\.fatal/gu)?.length === 1,
+    `built Node ${mode} fatal probe emitted multiple fatal diagnostics: ${output.stderr}`
+  );
+  assert(
+    !output.stderr.includes(secret),
+    `built Node ${mode} fatal probe leaked its raw failure: ${output.stderr}`
+  );
+  assert(
+    !output.stderr.includes('[uncaughtException]'),
+    `built Node ${mode} fatal probe leaked Nitro uncaught output: ${output.stderr}`
+  );
+  assert(
+    !output.stderr.includes('[unhandledRejection]'),
+    `built Node ${mode} fatal probe leaked Nitro rejection output: ${output.stderr}`
+  );
+  assert(
+    envelopes.length === 1,
+    `built Node ${mode} fatal probe exported ${envelopes.length} envelopes`
+  );
+  const envelope = envelopes[0];
+  assert(
+    !envelope.includes(secret),
+    `built Node ${mode} fatal envelope leaked its raw failure`
+  );
+  assert(
+    envelope.includes('Unexpected application error'),
+    `built Node ${mode} fatal envelope was not sanitized`
+  );
+};
+
+const verifyBuiltNodeFatalMode = async ({ env, mode }) => {
+  const { envelopes, server: collector } = createFatalCollector();
+  const collectorPort = await listen(collector, 0);
+  const secret = `built-${mode}-fatal-secret`;
+  const child = spawnManaged(
+    process.execPath,
+    [
+      '--import',
+      fatalProbeImportUrl(mode, secret),
+      path.join(root, '.output/node/server/index.mjs'),
+    ],
+    {
+      cwd: root,
+      env: {
+        ...env,
+        SENTRY_DSN: `http://public@127.0.0.1:${collectorPort}/1`,
+        SENTRY_ENVIRONMENT: 'tests',
+        SENTRY_RELEASE: `start-ui-web@5.0.0-${mode}`,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
+  const output = captureFatalChildOutput(child);
+
+  try {
+    const appPort = Number(env.PORT);
+    await waitForPort(appPort, child, `built Node ${mode} fatal probe`);
+    await fetchVerifiedLogin(appPort, `fatal-${mode}`);
+    assertChildRunning(child, `built Node ${mode} warmed fatal probe`);
+    assert(child.kill('SIGUSR2'), `built Node ${mode} fatal signal failed`);
+    const exited = await waitForChildExit(child, 10_000);
+    if (!exited) {
+      await terminateChild(child, {
+        gracefulTimeoutMs: 100,
+        killTimeoutMs: 1_000,
+      });
+      fail(`built Node ${mode} fatal probe did not exit`);
+    }
+    assertBuiltNodeFatalResult({ child, envelopes, mode, output, secret });
+  } finally {
+    await closeServer(collector);
+  }
+};
+
+const verifyBuiltNodeFatalLifecycle = async (env) => {
+  for (const mode of ['throw', 'reject']) {
+    await verifyBuiltNodeFatalMode({ env, mode });
+  }
+  console.log(
+    'Verified built Node fatal ownership: sanitized stderr, one envelope, bounded exit.'
+  );
+};
+
 const fetchVerifiedLogin = async (appPort, requestNumber) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), responseTimeoutMs);
@@ -691,6 +831,9 @@ export const verifyNodeRuntime = async () => {
     await verifyNodeLoginResponses({ appPort, application, pglite, preset });
     await verifyStrictCspBrowserHydration(appPort);
     assertChildRunning(application, 'Node application');
+    assertChildRunning(pglite, 'PGlite');
+    await terminateChild(application);
+    await verifyBuiltNodeFatalLifecycle(env);
     assertChildRunning(pglite, 'PGlite');
   } catch (error) {
     await printDiagnostics(diagnostics);

@@ -110,17 +110,56 @@
       "id": "sentry-owned-by-entrypoints-and-telemetry",
       "kind": "banned-import",
       "specifiers": ["@sentry"],
-      "files": ["src/**"],
+      "files": ["instrument.server.mjs", "src/**"],
       "exclude": [
+        "instrument.server.mjs",
         "src/composition/telemetry/sentry-cloudflare-options.ts",
         "src/composition/telemetry/sentry.client.ts",
-        "src/composition/telemetry/sentry.server.ts",
+        "src/composition/telemetry/sentry-node-request-context.ts",
+        "src/runtime/cloudflare/request-telemetry.ts",
         "src/runtime/cloudflare/sentry-request.ts",
         "src/runtime/cloudflare/server-entry.ts",
         "src/runtime/node/telemetry.ts",
         "src/runtime/vercel/telemetry.ts"
       ],
       "message": "Sentry owns exceptions only and is confined to entrypoints and telemetry composition.",
+      "severity": "error"
+    },
+    {
+      "id": "sentry-node-sdk-owned-by-node-runtimes",
+      "kind": "banned-import",
+      "specifiers": ["@sentry/node"],
+      "files": ["instrument.server.mjs", "src/**"],
+      "exclude": [
+        "instrument.server.mjs",
+        "src/composition/telemetry/sentry-node-request-context.ts",
+        "src/runtime/node/telemetry.ts",
+        "src/runtime/vercel/telemetry.ts"
+      ],
+      "message": "The Sentry Node SDK is confined to Node and Vercel runtime owners.",
+      "severity": "error"
+    },
+    {
+      "id": "sentry-cloudflare-sdk-owned-by-cloudflare-runtime",
+      "kind": "banned-import",
+      "specifiers": ["@sentry/cloudflare"],
+      "files": ["instrument.server.mjs", "src/**"],
+      "exclude": [
+        "src/composition/telemetry/sentry-cloudflare-options.ts",
+        "src/runtime/cloudflare/request-telemetry.ts",
+        "src/runtime/cloudflare/sentry-request.ts",
+        "src/runtime/cloudflare/server-entry.ts"
+      ],
+      "message": "The Sentry Cloudflare SDK is confined to Cloudflare runtime composition.",
+      "severity": "error"
+    },
+    {
+      "id": "sentry-browser-sdk-owned-by-browser-composition",
+      "kind": "banned-import",
+      "specifiers": ["@sentry/tanstackstart-react"],
+      "files": ["instrument.server.mjs", "src/**"],
+      "exclude": ["src/composition/telemetry/sentry.client.ts"],
+      "message": "The Sentry browser SDK is confined to browser telemetry composition.",
       "severity": "error"
     },
     {

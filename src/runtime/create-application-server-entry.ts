@@ -6,6 +6,7 @@ import {
   bindRequestExceptionState,
   claimRequestException,
   createRequestExceptionCaptureState,
+  reportTelemetryFailure,
 } from '@/platform/telemetry';
 
 import type { AppStartRequestContext } from '../start';
@@ -16,6 +17,8 @@ export type RuntimeRequestLifecycle = {
   onRequestSettled(request: Request): void;
 };
 
+export type RuntimeRequestScope = <T>(operation: () => T) => T;
+
 /**
  * Import-safe universal bootstrap. Instrumentation is evaluated before the
  * telemetry provider and TanStack handler, and the deployment entrypoint
@@ -24,43 +27,60 @@ export type RuntimeRequestLifecycle = {
  */
 export const createApplicationServerEntry = async (
   runtimeProfile: RuntimeProfile,
-  lifecycle?: RuntimeRequestLifecycle
+  lifecycle?: RuntimeRequestLifecycle,
+  requestScope?: RuntimeRequestScope
 ): Promise<ServerEntry> => {
   const { telemetryProxy } = await import('@/platform/telemetry');
   const tanstack = await import('@/entry-server');
 
   const requestHandler: ServerEntry = {
     async fetch(request) {
-      const telemetryCaptureState = createRequestExceptionCaptureState();
-      bindRequestExceptionState(request, telemetryCaptureState);
-      const context: ServerEntryRequestContext = {
-        requestId: crypto.randomUUID(),
-        runtimeProfile,
-        telemetryCaptureState,
+      const handleRequest = async () => {
+        const telemetryCaptureState = createRequestExceptionCaptureState();
+        bindRequestExceptionState(request, telemetryCaptureState);
+        const context: ServerEntryRequestContext = {
+          requestId: crypto.randomUUID(),
+          runtimeProfile,
+          telemetryCaptureState,
+        };
+
+        try {
+          return await tanstack.default.fetch(request, { context });
+        } catch (error) {
+          if (
+            isUnexpectedRequestFailure(error) &&
+            claimRequestException(telemetryCaptureState, error)
+          ) {
+            telemetryProxy.captureException(error, {
+              level: 'error',
+              tags: {
+                event: 'framework.request.failed',
+                requestId: context.requestId,
+              },
+            });
+          }
+          throw error;
+        } finally {
+          try {
+            lifecycle?.onRequestSettled(request);
+          } catch {
+            // A lifecycle/export failure must never replace an app response.
+          }
+        }
       };
 
+      if (!requestScope) return handleRequest();
+
+      let applicationResult: ReturnType<typeof handleRequest> | undefined;
+      const runApplicationOnce = () => {
+        applicationResult ??= handleRequest();
+        return applicationResult;
+      };
       try {
-        return await tanstack.default.fetch(request, { context });
-      } catch (error) {
-        if (
-          isUnexpectedRequestFailure(error) &&
-          claimRequestException(telemetryCaptureState, error)
-        ) {
-          telemetryProxy.captureException(error, {
-            level: 'error',
-            tags: {
-              event: 'framework.request.failed',
-              requestId: context.requestId,
-            },
-          });
-        }
-        throw error;
-      } finally {
-        try {
-          lifecycle?.onRequestSettled(request);
-        } catch {
-          // A lifecycle/export failure must never replace an app response.
-        }
+        return requestScope(runApplicationOnce);
+      } catch (failure) {
+        reportTelemetryFailure('sentry.request_scope', failure);
+        return applicationResult ?? runApplicationOnce();
       }
     },
   };

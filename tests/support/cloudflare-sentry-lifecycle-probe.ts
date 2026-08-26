@@ -43,7 +43,7 @@ const sentryOptions = (
   label: string,
   request: Request
 ): Parameters<typeof Sentry.wrapRequestHandler>[0]['options'] => ({
-  ...createCloudflareSentryOptions(request, {
+  ...createCloudflareSentryOptions(Sentry, request, {
     SENTRY_DSN: 'https://public@example.com/1',
   }),
   release: `start-ui-web@5.0.0-${label}`,
@@ -212,10 +212,29 @@ const assertHostileParentTraceCannotExportTransaction = async () => {
   );
   const response = new Response(null, { status: 204 });
   const waitUntilCompletions: Array<Promise<unknown>> = [];
+  const nativeClone = request.clone.bind(request);
+  let cloneCount = 0;
+  Object.defineProperty(request, 'clone', {
+    configurable: true,
+    value: () => {
+      cloneCount += 1;
+      return nativeClone();
+    },
+  });
 
   const returned = await runWithCloudflareSentry({
     api: Sentry,
     handle: async () => {
+      assert.equal(
+        request.bodyUsed,
+        false,
+        'exception-only integrations must not buffer the request body'
+      );
+      const integrationNames =
+        Sentry.getClient()
+          ?.getOptions()
+          .integrations?.map((integration) => integration.name) ?? [];
+      assert.deepEqual(integrationNames, ['EventFilters', 'LinkedErrors']);
       telemetryProxy.captureException(
         new Error('hostile transaction exception-secret'),
         {
@@ -239,6 +258,11 @@ const assertHostileParentTraceCannotExportTransaction = async () => {
   });
 
   assert.equal(returned, response);
+  assert.equal(
+    cloneCount,
+    0,
+    'exception-only integrations must not clone or buffer the request body'
+  );
   assert.equal(
     await forceFlushRequestTelemetry(request, requestTelemetry),
     'flushed'

@@ -14,6 +14,7 @@ export {
   isProductionSeedAllowed,
 } from './infrastructure/config/env-schema';
 export { getHttpConfig } from './infrastructure/config/http';
+export { runWithNormalizedOtelSdkEnvironment } from './infrastructure/config/otel-sdk-environment';
 export { getRedisConfig } from './infrastructure/config/redis';
 export {
   getTelemetryConfig,

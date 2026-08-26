@@ -27,32 +27,71 @@ import { telemetrySignalUrl } from '@/composition/telemetry/collector-url';
 import { createOpenTelemetryAdapter } from '@/composition/telemetry/otel-adapter';
 import { cleanupTelemetryProviders } from '@/composition/telemetry/provider-cleanup';
 import { claimTelemetryProviderOwnership } from '@/composition/telemetry/provider-ownership';
+import {
+  claimSentryNodeRequestContext,
+  createSentryNodeRequestContextManager,
+  isSentryNodeRequestContextActive,
+  runWithSentryNodeRequestIsolation,
+  type SentryNodeRequestContextManager,
+} from '@/composition/telemetry/sentry-node-request-context';
 import { installServerTelemetry } from '@/composition/telemetry/sentry.server';
 import {
   getTelemetryConfig,
+  runWithNormalizedOtelSdkEnvironment,
   type TelemetryConfig,
 } from '@/modules/kernel/backend';
 import { reportTelemetryFailure } from '@/platform/telemetry';
 
 let initialized = false;
 
+export const runWithVercelSentryRequestIsolation =
+  runWithSentryNodeRequestIsolation;
+
 const exporterHeaders = (bearerToken: string | undefined) =>
   bearerToken ? { Authorization: `Bearer ${bearerToken}` } : undefined;
 
-const initializeTraceOwner = (config: TelemetryConfig) => {
+const initializeTraceOwner = (
+  config: TelemetryConfig,
+  contextManager: SentryNodeRequestContextManager | undefined
+): { requestContextReady: boolean; traceOwnerReady: boolean } => {
+  if (config.otelSdkDisabled) {
+    return {
+      requestContextReady: Boolean(
+        contextManager && claimSentryNodeRequestContext(contextManager)
+      ),
+      traceOwnerReady: false,
+    };
+  }
+
   try {
-    registerOTel({
-      instrumentations: [],
-      serviceName: config.serviceName,
-      traceExporter: 'auto',
-      traceSampler: new ParentBasedSampler({
-        root: new TraceIdRatioBasedSampler(config.otelTracesSampleRate),
-      }),
-    });
-    return true;
+    runWithNormalizedOtelSdkEnvironment(() =>
+      registerOTel({
+        ...(contextManager ? { contextManager } : {}),
+        instrumentations: [],
+        serviceName: config.serviceName,
+        traceExporter: 'auto',
+        traceSampler: new ParentBasedSampler({
+          root: new TraceIdRatioBasedSampler(config.otelTracesSampleRate),
+        }),
+      })
+    );
+    return {
+      requestContextReady: Boolean(
+        contextManager && isSentryNodeRequestContextActive(contextManager)
+      ),
+      traceOwnerReady: true,
+    };
   } catch (failure) {
     reportTelemetryFailure('otel.vercel.traces.initialize', failure);
-    return false;
+    return {
+      requestContextReady: Boolean(
+        contextManager &&
+        claimSentryNodeRequestContext(contextManager, {
+          acceptAlreadyInstalledByProvider: true,
+        })
+      ),
+      traceOwnerReady: false,
+    };
   }
 };
 
@@ -139,8 +178,14 @@ export const initVercelTelemetry = () => {
   if (initialized) return;
 
   const config = getTelemetryConfig();
-  const traceOwnerReady = initializeTraceOwner(config);
-  const signalOwners = initializeSignalOwners(config);
+  const contextManager = createSentryNodeRequestContextManager();
+  const { requestContextReady, traceOwnerReady } = initializeTraceOwner(
+    config,
+    contextManager
+  );
+  const signalOwners = config.otelSdkDisabled
+    ? { logger: undefined, meter: undefined, ready: false }
+    : initializeSignalOwners(config);
 
   const openTelemetry =
     traceOwnerReady || signalOwners.ready
@@ -155,7 +200,7 @@ export const initVercelTelemetry = () => {
       : undefined;
   installServerTelemetry({
     openTelemetry,
-    sentry: config.dsn ? Sentry : undefined,
+    sentry: config.dsn && requestContextReady ? Sentry : undefined,
   });
   initialized = true;
 };

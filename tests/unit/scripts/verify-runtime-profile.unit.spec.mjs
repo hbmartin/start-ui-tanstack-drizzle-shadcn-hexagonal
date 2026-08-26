@@ -32,7 +32,7 @@ const createNodeArtifact = (root) => {
   write(
     root,
     '.output/node/server/_ssr/ssr.mjs',
-    'createApplicationServerEntry("node");NodeTracerProvider;"@opentelemetry/context-async-hooks"'
+    'createApplicationServerEntry("node", undefined, runWithNodeSentryRequestIsolation);NodeTracerProvider'
   );
   fs.mkdirSync(path.join(root, '.output/node/public'));
 };
@@ -52,7 +52,7 @@ const createVercelArtifact = (root) => {
   write(
     root,
     '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
-    'createApplicationServerEntry("vercel", vercelRequestLifecycle);"@vercel/functions";"@vercel/otel";new AsyncLocalStorageContextManager()'
+    'createApplicationServerEntry("vercel", vercelRequestLifecycle, runWithVercelSentryRequestIsolation);"@vercel/functions";"@vercel/otel"'
   );
   fs.mkdirSync(path.join(root, '.vercel/output/static'));
 };
@@ -119,7 +119,7 @@ describe('runtime artifact verifier', () => {
       'createApplicationServerEntry("vercel")'
     );
     expect(() => verifyRuntimeProfile('node', wrongProfileRoot)).toThrow(
-      'only the node profile marker'
+      'exactly one node profile marker'
     );
 
     const mixedProfileRoot = fixture();
@@ -130,7 +130,7 @@ describe('runtime artifact verifier', () => {
       'createApplicationServerEntry("node");createApplicationServerEntry("vercel")'
     );
     expect(() => verifyRuntimeProfile('node', mixedProfileRoot)).toThrow(
-      'only the node profile marker'
+      'exactly one node profile marker'
     );
   });
 
@@ -145,6 +145,74 @@ describe('runtime artifact verifier', () => {
       'Vercel Node 24 runtime'
     );
   });
+
+  it.each([
+    [
+      'node',
+      createNodeArtifact,
+      '.output/node/server/_ssr/ssr.mjs',
+      'runWithNodeSentryRequestIsolation',
+    ],
+    [
+      'vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
+      'runWithVercelSentryRequestIsolation',
+    ],
+  ])(
+    'rejects a %s artifact with detached Sentry request isolation',
+    (profile, createArtifact, entry, owner) => {
+      const root = fixture();
+      createArtifact(root);
+      const entryPath = path.join(root, entry);
+      write(
+        root,
+        entry,
+        `${fs
+          .readFileSync(entryPath, 'utf8')
+          .replace(owner, 'undefined')};const detachedOwner = "${owner}"`
+      );
+      write(
+        root,
+        `${path.dirname(entry)}/sentry-library.mjs`,
+        'class SentryContextManager {}'
+      );
+
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(
+        `${profile} server entry owner ${owner}`
+      );
+    }
+  );
+
+  it.each([
+    [
+      'node',
+      createNodeArtifact,
+      '.output/node/server/_ssr/ssr.mjs',
+      'runWithNodeSentryRequestIsolation',
+    ],
+    [
+      'vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
+      'runWithVercelSentryRequestIsolation',
+    ],
+  ])(
+    'rejects a %s artifact with isolation attached only to a dead call',
+    (profile, createArtifact, entry, owner) => {
+      const root = fixture();
+      createArtifact(root);
+      write(
+        root,
+        entry,
+        `createApplicationServerEntry("${profile}");if(false){createApplicationServerEntry("${profile}",undefined,${owner})}`
+      );
+
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(
+        `exactly one ${profile} profile marker`
+      );
+    }
+  );
 
   it('rejects Worker identity drift and recursively leaked dev vars', () => {
     const identityRoot = fixture();

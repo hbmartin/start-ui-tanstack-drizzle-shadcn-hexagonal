@@ -10,6 +10,7 @@
     "src/server.ts",
     "src/start.ts",
     "src/router.tsx",
+    "src/runtime/node/nitro-instrumentation-plugin.ts",
     "src/runtime/*/server-entry.ts",
     "src/routes/**/*.{ts,tsx}",
     "src/app/**/{index,presentation}.{ts,tsx}",
@@ -224,6 +225,20 @@
         ],
       },
       {
+        "name": "composition-telemetry-sentry-node",
+        "patterns": [
+          "src/composition/telemetry/sentry-node-request-context.ts",
+        ],
+      },
+      {
+        "name": "composition-telemetry-browser",
+        "patterns": ["src/composition/telemetry/sentry.client.ts"],
+      },
+      {
+        "name": "composition-telemetry-cloudflare",
+        "patterns": ["src/composition/telemetry/sentry-cloudflare-options.ts"],
+      },
+      {
         "name": "composition-telemetry-server",
         "patterns": ["src/composition/telemetry/sentry.server.ts"],
       },
@@ -380,6 +395,7 @@
           "runtime-shared",
           "composition",
           "composition-telemetry-node",
+          "composition-telemetry-sentry-node",
           "composition-telemetry-server",
           "kernel-gates",
           "platform",
@@ -394,6 +410,7 @@
           "runtime-node-platform",
           "runtime-shared",
           "composition",
+          "composition-telemetry-sentry-node",
           "composition-telemetry-server",
           "kernel-gates",
           "platform",
@@ -407,6 +424,7 @@
           "runtime-cloudflare",
           "runtime-shared",
           "composition",
+          "composition-telemetry-cloudflare",
           "kernel-gates",
           "platform",
           "platform-telemetry",
@@ -433,6 +451,18 @@
           "platform-telemetry",
           "types",
         ],
+      },
+      {
+        "from": "composition-telemetry-sentry-node",
+        "allow": ["composition", "platform-telemetry", "types"],
+      },
+      {
+        "from": "composition-telemetry-browser",
+        "allow": ["composition", "platform", "platform-telemetry", "types"],
+      },
+      {
+        "from": "composition-telemetry-cloudflare",
+        "allow": ["composition", "platform-telemetry", "types"],
       },
       {
         "from": "composition-telemetry-server",
@@ -719,6 +749,7 @@
           "routes",
           "app",
           "composition",
+          "composition-telemetry-browser",
           "auth-gates",
           "kernel-gates",
           "platform",

@@ -15,6 +15,10 @@ const mocks = vi.hoisted(() => {
     ),
     initNodeTelemetry: vi.fn(() => order.push('telemetry')),
     order,
+    runWithNodeSentryRequestIsolation: vi.fn(
+      <T>(operation: () => T): T => operation()
+    ),
+    reportTelemetryFailure: vi.fn(),
     telemetryCaptureException: vi.fn(),
     validateServerConfig: vi.fn(() => order.push('config')),
   };
@@ -33,6 +37,7 @@ vi.mock('@/modules/kernel/backend', () => ({
 
 vi.mock('@/runtime/node/telemetry', () => ({
   initNodeTelemetry: mocks.initNodeTelemetry,
+  runWithNodeSentryRequestIsolation: mocks.runWithNodeSentryRequestIsolation,
 }));
 
 vi.mock('@/platform/telemetry', () => ({
@@ -46,6 +51,7 @@ vi.mock('@/platform/telemetry', () => ({
     return true;
   },
   createRequestExceptionCaptureState: () => ({ captured: new Set() }),
+  reportTelemetryFailure: mocks.reportTelemetryFailure,
   telemetryProxy: {
     captureException: mocks.telemetryCaptureException,
   },
@@ -57,6 +63,9 @@ describe('server entry', () => {
     vi.clearAllMocks();
     mocks.order.length = 0;
     mocks.handlerFetch.mockImplementation(async () => new Response('ok'));
+    mocks.runWithNodeSentryRequestIsolation.mockImplementation(
+      <T>(operation: () => T): T => operation()
+    );
   });
 
   it('passes a request id through Start request context', async () => {
@@ -77,6 +86,7 @@ describe('server entry', () => {
         }),
       })
     );
+    expect(mocks.runWithNodeSentryRequestIsolation).toHaveBeenCalledOnce();
   });
 
   it('runs fail-closed config validation at boot (H1 regression)', async () => {
@@ -201,5 +211,50 @@ describe('server entry', () => {
     expect(result).toBe(response);
     expect(result.body).toBe(stream);
     await expect(result.text()).resolves.toBe('streamed');
+  });
+
+  it('runs the app once when the optional request scope fails before entry', async () => {
+    const scopeFailure = new Error('scope failed before entry');
+    const response = new Response('scope fallback');
+    mocks.handlerFetch.mockResolvedValueOnce(response);
+    mocks.runWithNodeSentryRequestIsolation.mockImplementationOnce(() => {
+      throw scopeFailure;
+    });
+    const server = (await import('@/server')).default as {
+      fetch: (request: Request) => Promise<Response>;
+    };
+
+    await expect(
+      server.fetch(new Request('https://app.example/'))
+    ).resolves.toBe(response);
+    expect(mocks.handlerFetch).toHaveBeenCalledOnce();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledWith(
+      'sentry.request_scope',
+      scopeFailure
+    );
+  });
+
+  it('preserves the app failure when the request scope throws after entry', async () => {
+    const appFailure = new Error('app failure');
+    const scopeFailure = new Error('scope failed after entry');
+    mocks.handlerFetch.mockRejectedValueOnce(appFailure);
+    mocks.runWithNodeSentryRequestIsolation.mockImplementationOnce(
+      <T>(operation: () => T): T => {
+        operation();
+        throw scopeFailure;
+      }
+    );
+    const server = (await import('@/server')).default as {
+      fetch: (request: Request) => Promise<Response>;
+    };
+
+    await expect(
+      server.fetch(new Request('https://app.example/'))
+    ).rejects.toBe(appFailure);
+    expect(mocks.handlerFetch).toHaveBeenCalledOnce();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledWith(
+      'sentry.request_scope',
+      scopeFailure
+    );
   });
 });

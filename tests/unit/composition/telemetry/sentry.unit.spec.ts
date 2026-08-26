@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sentryMocks = vi.hoisted(() => ({
+  browserApiErrorsIntegration: vi.fn(() => ({ name: 'BrowserApiErrors' })),
   browserTracingIntegration: vi.fn(() => 'browser-tracing'),
+  eventFiltersIntegration: vi.fn(() => ({ name: 'EventFilters' })),
+  functionToStringIntegration: vi.fn(() => ({ name: 'FunctionToString' })),
+  globalHandlersIntegration: vi.fn(() => ({ name: 'GlobalHandlers' })),
   init: vi.fn(),
+  linkedErrorsIntegration: vi.fn(() => ({ name: 'LinkedErrors' })),
   tanstackRouterBrowserTracingIntegration: vi.fn(() => 'router-tracing'),
 }));
 
@@ -15,12 +20,16 @@ const envClientMock = vi.hoisted(() => ({
   VITE_SENTRY_DSN: '',
   VITE_SENTRY_ENVIRONMENT: undefined as string | undefined,
   VITE_SENTRY_TUNNEL_PATH: '/api/telemetry/sentry-tunnel',
-  VITE_SENTRY_TRACES_SAMPLE_RATE: 0,
 }));
 
 vi.mock('@sentry/tanstackstart-react', () => ({
+  browserApiErrorsIntegration: sentryMocks.browserApiErrorsIntegration,
   browserTracingIntegration: sentryMocks.browserTracingIntegration,
+  eventFiltersIntegration: sentryMocks.eventFiltersIntegration,
+  functionToStringIntegration: sentryMocks.functionToStringIntegration,
+  globalHandlersIntegration: sentryMocks.globalHandlersIntegration,
   init: sentryMocks.init,
+  linkedErrorsIntegration: sentryMocks.linkedErrorsIntegration,
   tanstackRouterBrowserTracingIntegration:
     sentryMocks.tanstackRouterBrowserTracingIntegration,
 }));
@@ -41,7 +50,6 @@ describe('Sentry telemetry composition', () => {
     envClientMock.VITE_SENTRY_DSN = '';
     envClientMock.VITE_SENTRY_ENVIRONMENT = undefined;
     envClientMock.VITE_SENTRY_TUNNEL_PATH = '/api/telemetry/sentry-tunnel';
-    envClientMock.VITE_SENTRY_TRACES_SAMPLE_RATE = 0;
     otelMocks.initOpenTelemetryClient.mockReturnValue(undefined);
   });
 
@@ -72,16 +80,23 @@ describe('Sentry telemetry composition', () => {
       expect.objectContaining({
         beforeSend: expect.any(Function),
         beforeSendTransaction: expect.any(Function),
+        defaultIntegrations: false,
         enableLogs: false,
-        integrations: [],
+        integrations: [
+          { name: 'EventFilters' },
+          { name: 'FunctionToString' },
+          { name: 'BrowserApiErrors' },
+          { name: 'GlobalHandlers' },
+          { name: 'LinkedErrors' },
+        ],
         sendDefaultPii: false,
-        tracesSampler: expect.any(Function),
+        tracePropagationTargets: [],
         tunnel: '/api/telemetry/sentry-tunnel',
       })
     );
     const options = sentryMocks.init.mock.calls[0]?.[0];
     expect(options).not.toHaveProperty('tracesSampleRate');
-    expect(options?.tracesSampler()).toBe(0);
+    expect(options).not.toHaveProperty('tracesSampler');
     expect(options?.beforeSendTransaction()).toBeNull();
   });
 

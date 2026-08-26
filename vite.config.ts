@@ -20,7 +20,10 @@ import { shouldEnableSentryBuildPlugin } from './scripts/sentry-build-plugin.js'
 import { loadViteBuildEnvironment } from './scripts/vite-build-environment.js';
 import type { RuntimeProfile } from './src/platform/runtime/runtime-profile.js';
 
-const createRuntimeBuildPlugins = (runtimeProfile: RuntimeProfile) => {
+const createRuntimeBuildPlugins = (
+  runtimeProfile: RuntimeProfile,
+  root: string
+) => {
   if (runtimeProfile === 'cloudflare') {
     return [cloudflare(cloudflareVitePluginOptions), tanstackStart()];
   }
@@ -33,6 +36,12 @@ const createRuntimeBuildPlugins = (runtimeProfile: RuntimeProfile) => {
             publicDir: '.output/node/public',
             serverDir: '.output/node/server',
           },
+          plugins: [
+            path.resolve(
+              root,
+              'src/runtime/node/nitro-instrumentation-plugin.ts'
+            ),
+          ],
           preset: 'node-server',
         }
       : {
@@ -131,7 +140,7 @@ export default defineConfig(({ command, mode }) => {
         authToken: sentryEnv.SENTRY_AUTH_TOKEN,
       })
     : [];
-  const runtimeBuildPlugins = createRuntimeBuildPlugins(runtimeProfile);
+  const runtimeBuildPlugins = createRuntimeBuildPlugins(runtimeProfile, root);
 
   return {
     envDir,

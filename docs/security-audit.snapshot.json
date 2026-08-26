@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-25T19:32:16.681Z",
-  "dependencyStateSha256": "e80f09442dd94f1325072c9c5426dfbfe0efa77d78315ea420dbcec70d986101",
+  "generatedAt": "2026-08-26T17:04:08.296Z",
+  "dependencyStateSha256": "8d4e052c4d3dd1cd4388e32a43a44d9c437bd175631f67ae3373af0a1009d84d",
   "advisories": [],
   "trackedPackages": ["nitro"]
 }

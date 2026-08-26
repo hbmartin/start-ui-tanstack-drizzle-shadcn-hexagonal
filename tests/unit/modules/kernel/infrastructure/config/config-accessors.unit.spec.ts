@@ -519,8 +519,28 @@ describe('server config accessors', () => {
     expect(getTelemetryConfig()).toMatchObject({
       collectorUrl: undefined,
       localSqliteEnabled: false,
+      otelSdkDisabled: false,
     });
   });
+
+  it('exposes the Vercel SDK disabled state through validated telemetry config', async () => {
+    vi.stubEnv('OTEL_SDK_DISABLED', 'true');
+    const { getTelemetryConfig } =
+      await import('@/modules/kernel/infrastructure/config/telemetry');
+
+    expect(getTelemetryConfig().otelSdkDisabled).toBe(true);
+  });
+
+  it.each(['false', '0', 'TRUE-ish'])(
+    'keeps Vercel telemetry enabled for non-true OTEL_SDK_DISABLED=%s',
+    async (value) => {
+      vi.stubEnv('OTEL_SDK_DISABLED', value);
+      const { getTelemetryConfig } =
+        await import('@/modules/kernel/infrastructure/config/telemetry');
+
+      expect(getTelemetryConfig().otelSdkDisabled).toBe(false);
+    }
+  );
 
   it('accepts production telemetry config when the Collector URL is present', async () => {
     vi.stubEnv('NODE_ENV', 'production');

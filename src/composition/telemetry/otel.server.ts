@@ -1,6 +1,5 @@
-import { context, metrics, propagation, trace } from '@opentelemetry/api';
+import { metrics, propagation, trace } from '@opentelemetry/api';
 import { logs } from '@opentelemetry/api-logs';
-import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import {
   CompositePropagator,
   W3CBaggagePropagator,
@@ -78,8 +77,6 @@ export const initOpenTelemetryServer = ():
   let tracerProvider: NodeTracerProvider | undefined;
   let meterProvider: MeterProvider | undefined;
   let loggerProvider: LoggerProvider | undefined;
-  let contextManager: AsyncLocalStorageContextManager | undefined;
-
   try {
     const resource = createResource();
     const headers = exporterHeaders();
@@ -135,18 +132,11 @@ export const initOpenTelemetryServer = ():
         new W3CBaggagePropagator(),
       ],
     });
-    contextManager = new AsyncLocalStorageContextManager().enable();
-    const ownedContextManager = contextManager;
     const ownedLoggerProvider = loggerProvider;
     const ownedMeterProvider = meterProvider;
     const ownedTracerProvider = tracerProvider;
 
     const releaseOwnership = claimTelemetryProviderOwnership([
-      {
-        acquire: () => context.setGlobalContextManager(ownedContextManager),
-        name: 'context',
-        release: () => context.disable(),
-      },
       {
         acquire: () => propagation.setGlobalPropagator(propagator),
         name: 'propagation',
@@ -188,7 +178,6 @@ export const initOpenTelemetryServer = ():
     initialized = true;
     return runtime;
   } catch (failure) {
-    contextManager?.disable();
     const cleanups: Array<() => Promise<unknown>> = [];
     if (tracerProvider) {
       cleanups.push(tracerProvider.shutdown.bind(tracerProvider));

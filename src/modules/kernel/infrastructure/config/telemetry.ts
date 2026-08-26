@@ -27,7 +27,6 @@ const telemetryEnvSchema = baseEnvSchema.extend({
   SENTRY_DSN: z.string().url().optional(),
   VITE_SENTRY_DSN: z.string().url().optional(),
   SENTRY_ENVIRONMENT: z.string().optional(),
-  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
   SENTRY_ORG: z.string().optional(),
   SENTRY_PROJECT: z.string().optional(),
   SENTRY_AUTH_TOKEN: z.string().optional(),
@@ -36,6 +35,10 @@ const telemetryEnvSchema = baseEnvSchema.extend({
   OTEL_SERVICE_NAME: z.string().optional(),
   OTEL_SERVICE_VERSION: z.string().optional(),
   OTEL_ENVIRONMENT: z.string().optional(),
+  OTEL_SDK_DISABLED: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim().toLowerCase() === 'true'),
   OTEL_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
   OTEL_LOCAL_SQLITE_ENABLED: z
     .enum(['true', 'false'])
@@ -56,7 +59,6 @@ export type TelemetryConfig = {
   dsn?: string;
   browserDsn?: string;
   environment?: string;
-  tracesSampleRate: number;
   org?: string;
   project?: string;
   authToken?: string;
@@ -65,6 +67,7 @@ export type TelemetryConfig = {
   serviceName: string;
   serviceVersion?: string;
   otelEnvironment?: string;
+  otelSdkDisabled: boolean;
   otelTracesSampleRate: number;
   localSqliteEnabled: boolean;
   localSqlitePath: string;
@@ -106,7 +109,6 @@ export function getTelemetryConfig(): TelemetryConfig {
     dsn: env.SENTRY_DSN,
     browserDsn: env.VITE_SENTRY_DSN ?? env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT,
-    tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE ?? (isProduction ? 0.1 : 1),
     org: env.SENTRY_ORG,
     project: env.SENTRY_PROJECT,
     authToken: env.SENTRY_AUTH_TOKEN,
@@ -118,6 +120,7 @@ export function getTelemetryConfig(): TelemetryConfig {
       env.OTEL_ENVIRONMENT ??
       env.SENTRY_ENVIRONMENT ??
       (isProduction ? 'production' : 'local'),
+    otelSdkDisabled: env.OTEL_SDK_DISABLED,
     otelTracesSampleRate: env.OTEL_TRACES_SAMPLE_RATE ?? 1,
     localSqliteEnabled: env.OTEL_LOCAL_SQLITE_ENABLED ?? !isProduction,
     localSqlitePath:

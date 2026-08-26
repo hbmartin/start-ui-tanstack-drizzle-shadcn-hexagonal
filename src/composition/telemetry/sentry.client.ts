@@ -13,6 +13,7 @@ import {
   createSentryTelemetryAdapter,
   sanitizeSentryEvent,
 } from './sentry-adapter';
+import { createExceptionOnlyIntegrations } from './sentry-exception-integrations';
 
 let initialized = false;
 
@@ -25,6 +26,26 @@ let initialized = false;
 const isTelemetryAdapter = (
   adapter: TelemetryAdapter | undefined
 ): adapter is TelemetryAdapter => Boolean(adapter);
+
+export const createBrowserSentryOptions = () => ({
+  beforeSend: sanitizeSentryEvent,
+  beforeSendTransaction: () => null,
+  defaultIntegrations: false as const,
+  dsn: envClient.VITE_SENTRY_DSN,
+  enableLogs: false,
+  environment: envClient.VITE_SENTRY_ENVIRONMENT,
+  integrations: createExceptionOnlyIntegrations(Sentry, [
+    Sentry.functionToStringIntegration(),
+    Sentry.browserApiErrorsIntegration(),
+    Sentry.globalHandlersIntegration({
+      onerror: true,
+      onunhandledrejection: true,
+    }),
+  ]),
+  sendDefaultPii: false,
+  tracePropagationTargets: [],
+  tunnel: envClient.VITE_SENTRY_TUNNEL_PATH,
+});
 
 export const initTelemetryClient = (_router?: unknown) => {
   if (initialized) return;
@@ -46,17 +67,7 @@ export const initTelemetryClient = (_router?: unknown) => {
   }
 
   try {
-    Sentry.init({
-      dsn: envClient.VITE_SENTRY_DSN,
-      enableLogs: false,
-      environment: envClient.VITE_SENTRY_ENVIRONMENT,
-      beforeSendTransaction: () => null,
-      sendDefaultPii: false,
-      tunnel: envClient.VITE_SENTRY_TUNNEL_PATH,
-      beforeSend: sanitizeSentryEvent,
-      integrations: [],
-      tracesSampler: () => 0,
-    });
+    Sentry.init(createBrowserSentryOptions());
 
     adapters.push(
       createSentryTelemetryAdapter(Sentry, {

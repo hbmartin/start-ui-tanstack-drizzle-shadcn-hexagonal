@@ -62,9 +62,6 @@ importers:
       '@opentelemetry/api-logs':
         specifier: ^0.219.0
         version: 0.219.0
-      '@opentelemetry/context-async-hooks':
-        specifier: 2.8.0
-        version: 2.8.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/context-zone':
         specifier: 2.8.0
         version: 2.8.0(@opentelemetry/api@1.9.1)
@@ -117,7 +114,7 @@ importers:
         specifier: 10.62.0
         version: 10.62.0(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))
       '@sentry/tanstackstart-react':
-        specifier: ^10.62.0
+        specifier: 10.62.0
         version: 10.62.0(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(react@19.2.7)
       '@tanstack/react-form':
         specifier: ^1.33.0
