@@ -82,7 +82,7 @@ export const createVerificationEnvironment = ({
     SKIP_ENV_VALIDATION: 'false',
     START_UI_DISABLE_CLOUD_BUILD_PLUGINS: 'true',
     START_UI_RUNTIME_PROFILE: profile,
-    TRUSTED_PROXY_DEPTH: '0',
+    TRUSTED_PROXY_DEPTH: '1',
     UPSTASH_REDIS_REST_TOKEN: 'runtime-verification-token',
     UPSTASH_REDIS_REST_URL: `http://127.0.0.1:${redisPort}`,
     VITE_AUTH_SIGNUP_ENABLED: 'false',

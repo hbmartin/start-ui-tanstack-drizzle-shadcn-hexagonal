@@ -15,7 +15,7 @@ import { getRedisConfig } from './redis';
 import { getStorageConfig } from './storage';
 import { getTelemetryConfig } from './telemetry';
 
-export const validateTrustedClientIpConfiguration = (
+const validateTrustedClientIpConfiguration = (
   runtimeProfile: RuntimeProfile,
   trustedProxyDepth: number | undefined
 ) => {

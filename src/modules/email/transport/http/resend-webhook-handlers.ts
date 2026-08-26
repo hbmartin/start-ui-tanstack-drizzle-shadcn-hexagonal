@@ -52,11 +52,10 @@ const DEFAULT_RESEND_WEBHOOK_MAX_BYTES = 1_000_000;
 
 /**
  * Production-fail-closed per-IP cap on inbound Resend webhook requests, applied
- * BEFORE the
- * (more expensive) Svix signature verification so unsigned floods are shed
- * cheaply. Fail-closed verification and replay dedupe still run afterwards. This
- * limiter is in-memory/per-process; durable cross-instance limits belong at the
- * edge/WAF (see `docs/security-rate-limiting.md`).
+ * before the more expensive Svix signature verification so unsigned floods are
+ * shed cheaply. Fail-closed verification and replay dedupe still run afterwards.
+ * This limiter is in-memory/per-process; durable cross-instance limits belong at
+ * the edge/WAF (see `docs/security-rate-limiting.md`).
  */
 const DEFAULT_RESEND_WEBHOOK_RATE_LIMIT_PER_MINUTE = 120;
 const RESEND_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
