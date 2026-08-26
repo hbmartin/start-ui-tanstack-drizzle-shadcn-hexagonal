@@ -764,7 +764,14 @@ const requestBuiltServerFunction = async ({
   }
 };
 
-const assertClosedBadRequest = ({ headers, label, rawBody, status }) => {
+const assertClosedBadRequest = ({
+  expectedReason = 'invalid_input',
+  expectedTarget = 'request',
+  headers,
+  label,
+  rawBody,
+  status,
+}) => {
   assert(status === 400, `${label} was HTTP ${status}, expected HTTP 400`);
   assert(
     headers.get('x-tss-serialized') === 'true',
@@ -783,7 +790,7 @@ const assertClosedBadRequest = ({ headers, label, rawBody, status }) => {
   );
   assert(error.version === 1, `${label} changed the DTO version`);
   assert(
-    error.target === 'request' && error.reason === 'invalid_input',
+    error.target === expectedTarget && error.reason === expectedReason,
     `${label} changed validation classification`
   );
   assert(

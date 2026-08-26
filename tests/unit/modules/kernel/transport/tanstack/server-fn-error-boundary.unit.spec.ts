@@ -113,6 +113,17 @@ describe('global server-function error boundary', () => {
     expect(setResponseHeader).toHaveBeenCalledWith('Retry-After', '60');
   });
 
+  it('uses a conservative bounded response fallback without inventing client DTO metadata', async () => {
+    const mapped = await boundaryHandler({
+      context: { requestId: REQUEST_ID },
+      next: vi.fn().mockRejectedValue(new ServerFnError('TOO_MANY_REQUESTS')),
+    }).catch((error: unknown) => error);
+
+    expect(mapped.retryAfterSeconds).toBeUndefined();
+    expect(setResponseStatus).toHaveBeenCalledWith(429);
+    expect(setResponseHeader).toHaveBeenCalledWith('Retry-After', '60');
+  });
+
   it('does not duplicate logs for errors already reported by a context runner', async () => {
     await boundaryHandler({
       context: { requestId: REQUEST_ID },

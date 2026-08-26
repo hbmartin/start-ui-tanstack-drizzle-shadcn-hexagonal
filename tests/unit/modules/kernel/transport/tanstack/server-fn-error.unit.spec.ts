@@ -19,6 +19,7 @@ const REASON_CODE_CASES = [
   ['rate_limited', 'TOO_MANY_REQUESTS'],
   ['method_not_supported', 'METHOD_NOT_SUPPORTED'],
   ['internal_error', 'INTERNAL_SERVER_ERROR'],
+  ['serialized_payload_invalid', 'BAD_REQUEST'],
   ['reauth_required', 'FORBIDDEN'],
   ['already_exists', 'CONFLICT'],
   ['self_action_forbidden', 'BAD_REQUEST'],
@@ -136,19 +137,40 @@ describe('public server-function error contract', () => {
     ).toThrow('Server error reason not_found is invalid for FORBIDDEN.');
   });
 
-  it('bounds Retry-After internally without adding it to the public DTO', () => {
-    const error = new ServerFnError('TOO_MANY_REQUESTS', {
-      correlationId: CORRELATION_ID,
-      retryAfterSeconds: 9999,
-    });
+  it.each([
+    { expected: 17, retryAfterSeconds: 17 },
+    { expected: 60, retryAfterSeconds: 9_999 },
+    { expected: 60, retryAfterSeconds: -1 },
+    { expected: 60, retryAfterSeconds: Number.NaN },
+    { expected: 2, retryAfterSeconds: 1.1 },
+  ])(
+    'bounds Retry-After $retryAfterSeconds to $expected at the transport boundary',
+    ({ expected, retryAfterSeconds }) => {
+      const error = new ServerFnError('TOO_MANY_REQUESTS', {
+        correlationId: CORRELATION_ID,
+        retryAfterSeconds,
+      });
 
-    expect(error.retryAfterSeconds).toBe(60);
-    expect(error.toJSON()).toEqual({
+      expect(error.retryAfterSeconds).toBe(expected);
+      expect(error.toJSON()).toEqual({
+        correlationId: CORRELATION_ID,
+        reason: 'rate_limited',
+        target: 'request',
+        version: 1,
+      });
+    }
+  );
+
+  it('does not fabricate retry advice when reviving the four-field DTO', () => {
+    const source = new ServerFnError('TOO_MANY_REQUESTS', {
       correlationId: CORRELATION_ID,
-      reason: 'rate_limited',
-      target: 'request',
-      version: 1,
+      retryAfterSeconds: 17,
     });
+    const revived = serverFnErrorSerializationAdapter.fromSerializable(
+      source.toJSON()
+    );
+
+    expect(revived.retryAfterSeconds).toBeUndefined();
   });
 
   it.each([
@@ -187,9 +209,9 @@ describe('public server-function error contract', () => {
 
       expect(revived).toMatchObject({
         code: 'BAD_REQUEST',
-        reason: 'invalid_input',
+        reason: 'serialized_payload_invalid',
         status: 400,
-        target: 'request',
+        target: 'system',
       });
       expect(revived.deserializationFailure).toBe(true);
       expect(Object.keys(revived.toJSON()).toSorted()).toEqual([

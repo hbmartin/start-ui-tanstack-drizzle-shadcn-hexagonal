@@ -1,9 +1,6 @@
 import { createSerializationAdapter } from '@tanstack/react-router';
 
-import {
-  AppError,
-  normalizeRetryAfterSeconds,
-} from '@/modules/kernel/domain/errors/app-error';
+import { AppError } from '@/modules/kernel/domain/errors/app-error';
 
 export const SERVER_FN_ERROR_CODES = [
   'BAD_REQUEST',
@@ -46,6 +43,7 @@ export const PUBLIC_SERVER_ERROR_REASONS = [
   'rate_limited',
   'method_not_supported',
   'internal_error',
+  'serialized_payload_invalid',
   'reauth_required',
   'already_exists',
   'self_action_forbidden',
@@ -125,6 +123,7 @@ const CODE_BY_REASON = {
   rate_limited: 'TOO_MANY_REQUESTS',
   method_not_supported: 'METHOD_NOT_SUPPORTED',
   internal_error: 'INTERNAL_SERVER_ERROR',
+  serialized_payload_invalid: 'BAD_REQUEST',
   reauth_required: 'FORBIDDEN',
   already_exists: 'CONFLICT',
   self_action_forbidden: 'BAD_REQUEST',
@@ -137,9 +136,19 @@ const reasonSet = new Set<string>(PUBLIC_SERVER_ERROR_REASONS);
 const publicDtoKeys = ['correlationId', 'reason', 'target', 'version'] as const;
 const opaqueCorrelationIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const DESERIALIZATION_FAILURE_CAUSE = Object.freeze({});
+const DESERIALIZATION_FAILURE_CAUSE = new AppError({
+  category: 'bad_request',
+  code: 'SERIALIZED_PAYLOAD_INVALID',
+  message: 'Malformed serialized server-function error payload',
+  status: 400,
+});
 const MAX_CAUSE_CHAIN_DEPTH = 16;
+const DEFAULT_RETRY_AFTER_SECONDS = 60;
+const MIN_RETRY_AFTER_SECONDS = 1;
+const MAX_RETRY_AFTER_SECONDS = 60;
 
+// Clone and mapper paths must preserve their original cause so this
+// direction-neutral provenance survives without widening the public DTO.
 const hasDeserializationFailureCause = (value: unknown) => {
   let current = value;
   const seen = new Set<object>();
@@ -154,6 +163,17 @@ const hasDeserializationFailureCause = (value: unknown) => {
 
   return false;
 };
+
+export const boundedServerFnRetryAfterSeconds = (value: number | undefined) =>
+  Math.min(
+    MAX_RETRY_AFTER_SECONDS,
+    Math.max(
+      MIN_RETRY_AFTER_SECONDS,
+      value !== undefined && Number.isFinite(value) && value > 0
+        ? Math.ceil(value)
+        : DEFAULT_RETRY_AFTER_SECONDS
+    )
+  );
 
 const isPublicServerErrorTarget = (
   value: unknown
@@ -251,8 +271,8 @@ export class ServerFnError extends AppError {
     this.deserializationFailure = hasDeserializationFailureCause(options.cause);
     this.reported = options.reported ?? false;
     this.retryAfterSeconds =
-      code === 'TOO_MANY_REQUESTS'
-        ? normalizeRetryAfterSeconds(options.retryAfterSeconds)
+      code === 'TOO_MANY_REQUESTS' && options.retryAfterSeconds !== undefined
+        ? boundedServerFnRetryAfterSeconds(options.retryAfterSeconds)
         : undefined;
   }
 
@@ -315,6 +335,8 @@ export const serverFnErrorSerializationAdapter = createSerializationAdapter<
       // of tampering; it can also represent version skew on a client.
       return new ServerFnError('BAD_REQUEST', {
         cause: DESERIALIZATION_FAILURE_CAUSE,
+        reason: 'serialized_payload_invalid',
+        target: 'system',
       });
     }
     return ServerFnError.fromPublicDto(value);
