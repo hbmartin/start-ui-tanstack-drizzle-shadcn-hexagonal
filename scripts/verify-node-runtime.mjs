@@ -53,6 +53,23 @@ const publicServerErrorPlugin = createPlugin({
   },
 });
 
+const hostilePublicServerErrorPlugin = createPlugin({
+  tag: '$TSR/t/start-ui/server-error-v1',
+  test: (value) =>
+    typeof value === 'object' &&
+    value !== null &&
+    value.__hostilePublicServerError === true,
+  parse: {
+    async async(value, context) {
+      return { v: await context.parse(value.payload) };
+    },
+  },
+  serialize: undefined,
+  deserialize(node, context) {
+    return context.deserialize(node.v);
+  },
+});
+
 export const parseServerFunctionId = (manifestSource, functionName) => {
   const escapedFunctionName = functionName.replace(
     /[.*+?^${}()|[\]\\]/gu,
@@ -714,20 +731,15 @@ const readBuiltServerFunctionId = async (functionName) => {
   return functionId;
 };
 
-const verifyBuiltNodeServerFunctionErrorContract = async (appPort) => {
-  const functionId = await readBuiltServerFunctionId(
-    'bookGetById_createServerFn_handler'
-  );
-  const hostileInput = 'hostile-wire-secret';
+const requestBuiltServerFunction = async ({
+  appPort,
+  data,
+  functionId,
+  plugins,
+}) => {
   const serializedPayload = JSON.stringify(
     await Promise.resolve(
-      toJSONAsync({
-        data: {
-          id: '   ',
-          hostile: hostileInput,
-          provider: { apiKey: 'provider-wire-secret' },
-        },
-      })
+      toJSONAsync({ data }, plugins ? { plugins } : undefined)
     )
   );
   const url = new URL(`http://localhost:${appPort}/_serverFn/${functionId}`);
@@ -746,49 +758,100 @@ const verifyBuiltNodeServerFunctionErrorContract = async (appPort) => {
       signal: controller.signal,
     });
     const rawBody = await response.text();
-    assert(
-      response.status === 400,
-      `invalid server-function input was HTTP ${response.status}, expected HTTP 400`
-    );
-    assert(
-      response.headers.get('x-tss-serialized') === 'true',
-      'invalid server-function input bypassed TanStack serialization'
-    );
-    assert(
-      !/hostile-wire-secret|provider-wire-secret|apiKey|"message"|"stack"|"cause"/iu.test(
-        rawBody
-      ),
-      'the built server-function response exposed an open-ended error field'
-    );
-    const decoded = decodeServerFunctionResponse(JSON.parse(rawBody));
-    const error = decoded?.error;
-    assert(
-      error && typeof error === 'object',
-      'the built server-function response omitted its public error'
-    );
-    assert(
-      JSON.stringify(Object.keys(error).toSorted()) ===
-        JSON.stringify(['correlationId', 'reason', 'target', 'version']),
-      'the built server-function response changed the four-field DTO'
-    );
-    assert(
-      error.version === 1,
-      'the built server-function DTO version changed'
-    );
-    assert(
-      error.target === 'request' && error.reason === 'invalid_input',
-      'the built server-function DTO changed validation classification'
-    );
-    assert(
-      publicErrorCorrelationIdPattern.test(error.correlationId),
-      'the built server-function DTO did not contain an opaque correlation ID'
-    );
-    console.log(
-      'Verified built Node server-function validation: HTTP 400 and exact closed error DTO.'
-    );
+    return { headers: response.headers, rawBody, status: response.status };
   } finally {
     clearTimeout(timeout);
   }
+};
+
+const assertClosedBadRequest = ({ headers, label, rawBody, status }) => {
+  assert(status === 400, `${label} was HTTP ${status}, expected HTTP 400`);
+  assert(
+    headers.get('x-tss-serialized') === 'true',
+    `${label} bypassed TanStack serialization`
+  );
+  const decoded = decodeServerFunctionResponse(JSON.parse(rawBody));
+  const error = decoded?.error;
+  assert(
+    error && typeof error === 'object',
+    `${label} omitted its public error`
+  );
+  assert(
+    JSON.stringify(Object.keys(error).toSorted()) ===
+      JSON.stringify(['correlationId', 'reason', 'target', 'version']),
+    `${label} changed the four-field DTO`
+  );
+  assert(error.version === 1, `${label} changed the DTO version`);
+  assert(
+    error.target === 'request' && error.reason === 'invalid_input',
+    `${label} changed validation classification`
+  );
+  assert(
+    publicErrorCorrelationIdPattern.test(error.correlationId),
+    `${label} did not contain an opaque correlation ID`
+  );
+  assert(
+    headers.get('x-request-id') === error.correlationId,
+    `${label} did not use the entrypoint request ID for public correlation`
+  );
+  return error;
+};
+
+const verifyBuiltNodeServerFunctionErrorContract = async (appPort) => {
+  const functionId = await readBuiltServerFunctionId(
+    'bookGetById_createServerFn_handler'
+  );
+  const invalidInput = await requestBuiltServerFunction({
+    appPort,
+    data: {
+      id: '   ',
+      hostile: 'hostile-wire-secret',
+      provider: { apiKey: 'provider-wire-secret' },
+    },
+    functionId,
+  });
+  assertClosedBadRequest({
+    ...invalidInput,
+    label: 'invalid server-function input',
+  });
+  assert(
+    !/hostile-wire-secret|provider-wire-secret|apiKey|"message"|"stack"|"cause"/iu.test(
+      invalidInput.rawBody
+    ),
+    'the built server-function response exposed an open-ended error field'
+  );
+
+  const malformedAdapter = await requestBuiltServerFunction({
+    appPort,
+    data: {
+      id: {
+        __hostilePublicServerError: true,
+        payload: {
+          correlationId: 'attacker-controlled-correlation',
+          provider: { apiKey: 'malformed-provider-secret' },
+          reason: 'not_closed',
+          target: 'arbitrary.field',
+          version: 1,
+        },
+      },
+    },
+    functionId,
+    plugins: [hostilePublicServerErrorPlugin],
+  });
+  assertClosedBadRequest({
+    ...malformedAdapter,
+    label: 'malformed server-error adapter input',
+  });
+  assert(
+    !/attacker-controlled|malformed-provider-secret|apiKey|arbitrary\.field|not_closed|"message"|"stack"|"cause"/iu.test(
+      malformedAdapter.rawBody
+    ),
+    'malformed adapter input leaked into the server-function response'
+  );
+
+  console.log(
+    'Verified built Node server-function validation and malformed adapter handling: HTTP 400, entrypoint correlation, and exact closed DTO.'
+  );
 };
 
 const verifyNodeLoginResponses = async ({

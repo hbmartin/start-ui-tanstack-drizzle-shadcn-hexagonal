@@ -299,12 +299,10 @@ export const serverFnErrorSerializationAdapter = createSerializationAdapter<
   toSerializable: (value) => value.toJSON(),
   fromSerializable: (value) => {
     if (!isPublicServerErrorDto(value)) {
-      throw new AppError({
-        category: 'system',
-        code: 'INVALID_PUBLIC_SERVER_ERROR_PAYLOAD',
-        message: 'Invalid public server error payload.',
-        status: 500,
-      });
+      // Symmetric adapters also deserialize client-authored server-function
+      // arguments. Return a closed client-error sentinel rather than throwing
+      // a pre-middleware 5xx for a forged or malformed adapter tag.
+      return new ServerFnError('BAD_REQUEST');
     }
     return ServerFnError.fromPublicDto(value);
   },

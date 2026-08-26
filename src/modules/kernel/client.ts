@@ -1,4 +1,5 @@
 export {
+  isOpaquePublicCorrelationId,
   isServerFnError,
   isPublicServerErrorDto,
   PUBLIC_SERVER_ERROR_REASONS,

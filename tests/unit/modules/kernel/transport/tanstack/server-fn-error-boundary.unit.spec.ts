@@ -1,3 +1,4 @@
+import { getGlobalStartContext } from '@tanstack/react-start';
 import {
   setResponseHeader,
   setResponseStatus,
@@ -14,8 +15,10 @@ import {
 } from '@/platform/telemetry';
 
 const REQUEST_ID = '53b49589-2ca2-4c8a-b70a-bb2d7835523c';
+const FUNCTION_CONTEXT_ID = '126fc203-31db-4849-b22e-8b331db644b6';
 const boundaryHandler = (serverFnErrorBoundaryMiddleware as ExplicitAny)
   .handler;
+const getGlobalStartContextMock = vi.mocked(getGlobalStartContext);
 
 const telemetrySpies = {
   captureException: vi.fn(),
@@ -23,6 +26,7 @@ const telemetrySpies = {
 };
 
 beforeEach(() => {
+  getGlobalStartContextMock.mockReturnValue({ requestId: REQUEST_ID } as never);
   setTelemetry({
     ...createNoOpTelemetry(),
     ...telemetrySpies,
@@ -38,7 +42,7 @@ describe('global server-function error boundary', () => {
     const next = vi.fn().mockRejectedValue(validationError);
 
     const mapped = await boundaryHandler({
-      context: { requestId: REQUEST_ID },
+      context: { requestId: FUNCTION_CONTEXT_ID },
       next,
     }).catch((error: unknown) => error);
 
@@ -66,11 +70,12 @@ describe('global server-function error boundary', () => {
   it('captures an unexpected pre-handler failure once and exposes only the DTO', async () => {
     const original = new Error('provider-secret at db.internal?token=secret');
     const captureState = createRequestExceptionCaptureState();
+    getGlobalStartContextMock.mockReturnValue({
+      requestId: REQUEST_ID,
+      telemetryCaptureState: captureState,
+    } as never);
     const mapped = await boundaryHandler({
-      context: {
-        requestId: REQUEST_ID,
-        telemetryCaptureState: captureState,
-      },
+      context: {},
       next: vi.fn().mockRejectedValue(original),
     }).catch((error: unknown) => error);
 
@@ -90,6 +95,7 @@ describe('global server-function error boundary', () => {
       expect.any(Object)
     );
     expect(captureState.captured.has(original)).toBe(true);
+    expect(captureState.captured.has(mapped)).toBe(true);
   });
 
   it('returns real bounded 429 response metadata', async () => {
@@ -120,5 +126,18 @@ describe('global server-function error boundary', () => {
     expect(setResponseStatus).toHaveBeenCalledWith(403);
     expect(telemetrySpies.emitLog).not.toHaveBeenCalled();
     expect(telemetrySpies.captureException).not.toHaveBeenCalled();
+  });
+
+  it('falls back to function context when the global Start context is unavailable', async () => {
+    getGlobalStartContextMock.mockImplementation(() => {
+      throw new Error('No active Start request');
+    });
+
+    const mapped = await boundaryHandler({
+      context: { requestId: FUNCTION_CONTEXT_ID },
+      next: vi.fn().mockRejectedValue(new ServerFnError('BAD_REQUEST')),
+    }).catch((error: unknown) => error);
+
+    expect(mapped.correlationId).toBe(FUNCTION_CONTEXT_ID);
   });
 });

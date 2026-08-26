@@ -63,6 +63,52 @@ describe('tanstack result mapper', () => {
     });
   });
 
+  it('carries bounded retry metadata from rate-limit app errors', async () => {
+    await expect(
+      unwrapApplicationResult(
+        Promise.resolve(
+          Result.Error(
+            new AppError({
+              code: 'RATE_LIMITED',
+              category: 'rate_limit',
+              status: 429,
+              retryAfterSeconds: 17,
+            })
+          )
+        ),
+        handlers
+      )
+    ).rejects.toMatchObject({
+      code: 'TOO_MANY_REQUESTS',
+      reason: 'rate_limited',
+      retryAfterSeconds: 17,
+      status: 429,
+      target: 'request',
+    });
+  });
+
+  it('ignores code-specific public overrides when the category disagrees', async () => {
+    await expect(
+      unwrapApplicationResult(
+        Promise.resolve(
+          Result.Error(
+            new AppError({
+              code: 'USER_DUPLICATE',
+              category: 'bad_request',
+              status: 400,
+            })
+          )
+        ),
+        handlers
+      )
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      reason: 'invalid_input',
+      status: 400,
+      target: 'request',
+    });
+  });
+
   it('hides internal (system) app error messages and details from the client', async () => {
     await expect(
       unwrapApplicationResult(

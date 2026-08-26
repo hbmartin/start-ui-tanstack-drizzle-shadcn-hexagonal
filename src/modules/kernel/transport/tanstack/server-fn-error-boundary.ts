@@ -1,4 +1,4 @@
-import { createMiddleware } from '@tanstack/react-start';
+import { createMiddleware, getGlobalStartContext } from '@tanstack/react-start';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
@@ -115,20 +115,39 @@ type BoundaryContext = {
   telemetryCaptureState?: unknown;
 };
 
+const globalBoundaryContext = () => {
+  try {
+    return getGlobalStartContext() as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const contextCandidates = (context: unknown) => [
+  globalBoundaryContext(),
+  context,
+];
+
 const boundaryRequestId = (context: unknown) => {
-  if (typeof context !== 'object' || context === null) return undefined;
-  const { requestId } = context as BoundaryContext;
-  return isOpaquePublicCorrelationId(requestId) ? requestId : undefined;
+  for (const candidate of contextCandidates(context)) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const { requestId } = candidate as BoundaryContext;
+    if (isOpaquePublicCorrelationId(requestId)) return requestId;
+  }
+  return undefined;
 };
 
 const boundaryCaptureState = (
   context: unknown
 ): RequestExceptionCaptureState | undefined => {
-  if (typeof context !== 'object' || context === null) return undefined;
-  const { telemetryCaptureState } = context as BoundaryContext;
-  return isRequestExceptionCaptureState(telemetryCaptureState)
-    ? telemetryCaptureState
-    : undefined;
+  for (const candidate of contextCandidates(context)) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const { telemetryCaptureState } = candidate as BoundaryContext;
+    if (isRequestExceptionCaptureState(telemetryCaptureState)) {
+      return telemetryCaptureState;
+    }
+  }
+  return undefined;
 };
 
 const reportBoundaryError = (
@@ -171,13 +190,20 @@ export const serverFnErrorBoundaryMiddleware = createMiddleware({
   try {
     return await next();
   } catch (error) {
+    const captureState = boundaryCaptureState(context);
     const mapped = normalizeServerFnError(error, boundaryRequestId(context));
     const { applyServerFnErrorResponse } =
       await import('./server-fn-error-response.server');
     applyServerFnErrorResponse(mapped);
     if (!mapped.reported) {
-      reportBoundaryError(error, mapped, boundaryCaptureState(context));
+      reportBoundaryError(error, mapped, captureState);
     }
-    throw mapped.asReported();
+    const reported = mapped.asReported();
+    if (captureState && reported.status >= 500) {
+      // Request middleware sees the wrapper, not necessarily its original
+      // cause. Claim that exact identity after the boundary-owned capture.
+      claimRequestException(captureState, reported);
+    }
+    throw reported;
   }
 });

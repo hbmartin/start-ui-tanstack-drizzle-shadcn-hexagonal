@@ -177,10 +177,26 @@ describe('public server-function error contract', () => {
       target: 'request',
       version: 1,
     },
-  ])('rejects hostile or open-ended adapter payloads', (payload) => {
-    expect(isPublicServerErrorDto(payload)).toBe(false);
-    expect(() =>
-      serverFnErrorSerializationAdapter.fromSerializable(payload as never)
-    ).toThrow('Invalid public server error payload.');
-  });
+  ])(
+    'closes hostile or open-ended adapter payloads as bad input',
+    (payload) => {
+      expect(isPublicServerErrorDto(payload)).toBe(false);
+      const revived = serverFnErrorSerializationAdapter.fromSerializable(
+        payload as never
+      );
+
+      expect(revived).toMatchObject({
+        code: 'BAD_REQUEST',
+        reason: 'invalid_input',
+        status: 400,
+        target: 'request',
+      });
+      expect(Object.keys(revived.toJSON()).toSorted()).toEqual([
+        'correlationId',
+        'reason',
+        'target',
+        'version',
+      ]);
+    }
+  );
 });

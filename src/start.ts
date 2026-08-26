@@ -7,7 +7,10 @@ import {
 import { observeHttpRequest } from '@/composition/telemetry/request-observability';
 import type { AuthSession } from '@/modules/auth';
 import type { Logger } from '@/modules/kernel';
-import { serverFnErrorSerializationAdapter } from '@/modules/kernel/client';
+import {
+  isOpaquePublicCorrelationId,
+  serverFnErrorSerializationAdapter,
+} from '@/modules/kernel/client';
 import { serverFnErrorBoundaryMiddleware } from '@/modules/kernel/middleware';
 import { envClient } from '@/platform/env/client';
 import {
@@ -175,6 +178,10 @@ export const securityHeadersMiddleware = createMiddleware({
   const nextContext = mergeRequestContext(context, { cspNonce });
   const result = await next({ context: nextContext });
   applyAppSecurityHeaders(result.response, nextContext);
+  const requestId = getRequestIdFromContext(nextContext);
+  if (isOpaquePublicCorrelationId(requestId)) {
+    result.response.headers.set('X-Request-ID', requestId);
+  }
   return result;
 });
 

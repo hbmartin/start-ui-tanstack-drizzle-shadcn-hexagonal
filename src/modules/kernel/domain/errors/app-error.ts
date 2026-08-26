@@ -13,6 +13,7 @@ export type AppErrorOptions = {
   code: string;
   category: AppErrorCategory;
   status: number;
+  retryAfterSeconds?: number;
   message?: string;
   details?: AppErrorDetails;
   exposeDetails?: boolean;
@@ -23,6 +24,7 @@ export class AppError extends Error {
   readonly code: string;
   readonly category: AppErrorCategory;
   readonly status: number;
+  readonly retryAfterSeconds?: number;
   readonly details?: AppErrorDetails;
   readonly exposeDetails: boolean;
 
@@ -32,6 +34,7 @@ export class AppError extends Error {
     this.code = options.code;
     this.category = options.category;
     this.status = options.status;
+    this.retryAfterSeconds = options.retryAfterSeconds;
     this.details = options.details;
     this.exposeDetails = options.exposeDetails ?? false;
   }

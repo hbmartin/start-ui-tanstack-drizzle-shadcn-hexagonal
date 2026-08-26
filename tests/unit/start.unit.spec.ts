@@ -118,6 +118,7 @@ describe('TanStack Start instance', () => {
   it('applies security headers to successful responses', async () => {
     const { securityHeadersMiddleware } = await import('@/start');
     type NextOptions = { context: { cspNonce: string; requestId: string } };
+    const requestId = 'ff229da3-47d7-45b0-9687-0d90422b5241';
     const originalResponse = new Response('<html><body>ok</body></html>', {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
@@ -128,14 +129,15 @@ describe('TanStack Start instance', () => {
     }));
 
     const result = await (securityHeadersMiddleware as ExplicitAny).handler({
-      context: { requestId: 'request-1' },
+      context: { requestId },
       next,
     });
     const nextOptions = next.mock.calls[0]?.[0];
     const cspNonce = nextOptions?.context.cspNonce;
 
     expect(cspNonce).toEqual(expect.any(String));
-    expect(nextOptions?.context.requestId).toBe('request-1');
+    expect(nextOptions?.context.requestId).toBe(requestId);
+    expect(result.response.headers.get('X-Request-ID')).toBe(requestId);
     expect(result.response.headers.get('X-Content-Type-Options')).toBe(
       'nosniff'
     );

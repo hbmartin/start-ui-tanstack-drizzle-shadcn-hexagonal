@@ -32,7 +32,7 @@ const codeForCategory: Record<AppError['category'], ServerFnErrorCode> = {
   unauthorized: 'UNAUTHORIZED',
 };
 
-const publicErrorForAppCode: Readonly<
+const publicErrorForConflictAppCode: Readonly<
   Record<
     string,
     Readonly<{
@@ -66,17 +66,22 @@ const throwServerFnErrorForReason = (
 const mapAppErrorToServerFnError = (error: unknown): never => {
   if (error instanceof AppError) {
     const isInternal = error.category === 'system' || error.status >= 500;
-    const publicOverride = isInternal
-      ? undefined
-      : publicErrorForAppCode[error.code];
-    throw new ServerFnError(
-      isInternal ? 'INTERNAL_SERVER_ERROR' : codeForCategory[error.category],
-      {
-        cause: error,
-        reason: publicOverride?.reason,
-        target: publicOverride?.target,
-      }
-    );
+    const transportCode = isInternal
+      ? 'INTERNAL_SERVER_ERROR'
+      : codeForCategory[error.category];
+    const publicOverride =
+      transportCode === 'CONFLICT'
+        ? publicErrorForConflictAppCode[error.code]
+        : undefined;
+    throw new ServerFnError(transportCode, {
+      cause: error,
+      reason: publicOverride?.reason,
+      retryAfterSeconds:
+        transportCode === 'TOO_MANY_REQUESTS'
+          ? error.retryAfterSeconds
+          : undefined,
+      target: publicOverride?.target,
+    });
   }
   throw error;
 };
