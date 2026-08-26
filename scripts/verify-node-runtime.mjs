@@ -394,7 +394,7 @@ const createRuntimeResources = () => {
   const databaseReservation = net.createServer();
   const redis = createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ result: null }));
+    response.end(JSON.stringify({ result: [1, -1] }));
   });
   let cleanupPromise;
   const cleanup = () => {
@@ -880,6 +880,45 @@ const verifyNodeLoginResponses = async ({
   );
 };
 
+const parseGithubOAuthRedirectPayload = (body) => {
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    fail('one-hop trusted production auth returned malformed JSON');
+  }
+  assert(
+    typeof payload === 'object',
+    'one-hop trusted production auth returned a non-object payload'
+  );
+  assert(
+    payload !== null,
+    'one-hop trusted production auth returned a null payload'
+  );
+  assert(
+    payload.redirect === true,
+    'one-hop trusted production auth did not request an OAuth redirect'
+  );
+  assert(
+    typeof payload.url === 'string',
+    'one-hop trusted production auth omitted its OAuth URL'
+  );
+  return payload;
+};
+
+const verifyGithubOAuthRedirectPayload = (body) => {
+  const payload = parseGithubOAuthRedirectPayload(body);
+  const authorizationUrl = new URL(payload.url);
+  assert(
+    authorizationUrl.hostname === 'github.com',
+    'one-hop trusted production auth did not reach GitHub'
+  );
+  assert(
+    authorizationUrl.pathname === '/login/oauth/authorize',
+    'one-hop trusted production auth returned an unexpected GitHub path'
+  );
+};
+
 const verifyNodeTrustedAuthClientIp = async (appPort) => {
   const url = `http://localhost:${appPort}/api/auth/sign-in/social`;
   const body = JSON.stringify({ provider: 'github' });
@@ -912,12 +951,14 @@ const verifyNodeTrustedAuthClientIp = async (appPort) => {
     method: 'POST',
     signal: AbortSignal.timeout(responseTimeoutMs),
   });
+  const trustedBody = await trusted.text();
   assert(
-    trusted.status !== 503 && trusted.status !== 404,
-    `one-hop trusted production auth did not pass ingress: HTTP ${trusted.status}`
+    trusted.status === 200,
+    `one-hop trusted production auth was HTTP ${trusted.status}, expected HTTP 200: ${trustedBody.slice(0, 240)}`
   );
+  verifyGithubOAuthRedirectPayload(trustedBody);
   console.log(
-    `Verified Node trusted client-IP ingress: headerless HTTP 503 and one-hop provider HTTP ${trusted.status}.`
+    'Verified Node trusted client-IP ingress: headerless HTTP 503 and one-hop GitHub OAuth HTTP 200.'
   );
 };
 

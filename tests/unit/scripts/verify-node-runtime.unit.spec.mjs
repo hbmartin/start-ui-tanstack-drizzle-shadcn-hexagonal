@@ -113,6 +113,9 @@ describe('Node verification configuration', () => {
       redisPort: 30_002,
     });
     expect(environment.CAPABILITY_PRESET).toBe('core');
+    expect(environment.GITHUB_CLIENT_ID).toBe(
+      'runtime-verification-github-client-id'
+    );
     expect(environment.S3_ACCESS_KEY_ID).toBeUndefined();
     expect(environment.VITE_S3_BUCKET_PUBLIC_URL).toBeUndefined();
   });

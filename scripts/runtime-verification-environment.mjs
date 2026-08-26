@@ -75,6 +75,8 @@ export const createVerificationEnvironment = ({
     EMAIL_DELIVERY_DISABLED: 'true',
     EMAIL_FROM: 'Start UI Runtime Verification <noreply@example.test>',
     EMAIL_SERVER: '',
+    GITHUB_CLIENT_ID: 'runtime-verification-github-client-id',
+    GITHUB_CLIENT_SECRET: 'runtime-verification-github-client-secret',
     LOGGER_CONSOLE_MIRROR: 'true',
     NODE_ENV: 'production',
     OTEL_LOCAL_SQLITE_ENABLED: 'false',

@@ -87,11 +87,13 @@ describe('Better Auth HTTP policy', () => {
     const runtimeRequest = {
       clone: () => {
         const clonedRequest = backingRequest.clone();
-        Object.defineProperty(clonedRequest.headers, 'delete', {
-          value: () => {
-            throw new TypeError('immutable request headers');
-          },
-        });
+        for (const method of ['append', 'delete', 'set'] as const) {
+          Object.defineProperty(clonedRequest.headers, method, {
+            value: () => {
+              throw new TypeError('immutable request headers');
+            },
+          });
+        }
         return clonedRequest;
       },
       headers: backingRequest.headers,
