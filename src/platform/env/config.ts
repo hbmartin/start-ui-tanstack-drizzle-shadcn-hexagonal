@@ -118,7 +118,17 @@ export function getEnvClient(runtimeProfile?: RuntimeProfile): EnvClient {
       `Client configuration was already initialized for the ${cachedRuntimeProfile} runtime profile.`
     );
   }
-  cachedClientEnv = parseClientEnv(readRuntimeEnv(), runtimeProfile);
+  const raw = readRuntimeEnv();
+  if (
+    runtimeProfile === undefined &&
+    typeof window === 'undefined' &&
+    isProdRuntimeEnvironment(raw)
+  ) {
+    throw new TypeError(
+      'Production server client configuration requires an explicit RuntimeProfile.'
+    );
+  }
+  cachedClientEnv = parseClientEnv(raw, runtimeProfile);
   cachedRuntimeProfile = runtimeProfile;
   return cachedClientEnv;
 }

@@ -306,6 +306,9 @@ entry, Node 24 runtime metadata, response-streaming flag, and static output.
 Vercel selects the canonical application origin from its validated
 `VERCEL_PROJECT_PRODUCTION_URL`, falling back to `VERCEL_URL`; Better Auth uses
 that fixed origin rather than deriving links or callbacks from request hosts.
+Because Vercel exposes the project production URL to preview deployments,
+previews intentionally share the production callback origin. Use a separate
+Vercel project when isolated preview authentication callbacks are required.
 
 Docs: [TanStack Start on Vercel](https://vercel.com/docs/frameworks/full-stack/tanstack-start), [Vercel Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions)
 

@@ -9,30 +9,53 @@ describe('getEnvClient URL security', () => {
   });
 
   it('rejects cleartext VITE_BASE_URL for remote hosts in production', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('VITE_BASE_URL', 'http://app.example.com');
-    vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', 'https://cdn.example.com/bucket');
-    const { getEnvClient } = await import('@/platform/env/config');
+    const { parseClientEnv } = await import('@/platform/env/config');
 
-    expect(() => getEnvClient()).toThrow(/must use HTTPS/);
+    expect(() =>
+      parseClientEnv({
+        APP_NAME: 'Start UI Test',
+        APP_SLUG: 'start-ui-test',
+        NODE_ENV: 'production',
+        VITE_BASE_URL: 'http://app.example.com',
+        VITE_S3_BUCKET_PUBLIC_URL: 'https://cdn.example.com/bucket',
+      })
+    ).toThrow(/must use HTTPS/);
   });
 
   it('rejects cleartext VITE_S3_BUCKET_PUBLIC_URL for remote hosts in production', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('VITE_BASE_URL', 'https://app.example.com');
-    vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', 'http://cdn.example.com/bucket');
-    const { getEnvClient } = await import('@/platform/env/config');
+    const { parseClientEnv } = await import('@/platform/env/config');
 
-    expect(() => getEnvClient()).toThrow(/VITE_S3_BUCKET_PUBLIC_URL/);
+    expect(() =>
+      parseClientEnv({
+        APP_NAME: 'Start UI Test',
+        APP_SLUG: 'start-ui-test',
+        NODE_ENV: 'production',
+        VITE_BASE_URL: 'https://app.example.com',
+        VITE_S3_BUCKET_PUBLIC_URL: 'http://cdn.example.com/bucket',
+      })
+    ).toThrow(/VITE_S3_BUCKET_PUBLIC_URL/);
   });
 
   it('accepts https production URLs', async () => {
+    const { parseClientEnv } = await import('@/platform/env/config');
+
+    expect(
+      parseClientEnv({
+        APP_NAME: 'Start UI Test',
+        APP_SLUG: 'start-ui-test',
+        NODE_ENV: 'production',
+        VITE_BASE_URL: 'https://app.example.com',
+        VITE_S3_BUCKET_PUBLIC_URL: 'https://cdn.example.com/bucket',
+      }).VITE_BASE_URL
+    ).toBe('https://app.example.com');
+  });
+
+  it('requires an explicit profile for production server access', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITE_BASE_URL', 'https://app.example.com');
-    vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', 'https://cdn.example.com/bucket');
     const { getEnvClient } = await import('@/platform/env/config');
 
-    expect(getEnvClient().VITE_BASE_URL).toBe('https://app.example.com');
+    expect(() => getEnvClient()).toThrow(/explicit RuntimeProfile/);
   });
 
   it('uses Vercel production URL precedence for the Vercel profile', async () => {
@@ -122,13 +145,18 @@ describe('getEnvClient URL security', () => {
   });
 
   it('rejects cleartext VITE_SENTRY_DSN for remote hosts in production', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('VITE_BASE_URL', 'https://app.example.com');
-    vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', 'https://cdn.example.com/bucket');
-    vi.stubEnv('VITE_SENTRY_DSN', 'http://sentry.example.com/1');
-    const { getEnvClient } = await import('@/platform/env/config');
+    const { parseClientEnv } = await import('@/platform/env/config');
 
-    expect(() => getEnvClient()).toThrow(/VITE_SENTRY_DSN/);
+    expect(() =>
+      parseClientEnv({
+        APP_NAME: 'Start UI Test',
+        APP_SLUG: 'start-ui-test',
+        NODE_ENV: 'production',
+        VITE_BASE_URL: 'https://app.example.com',
+        VITE_S3_BUCKET_PUBLIC_URL: 'https://cdn.example.com/bucket',
+        VITE_SENTRY_DSN: 'http://sentry.example.com/1',
+      })
+    ).toThrow(/VITE_SENTRY_DSN/);
   });
 
   it('defaults public signup to disabled', async () => {
