@@ -19,10 +19,14 @@ import {
   assertDatabaseUrlTls,
   findForbiddenDatabaseUrlParameters,
 } from '@/modules/kernel/infrastructure/config/url-security';
+import { reportTelemetryFailure } from '@/platform/telemetry';
 
 import * as schema from './schema';
 import { nodePostgresSslForPolicy } from './node-postgres-tls';
-import { getRuntimeDatabaseClient } from './runtime-database-scope';
+import {
+  getRuntimeDatabaseClient,
+  isRuntimeDatabaseClientRequired,
+} from './runtime-database-scope';
 import {
   type Database,
   type DbLike,
@@ -31,6 +35,18 @@ import {
 } from './types';
 
 const require = createRequire(import.meta.url);
+
+const reportDatabaseClientError = (
+  onError: (error: unknown) => void,
+  error: unknown
+): void => {
+  try {
+    onError(error);
+  } catch {
+    // A diagnostic callback must not turn one database failure into an
+    // uncaught EventEmitter exception that aborts sibling requests.
+  }
+};
 
 function withDatabaseMetadata<TDb extends object>(
   db: TDb,
@@ -71,6 +87,7 @@ function createNeonWebsocketDb(url: string): Database {
 
 export function createDbClient(options?: {
   driver?: DatabaseDriver;
+  onError?: (error: unknown) => void;
   tlsPolicy?: DatabaseTlsPolicy;
   url?: string;
 }): Database {
@@ -134,6 +151,13 @@ export function createDbClient(options?: {
     connectionString: url,
     ssl: nodePostgresSslForPolicy(tlsPolicy),
   });
+  pool.on('error', (error) =>
+    reportDatabaseClientError(
+      options?.onError ??
+        ((failure) => reportTelemetryFailure('database.pool.client', failure)),
+      error
+    )
+  );
   const database = drizzleNodePg(pool, { schema, casing: 'camelCase' });
 
   return withDatabaseMetadata(database, {
@@ -195,14 +219,9 @@ export async function createHyperdriveDbClient(
 ): Promise<Database> {
   const { connectionString } = parseHyperdriveBinding(binding);
   const client = new Client({ connectionString });
-  client.on('error', (error) => {
-    try {
-      options.onError(error);
-    } catch {
-      // A diagnostic callback must not turn one client failure into an
-      // uncaught EventEmitter exception that aborts sibling Worker requests.
-    }
-  });
+  client.on('error', (error) =>
+    reportDatabaseClientError(options.onError, error)
+  );
 
   try {
     await client.connect();
@@ -278,8 +297,19 @@ const createDatabaseProxy = (resolveDatabase: () => Database): Database =>
     },
   });
 
+const resolveRuntimeOrProcessDatabase = (): Database => {
+  const runtimeDatabase = getRuntimeDatabaseClient();
+  if (runtimeDatabase) return runtimeDatabase;
+  if (isRuntimeDatabaseClientRequired()) {
+    throw new ConfigurationError(
+      'The request-scoped runtime database is unavailable outside its owning request.'
+    );
+  }
+  return getProcessDefaultDbClient();
+};
+
 const runtimeOrProcessDatabase = createDatabaseProxy(
-  () => getRuntimeDatabaseClient() ?? getProcessDefaultDbClient()
+  resolveRuntimeOrProcessDatabase
 );
 
 export function getDefaultDbClient(): Database {

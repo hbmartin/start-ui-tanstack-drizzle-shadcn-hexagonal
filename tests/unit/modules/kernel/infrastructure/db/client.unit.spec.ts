@@ -54,6 +54,19 @@ describe('database client', () => {
     expect(pool.options.ssl).toBe(true);
   });
 
+  it('contains idle pool errors and reports them through the caller', () => {
+    const onError = vi.fn();
+    const db = createDbClient({ onError, url: databaseUrl });
+    clients.push(db);
+    const pool = db.$client as unknown as {
+      emit(eventName: string, error: Error): boolean;
+    };
+    const poolFailure = new Error('idle connection failed');
+
+    expect(() => pool.emit('error', poolFailure)).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(poolFailure);
+  });
+
   it('defaults explicit production URLs to verification', () => {
     vi.stubEnv('NODE_ENV', 'production');
     const db = createDbClient({

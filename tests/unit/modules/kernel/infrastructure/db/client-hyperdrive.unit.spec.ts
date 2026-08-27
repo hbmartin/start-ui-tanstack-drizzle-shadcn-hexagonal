@@ -203,5 +203,22 @@ describe('Cloudflare Hyperdrive database client', () => {
       'database-a',
       'database-b',
     ]);
+    expect(() => cachedProxy.marker).toThrow(
+      /request-scoped runtime database is unavailable/u
+    );
+  });
+
+  it('can require the runtime adapter before the first request scope', async () => {
+    const { getDefaultDbClient } =
+      await import('@/modules/kernel/infrastructure/db/client');
+    const { requireRuntimeDatabaseClient } =
+      await import('@/modules/kernel/infrastructure/db/runtime-database-scope');
+    const cachedProxy = getDefaultDbClient();
+
+    requireRuntimeDatabaseClient();
+
+    expect(() => cachedProxy.$driver).toThrow(
+      /request-scoped runtime database is unavailable/u
+    );
   });
 });
