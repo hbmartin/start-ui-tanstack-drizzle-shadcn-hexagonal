@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseSync, Visitor } from 'oxc-parser';
@@ -985,6 +986,11 @@ const assertCloudflareNamedOwnerChunk = (
   );
   assertFile(chunkFile);
   const { program } = readParsedModule(chunkFile);
+  const manifestRecord = assertCloudflareChunkManifestMembership(
+    artifactRoot,
+    chunkFile,
+    'runtime owner'
+  );
   for (const exportedName of exportedNames) {
     assertCloudflareChunkLocalOwner(
       program,
@@ -994,7 +1000,7 @@ const assertCloudflareNamedOwnerChunk = (
       requiredIdentifiers[exportedName]
     );
   }
-  return { chunkFile, program };
+  return { chunkFile, manifestRecord, program };
 };
 
 const assertCloudflareChunkProvenance = (
@@ -1004,9 +1010,26 @@ const assertCloudflareChunkProvenance = (
   label
 ) => {
   const artifactRoot = path.dirname(entryFile);
+  const source = assertCloudflareChunkManifestMembership(
+    artifactRoot,
+    chunkFile,
+    label
+  );
+  assertConditions(
+    [source.entry.isDynamicEntry === true, source.entry.src === expectedSource],
+    `${chunkFile} must originate from ${expectedSource}`
+  );
+  return { ...readParsedModule(chunkFile), manifestRecord: source };
+};
+
+const assertCloudflareChunkManifestMembership = (
+  artifactRoot,
+  chunkFile,
+  label
+) => {
   assert(
     isWithinDirectory(chunkFile, artifactRoot),
-    `${entryFile} must keep ${label} inside its artifact`
+    `${chunkFile} must keep ${label} inside its artifact`
   );
   assertFile(chunkFile);
   const manifestFile = path.join(artifactRoot, '.vite', 'manifest.json');
@@ -1017,18 +1040,15 @@ const assertCloudflareChunkProvenance = (
     .relative(artifactRoot, chunkFile)
     .split(path.sep)
     .join('/');
-  const sources = viteManifestEntries(manifest, manifestFile).filter(
-    (entry) => entry.file === assetFile
-  );
+  viteManifestEntries(manifest, manifestFile);
+  const sources = Object.entries(manifest)
+    .map(([key, entry]) => ({ entry, key }))
+    .filter(({ entry }) => entry.file === assetFile);
   assert(
     sources.length === 1,
     `${chunkFile} must have one Vite ${label} provenance record`
   );
-  assertConditions(
-    [sources[0].isDynamicEntry === true, sources[0].src === expectedSource],
-    `${chunkFile} must originate from ${expectedSource}`
-  );
-  return readParsedModule(chunkFile);
+  return { ...sources[0], artifactRoot, manifest, manifestFile };
 };
 
 const assertCloudflareNamedOwnerImport = (
@@ -1082,6 +1102,7 @@ const assertCloudflareRequestTelemetryOwner = (
   const {
     chunkFile,
     declarator,
+    manifestRecord,
     program: chunkProgram,
   } = assertCloudflareNamedOwnerImport(program, filePath, {
     assetPattern: /^\.\/assets\/request-telemetry(?:-[\w-]+)?\.js$/,
@@ -1097,6 +1118,12 @@ const assertCloudflareRequestTelemetryOwner = (
     'request telemetry owner'
   );
   assertCloudflareRequestTelemetryChunkBehavior(chunkProgram, chunkFile);
+  assertExactCloudflareStaticImportSources(chunkProgram, chunkFile, [
+    /^\.\/tags(?:-[\w-]+)?\.js$/,
+    /^\.\/sanitize-log-fields(?:-[\w-]+)?\.js$/,
+    /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+  ]);
+  assertBoundedCloudflareChunkTopLevel(chunkProgram, chunkFile, manifestRecord);
   assert(
     !hasIdentifierOutsideRanges(program, owner, [
       [fetchFunction.start, fetchFunction.end],
@@ -1116,12 +1143,20 @@ const assertCloudflareLoaderKernelGuard = (loader, filePath) => {
   const kernelOwner = kernelOwners[0].declarator;
   assert(identifierName(kernelOwner.id) === 'kernel', message);
   assert(nodeType(kernelOwner.init) === 'AwaitExpression', message);
+  const importSource = dynamicImportSource(kernelOwner);
   assert(
-    /^\.\/assets\/backend(?:-[\w-]+)?\.js$/.test(
-      dynamicImportSource(kernelOwner) ?? ''
-    ),
+    /^\.\/assets\/backend(?:-[\w-]+)?\.js$/.test(importSource ?? ''),
     message
   );
+  const kernelChunk = path.resolve(path.dirname(filePath), importSource);
+  const { manifestRecord: kernelManifestRecord, program: kernelProgram } =
+    assertCloudflareChunkProvenance(
+      filePath,
+      kernelChunk,
+      'src/modules/kernel/backend.ts',
+      'kernel owner'
+    );
+  assertCloudflareKernelChunk(kernelProgram, kernelChunk, kernelManifestRecord);
   const [requireStatement, validateStatement] = loader.body.body.slice(1, 3);
   assertCloudflareLoaderKernelCall(
     requireStatement,
@@ -1136,6 +1171,52 @@ const assertCloudflareLoaderKernelGuard = (loader, filePath) => {
     filePath
   );
   assert(!mutatedNames(loader).has('kernel'), message);
+};
+
+const assertCloudflareKernelHelper = (
+  program,
+  chunkFile,
+  message,
+  [owner, sourcePattern]
+) => {
+  const exports = program.body
+    .flatMap(namedExportEntries)
+    .filter(([exportedName]) => exportedName === owner);
+  assert(
+    exports.length === 1 && exports[0][1] === owner,
+    `${message}: ${owner}`
+  );
+  assertExactStaticChunkHelper(program, chunkFile, owner, sourcePattern);
+  assert(!mutatedNames(program).has(owner), `${message}: ${owner}`);
+};
+
+const kernelOptionalOwnerPatterns = {
+  5: [],
+  6: [/^\.\/book(?:-[\w-]+)?\.js$/],
+};
+
+const assertCloudflareKernelChunk = (program, chunkFile, manifestRecord) => {
+  const message = `${chunkFile} must expose exact Cloudflare kernel guards`;
+  [
+    ['requireRuntimeDatabaseClient', /^\.\/client(?:-[\w-]+)?\.js$/],
+    ['validateServerBuildConfig', /^\.\/backend(?:-[\w-]+)?\.js$/],
+  ].forEach((helper) =>
+    assertCloudflareKernelHelper(program, chunkFile, message, helper)
+  );
+  const sources = cloudflareStaticImportSources(program);
+  assert(
+    Object.hasOwn(kernelOptionalOwnerPatterns, sources.length),
+    `${chunkFile} must import only its trusted static owner chunks`
+  );
+  assertExactCloudflareStaticImportSources(program, chunkFile, [
+    /^\.\/auth(?:-[\w-]+)?\.js$/,
+    /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+    /^\.\/client(?:-[\w-]+)?\.js$/,
+    /^\.\/runtime(?:-[\w-]+)?\.js$/,
+    /^\.\/backend(?:-[\w-]+)?\.js$/,
+    ...kernelOptionalOwnerPatterns[sources.length],
+  ]);
+  assertBoundedCloudflareChunkTopLevel(program, chunkFile, manifestRecord);
 };
 
 const assertCloudflareLoaderKernelCall = (
@@ -1160,7 +1241,11 @@ const assertCloudflareLoaderKernelCall = (
   );
 };
 
-const assertCloudflareApplicationLoader = (loader, filePath) => {
+const assertCloudflareApplicationLoader = (
+  loader,
+  filePath,
+  tanStackOwnerDigests
+) => {
   assert(
     loader?.type === 'ArrowFunctionExpression',
     `${filePath} must load the application through one async isolation callback`
@@ -1219,7 +1304,11 @@ const assertCloudflareApplicationLoader = (loader, filePath) => {
     `${filePath} must keep its application server-entry owner inside the artifact`
   );
   assertFile(applicationChunk);
-  assertCloudflareApplicationChunkProvenance(applicationChunk, filePath);
+  assertCloudflareApplicationChunkProvenance(
+    applicationChunk,
+    filePath,
+    tanStackOwnerDigests
+  );
   assert(
     !mutatedNames(loader).has('createApplicationServerEntry'),
     `${filePath} must not mutate its application server-entry owner`
@@ -1388,7 +1477,9 @@ const assertUniversalApplicationLifecycle = (scope, applicationChunk) => {
   assert(scope.finalizer.body.length === 1, message);
   const [lifecycleScope] = scope.finalizer.body;
   assert(nodeType(lifecycleScope) === 'TryStatement', message);
+  assert(nodeType(lifecycleScope.block) === 'BlockStatement', message);
   assert(nodeType(lifecycleScope.handler) === 'CatchClause', message);
+  assert(nodeType(lifecycleScope.handler.body) === 'BlockStatement', message);
   assertConditions(
     [
       lifecycleScope.block.body.length === 1,
@@ -1400,9 +1491,9 @@ const assertUniversalApplicationLifecycle = (scope, applicationChunk) => {
   const lifecycleStatement = lifecycleScope.block.body[0];
   assert(nodeType(lifecycleStatement) === 'ExpressionStatement', message);
   const lifecycleCall = unwrapChainExpression(lifecycleStatement.expression);
+  assert(nodeType(lifecycleCall) === 'CallExpression', message);
   assertConditions(
     [
-      nodeType(lifecycleCall) === 'CallExpression',
       identifierMemberSignature(lifecycleCall.callee) ===
         'MemberExpression:false:lifecycle:onRequestSettled',
       lifecycleCall.arguments.length === 1,
@@ -1525,12 +1616,12 @@ const assertUniversalApplicationRequestHandler = (
   assert(handleOwners.length === 1 && handleOwners[0].index === 0, message);
   assertExactDirectVariableOwner(handleOwners[0], 'const', message);
   const handleRequest = handleOwners[0].declarator.init;
+  assert(nodeType(handleRequest) === 'ArrowFunctionExpression', message);
+  assert(nodeType(handleRequest.body) === 'BlockStatement', message);
   assertConditions(
     [
-      nodeType(handleRequest) === 'ArrowFunctionExpression',
       handleRequest.async,
       handleRequest.params.length === 0,
-      nodeType(handleRequest.body) === 'BlockStatement',
       handleRequest.body.body.length === 4,
     ],
     message
@@ -1565,9 +1656,9 @@ const assertUniversalApplicationScope = (statements, applicationChunk) => {
     ],
     message
   );
+  assert(nodeType(resultOwner) === 'VariableDeclaration', message);
   assertConditions(
     [
-      nodeType(resultOwner) === 'VariableDeclaration',
       resultOwner.kind === 'let',
       resultOwner.declarations.length === 1,
       identifierName(resultOwner.declarations[0]?.id) === 'applicationResult',
@@ -1588,13 +1679,10 @@ const assertUniversalApplicationRunner = (statement, applicationChunk) => {
   );
   const [runner] = statement.declarations;
   assert(identifierName(runner.id) === 'runApplicationOnce', message);
+  assert(nodeType(runner.init) === 'ArrowFunctionExpression', message);
+  assert(nodeType(runner.init.body) === 'BlockStatement', message);
   assertConditions(
-    [
-      nodeType(runner.init) === 'ArrowFunctionExpression',
-      runner.init.params.length === 0,
-      nodeType(runner.init.body) === 'BlockStatement',
-      runner.init.body.body.length === 2,
-    ],
+    [runner.init.params.length === 0, runner.init.body.body.length === 2],
     message
   );
   const [memoizeStatement, runnerReturn] = runner.init.body.body;
@@ -1618,11 +1706,13 @@ const assertUniversalApplicationRunner = (statement, applicationChunk) => {
 const assertUniversalApplicationScopeFallback = (scope, applicationChunk) => {
   const message = `${applicationChunk} universal request owner must preserve scoped execution`;
   assert(nodeType(scope) === 'TryStatement', message);
+  assert(nodeType(scope.block) === 'BlockStatement', message);
+  assert(nodeType(scope.handler) === 'CatchClause', message);
+  assert(nodeType(scope.handler.body) === 'BlockStatement', message);
   assertConditions(
     [
       scope.block.body.length === 1,
       scope.finalizer === null,
-      nodeType(scope.handler) === 'CatchClause',
       identifierName(scope.handler.param) === 'failure',
       scope.handler.body.body.length === 2,
     ],
@@ -1663,39 +1753,103 @@ const assertUniversalApplicationScopeFallback = (scope, applicationChunk) => {
   );
 };
 
-const assertCloudflareApplicationChunkImports = (owner, applicationChunk) => {
-  for (const [index, ownerName, sourcePattern] of [
-    [0, 'telemetryProxy', /^\.\/telemetry(?:-[\w-]+)?\.js$/],
-    [1, 'tanstack', /^\.\/entry-server(?:-[\w-]+)?\.js$/],
-  ]) {
-    const imports = directBodyVariableDeclarators(owner, ownerName);
-    assert(
-      imports.length === 1,
-      `${applicationChunk} must import trusted ${ownerName} exactly once`
-    );
-    assert(
-      imports[0].index === index,
-      `${applicationChunk} must import trusted owners before returning the application`
-    );
-    assertExactDirectVariableOwner(
-      imports[0],
-      'const',
-      `${applicationChunk} must isolate trusted ${ownerName} import`
-    );
-    assert(
-      nodeType(imports[0].declarator.init) === 'AwaitExpression',
-      `${applicationChunk} must await trusted ${ownerName} import`
-    );
-    assert(
-      sourcePattern.test(dynamicImportSource(imports[0].declarator) ?? ''),
-      `${applicationChunk} must import trusted ${ownerName} from its owner chunk`
-    );
-  }
+const assertCloudflareApplicationDynamicImport = (
+  owner,
+  applicationChunk,
+  applicationManifestRecord,
+  [index, ownerName, sourcePattern, expectedSource]
+) => {
+  const imports = directBodyVariableDeclarators(owner, ownerName);
+  assert(
+    imports.length === 1,
+    `${applicationChunk} must import trusted ${ownerName} exactly once`
+  );
+  assert(
+    imports[0].index === index,
+    `${applicationChunk} must import trusted owners before returning the application`
+  );
+  assertExactDirectVariableOwner(
+    imports[0],
+    'const',
+    `${applicationChunk} must isolate trusted ${ownerName} import`
+  );
+  assert(
+    nodeType(imports[0].declarator.init) === 'AwaitExpression',
+    `${applicationChunk} must await trusted ${ownerName} import`
+  );
+  const importSource = dynamicImportSource(imports[0].declarator);
+  assert(
+    sourcePattern.test(importSource ?? ''),
+    `${applicationChunk} must import trusted ${ownerName} from its owner chunk`
+  );
+  const importedChunk = path.resolve(
+    path.dirname(applicationChunk),
+    importSource
+  );
+  const manifestRecord = assertCloudflareChunkManifestMembership(
+    applicationManifestRecord.artifactRoot,
+    importedChunk,
+    `dynamic ${ownerName} owner`
+  );
+  assertConditions(
+    [
+      manifestRecord.entry.isDynamicEntry === true,
+      manifestRecord.entry.src === expectedSource,
+    ],
+    `${importedChunk} must originate from ${expectedSource}`
+  );
+  return { importedChunk, manifestRecord };
+};
+
+const assertCloudflareApplicationChunkImports = (
+  owner,
+  applicationChunk,
+  applicationManifestRecord,
+  tanStackOwnerDigests
+) => {
+  const dynamicOwners = [
+    [
+      0,
+      'telemetryProxy',
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      'src/platform/telemetry/index.ts',
+    ],
+    [
+      1,
+      'tanstack',
+      /^\.\/entry-server(?:-[\w-]+)?\.js$/,
+      'src/entry-server.ts',
+    ],
+  ].map((configuration) =>
+    assertCloudflareApplicationDynamicImport(
+      owner,
+      applicationChunk,
+      applicationManifestRecord,
+      configuration
+    )
+  );
+  const tanStackOwner = dynamicOwners[1];
+  assertCloudflareTanStackEntryChunk(
+    readParsedModule(tanStackOwner.importedChunk).program,
+    tanStackOwner.importedChunk,
+    tanStackOwner.manifestRecord,
+    tanStackOwnerDigests
+  );
+  const dynamicRecords = dynamicOwners.map(
+    ({ manifestRecord }) => manifestRecord.key
+  );
+  const expectedDynamicImports = applicationManifestRecord.entry.dynamicImports;
+  assert(
+    Array.isArray(expectedDynamicImports) &&
+      exactSortedValues(dynamicRecords, expectedDynamicImports),
+    `${applicationChunk} must preserve its exact Vite dynamic import graph`
+  );
 };
 
 const assertUniversalApplicationHelperProvenance = (
   program,
-  applicationChunk
+  applicationChunk,
+  applicationManifestRecord
 ) => {
   const helperOwners = [
     ['reportTelemetryFailure', /^\.\/telemetry(?:-[\w-]+)?\.js$/],
@@ -1710,19 +1864,33 @@ const assertUniversalApplicationHelperProvenance = (
     ],
     ['isUnexpectedRequestFailure', /^\.\/request-failure(?:-[\w-]+)?\.js$/],
   ];
-  for (const [helper, sourcePattern] of helperOwners) {
+  const helperRecords = helperOwners.map(([helper, sourcePattern]) =>
     assertExactStaticChunkHelper(
       program,
       applicationChunk,
       helper,
       sourcePattern
-    );
-  }
+    )
+  );
+  const helperKeys = new Set(
+    helperRecords.map(({ manifestRecord }) => manifestRecord.key)
+  );
+  const applicationImports = applicationManifestRecord.entry.imports;
+  assert(
+    Array.isArray(applicationImports),
+    `${applicationChunk} must declare its trusted helper graph in the Vite manifest`
+  );
+  assert(
+    exactSortedValues([...helperKeys], applicationImports),
+    `${applicationChunk} must import exactly its trusted helper manifest records`
+  );
 };
 
 const assertCloudflareApplicationChunkBehavior = (
   program,
-  applicationChunk
+  applicationChunk,
+  applicationManifestRecord,
+  tanStackOwnerDigests
 ) => {
   assertCloudflareChunkLocalOwner(
     program,
@@ -1746,17 +1914,29 @@ const assertCloudflareApplicationChunkBehavior = (
     nodeType(owner.body) === 'BlockStatement' && owner.body.body.length === 3,
     `${applicationChunk} must import owners before returning one TanStack server entry`
   );
-  assertUniversalApplicationHelperProvenance(program, applicationChunk);
-  assertCloudflareApplicationChunkImports(owner, applicationChunk);
+  assertUniversalApplicationHelperProvenance(
+    program,
+    applicationChunk,
+    applicationManifestRecord
+  );
+  assertCloudflareApplicationChunkImports(
+    owner,
+    applicationChunk,
+    applicationManifestRecord,
+    tanStackOwnerDigests
+  );
   const applicationReturn = owner.body.body[2];
   assert(
     nodeType(applicationReturn) === 'ReturnStatement',
     `${applicationChunk} must return one TanStack server entry`
   );
   const createEntry = applicationReturn.argument;
+  assert(
+    nodeType(createEntry) === 'CallExpression',
+    `${applicationChunk} must return one TanStack server entry`
+  );
   assertConditions(
     [
-      nodeType(createEntry) === 'CallExpression',
       identifierMemberSignature(createEntry.callee) ===
         'MemberExpression:false:tanstack:createServerEntry',
       createEntry.arguments.length === 1,
@@ -1777,39 +1957,50 @@ const assertCloudflareApplicationChunkBehavior = (
     applicationChunk
   );
   assertTrustedChunkBuiltIns(program, applicationChunk, { crypto: 1 });
+  assertExactCloudflareStaticImportSources(program, applicationChunk, [
+    /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+    /^\.\/request-exception-state(?:-[\w-]+)?\.js$/,
+    /^\.\/request-failure(?:-[\w-]+)?\.js$/,
+  ]);
+  assertBoundedCloudflareChunkTopLevel(
+    program,
+    applicationChunk,
+    applicationManifestRecord
+  );
 };
 
 const assertCloudflareApplicationChunkProvenance = (
   applicationChunk,
-  entryFile
+  entryFile,
+  tanStackOwnerDigests
 ) => {
   const artifactRoot = path.dirname(entryFile);
-  const manifestFile = path.join(artifactRoot, '.vite', 'manifest.json');
-  assertFile(manifestFile);
-  const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
-  const assetFile = path
-    .relative(artifactRoot, applicationChunk)
-    .split(path.sep)
-    .join('/');
-  const sources = viteManifestEntries(manifest, manifestFile).filter(
-    (entry) => entry.file === assetFile
-  );
-  assert(
-    sources.length === 1,
-    `${applicationChunk} must have one Vite application provenance record`
+  const source = assertCloudflareChunkManifestMembership(
+    artifactRoot,
+    applicationChunk,
+    'application'
   );
   assertConditions(
     [
-      sources[0].isDynamicEntry === true,
-      sources[0].src === 'src/runtime/create-application-server-entry.ts',
+      source.entry.isDynamicEntry === true,
+      source.entry.src === 'src/runtime/create-application-server-entry.ts',
     ],
     `${applicationChunk} must originate from the universal application server entry`
   );
   const { program } = readParsedModule(applicationChunk);
-  assertCloudflareApplicationChunkBehavior(program, applicationChunk);
+  assertCloudflareApplicationChunkBehavior(
+    program,
+    applicationChunk,
+    source,
+    tanStackOwnerDigests
+  );
 };
 
-const assertCloudflareApplicationInitializer = (initializer, filePath) => {
+const assertCloudflareApplicationInitializer = (
+  initializer,
+  filePath,
+  tanStackOwnerDigests
+) => {
   assert(
     initializer?.type === 'CallExpression',
     `${filePath} must initialize the application through Cloudflare Sentry isolation`
@@ -1827,10 +2018,18 @@ const assertCloudflareApplicationInitializer = (initializer, filePath) => {
     identifierName(initializer.arguments[0]) === 'Sentry',
     `${filePath} must initialize request isolation with the active Sentry API`
   );
-  assertCloudflareApplicationLoader(initializer.arguments[1], filePath);
+  assertCloudflareApplicationLoader(
+    initializer.arguments[1],
+    filePath,
+    tanStackOwnerDigests
+  );
 };
 
-const assertCloudflareApplicationOwner = (program, filePath) => {
+const assertCloudflareApplicationOwner = (
+  program,
+  filePath,
+  tanStackOwnerDigests
+) => {
   const ownerNames = ['application', 'sentryRequestIsolationReady'];
   const declarators = ownerNames.map((owner) => {
     const matches = topLevelBindingDeclarators(program, owner);
@@ -1855,7 +2054,11 @@ const assertCloudflareApplicationOwner = (program, filePath) => {
     `${filePath} must await application request isolation initialization`
   );
   const initializer = declarator.init.argument;
-  assertCloudflareApplicationInitializer(initializer, filePath);
+  assertCloudflareApplicationInitializer(
+    initializer,
+    filePath,
+    tanStackOwnerDigests
+  );
   assert(
     directVariableDeclarators(program, 'application').length === 1,
     `${filePath} must not reinitialize application request isolation owners`
@@ -2402,6 +2605,1300 @@ const assertCloudflareDatabasePipeline = (statement, chunkFile) => {
   assertCloudflareDatabasePipe(pipeCall, chunkFile);
 };
 
+const inertTopLevelArray = (node) =>
+  node.elements.every(
+    (element) => element === null || isInertTopLevelInitializer(element)
+  );
+
+const inertTopLevelObjectProperty = (property) =>
+  [
+    property.type === 'Property',
+    property.computed === false,
+    property.kind === 'init',
+    property.method === false,
+    isInertTopLevelInitializer(property.value),
+  ].every(Boolean);
+
+const inertTopLevelObject = (node) =>
+  node.properties.every(inertTopLevelObjectProperty);
+
+const inertTopLevelPair = (node) =>
+  isInertTopLevelInitializer(node.left) &&
+  isInertTopLevelInitializer(node.right);
+
+const inertTopLevelConditional = (node) =>
+  [node.test, node.consequent, node.alternate].every(
+    isInertTopLevelInitializer
+  );
+
+const inertTopLevelConstructors = new Set(['Map', 'Set', 'WeakMap', 'WeakSet']);
+const inertTopLevelMapEntry = (node) =>
+  nodeType(node) === 'ArrayExpression' &&
+  node.elements.length === 2 &&
+  node.elements.every(
+    (element) => element !== null && isInertTopLevelInitializer(element)
+  );
+
+const inertTopLevelMapEntries = (node) =>
+  nodeType(node) === 'ArrayExpression' &&
+  node.elements.every(
+    (element) => element !== null && inertTopLevelMapEntry(element)
+  );
+
+const inertTopLevelSetValues = (node) =>
+  nodeType(node) === 'ArrayExpression' &&
+  node.elements.every(
+    (element) => element !== null && isInertTopLevelInitializer(element)
+  );
+
+const inertCollectionArguments = {
+  Map: (arguments_) =>
+    arguments_.length === 0 ||
+    (arguments_.length === 1 && inertTopLevelMapEntries(arguments_[0])),
+  Set: (arguments_) =>
+    arguments_.length === 0 ||
+    (arguments_.length === 1 && inertTopLevelSetValues(arguments_[0])),
+  WeakMap: (arguments_) => arguments_.length === 0,
+  WeakSet: (arguments_) => arguments_.length === 0,
+};
+
+const inertTopLevelNew = (node) =>
+  Boolean(
+    inertCollectionArguments[identifierName(node.callee)]?.(node.arguments)
+  );
+
+const inertTopLevelReaders = {
+  ArrayExpression: inertTopLevelArray,
+  ArrowFunctionExpression: () => true,
+  ConditionalExpression: inertTopLevelConditional,
+  FunctionExpression: () => true,
+  Literal: () => true,
+  LogicalExpression: inertTopLevelPair,
+  NewExpression: inertTopLevelNew,
+  ObjectExpression: inertTopLevelObject,
+};
+
+const isInertTopLevelInitializer = (node) =>
+  node === null || Boolean(inertTopLevelReaders[nodeType(node)]?.(node));
+
+const isAllowedTopLevelInitializer = (declarator, allowedInitializers) =>
+  isInertTopLevelInitializer(declarator.init) ||
+  Boolean(
+    allowedInitializers[identifierName(declarator.id)]?.(declarator.init)
+  );
+
+const inertTopLevelVariableStatement = (statement, allowedInitializers) =>
+  statement.declarations.every((declarator) =>
+    isAllowedTopLevelInitializer(declarator, allowedInitializers)
+  );
+
+const inertTopLevelExportStatement = (statement) =>
+  [statement.declaration === null, statement.source === null].every(Boolean);
+
+const inertTopLevelStatementReaders = {
+  ExportNamedDeclaration: inertTopLevelExportStatement,
+  FunctionDeclaration: () => true,
+  ImportDeclaration: () => true,
+  VariableDeclaration: inertTopLevelVariableStatement,
+};
+
+const isInertTopLevelStatement = (statement, allowedInitializers) =>
+  Boolean(
+    inertTopLevelStatementReaders[statement.type]?.(
+      statement,
+      allowedInitializers
+    )
+  );
+
+const normalizeArtifactFile = (artifactRoot, filePath) =>
+  path.relative(artifactRoot, filePath).split(path.sep).join('/');
+
+const manifestFilesForKeys = (manifestRecord, keys, message) =>
+  keys.map((key) => {
+    const file = manifestRecord.manifest[key]?.file;
+    assert(typeof file === 'string', message);
+    return file;
+  });
+
+const exactSortedValues = (left, right) =>
+  left.length === right.length &&
+  left.toSorted().join('\0') === right.toSorted().join('\0');
+
+const cloudflareLoadEffectCalls = new Set(['eval', 'fetch']);
+const cloudflareLoadEffectConstructors = new Set([
+  'EventSource',
+  'WebSocket',
+  'Worker',
+  'XMLHttpRequest',
+]);
+
+const cloudflareFunctionNodeTypes = new Set([
+  'ArrowFunctionExpression',
+  'FunctionDeclaration',
+  'FunctionExpression',
+]);
+const isCloudflareFunctionNode = (node) =>
+  cloudflareFunctionNodeTypes.has(nodeType(node));
+
+const cloudflareFunctionNodes = (program) => {
+  const functions = [];
+  const record = (node) => functions.push(node);
+  new Visitor({
+    ArrowFunctionExpression: record,
+    FunctionDeclaration: record,
+    FunctionExpression: record,
+  }).visit(program);
+  return functions;
+};
+
+const cloudflareVariableFunctionOwner = (declarator) => {
+  const name = identifierName(declarator.id);
+  return name && isCloudflareFunctionNode(declarator.init)
+    ? [[name, declarator.init]]
+    : [];
+};
+
+const cloudflareFunctionDeclarationOwner = (statement) =>
+  statement.id ? [[statement.id.name, statement]] : [];
+
+const cloudflareVariableFunctionOwners = (statement) =>
+  statement.declarations.flatMap(cloudflareVariableFunctionOwner);
+
+const noCloudflareFunctionOwners = () => [];
+const cloudflareTopLevelFunctionOwnerReaders = {
+  FunctionDeclaration: cloudflareFunctionDeclarationOwner,
+  VariableDeclaration: cloudflareVariableFunctionOwners,
+};
+
+const cloudflareTopLevelFunctionOwners = (program) =>
+  new Map(
+    program.body.flatMap((statement) =>
+      (
+        cloudflareTopLevelFunctionOwnerReaders[statement.type] ??
+        noCloudflareFunctionOwners
+      )(statement)
+    )
+  );
+
+const cloudflareExecutionReaders = {
+  ChainExpression: (node) => node.expression,
+  ParenthesizedExpression: (node) => node.expression,
+  SequenceExpression: (node) => node.expressions.at(-1),
+};
+
+const unwrapCloudflareExecutionTarget = (node) => {
+  const unwrapped = cloudflareExecutionReaders[nodeType(node)]?.(node);
+  return unwrapped ? unwrapCloudflareExecutionTarget(unwrapped) : node;
+};
+
+const cloudflareMemberName = (node) =>
+  nodeType(node) === 'MemberExpression'
+    ? (identifierName(node.property) ?? literalString(node.property))
+    : undefined;
+
+const cloudflareCallableTarget = (node) => {
+  const target = unwrapCloudflareExecutionTarget(node);
+  if (
+    nodeType(target) === 'MemberExpression' &&
+    new Set(['apply', 'call']).has(cloudflareMemberName(target))
+  ) {
+    return unwrapCloudflareExecutionTarget(target.object);
+  }
+  return target;
+};
+
+const cloudflareInvokedFunction = (node, owners) => {
+  const target = cloudflareCallableTarget(node);
+  return isCloudflareFunctionNode(target)
+    ? target
+    : owners.get(identifierName(target));
+};
+
+const cloudflareExecutionArguments = (node) =>
+  Array.isArray(node.arguments) ? node.arguments : [];
+
+const dormantCloudflareFunctionRanges = (program) => {
+  const functions = cloudflareFunctionNodes(program);
+  const owners = cloudflareTopLevelFunctionOwners(program);
+  const invoked = new Set();
+  let previousSize = -1;
+  while (previousSize !== invoked.size) {
+    previousSize = invoked.size;
+    const dormantRanges = functions
+      .filter((node) => !invoked.has(node))
+      .map((node) => [node.start, node.end]);
+    const recordExecution = (node, target) => {
+      if (isInsideNestedFunction(node, dormantRanges)) return;
+      [target, ...cloudflareExecutionArguments(node)]
+        .map((candidate) => cloudflareInvokedFunction(candidate, owners))
+        .filter(Boolean)
+        .forEach((functionNode) => invoked.add(functionNode));
+    };
+    new Visitor({
+      CallExpression(node) {
+        recordExecution(node, node.callee);
+      },
+      NewExpression(node) {
+        recordExecution(node, node.callee);
+      },
+      TaggedTemplateExpression(node) {
+        recordExecution(node, node.tag);
+      },
+    }).visit(program);
+  }
+  return functions
+    .filter((node) => !invoked.has(node))
+    .map((node) => [node.start, node.end]);
+};
+
+const cloudflareGlobalOwners = new Set(['globalThis', 'self', 'window']);
+const isGlobalMemberCall = (node, member) => {
+  const target = unwrapCloudflareExecutionTarget(node);
+  return (
+    nodeType(target) === 'MemberExpression' &&
+    cloudflareGlobalOwners.has(identifierName(target.object)) &&
+    cloudflareMemberName(target) === member
+  );
+};
+
+const isCloudflareLoadEffectCall = (node) => {
+  const target = cloudflareCallableTarget(node.callee);
+  return (
+    cloudflareLoadEffectCalls.has(identifierName(target)) ||
+    isGlobalMemberCall(target, 'fetch')
+  );
+};
+
+const assertNoCloudflareStaticChunkLoadEffects = (chunkFile) => {
+  const { program } = readParsedModule(chunkFile);
+  const nestedRanges = dormantCloudflareFunctionRanges(program);
+  const effects = [];
+  new Visitor({
+    CallExpression(node) {
+      if (
+        !isInsideNestedFunction(node, nestedRanges) &&
+        isCloudflareLoadEffectCall(node)
+      ) {
+        effects.push(node);
+      }
+    },
+    NewExpression(node) {
+      const target = cloudflareCallableTarget(node.callee);
+      if (
+        !isInsideNestedFunction(node, nestedRanges) &&
+        cloudflareLoadEffectConstructors.has(identifierName(target))
+      ) {
+        effects.push(node);
+      }
+    },
+    TaggedTemplateExpression(node) {
+      if (
+        !isInsideNestedFunction(node, nestedRanges) &&
+        cloudflareLoadEffectCalls.has(
+          identifierName(cloudflareCallableTarget(node.tag))
+        )
+      ) {
+        effects.push(node);
+      }
+    },
+  }).visit(program);
+  assert(
+    effects.length === 0,
+    `${chunkFile} must not execute fetch, eval, or worker effects while loading`
+  );
+};
+
+const cloudflareStaticImportSources = (program) =>
+  program.body
+    .filter((statement) => statement.type === 'ImportDeclaration')
+    .map((statement) => literalString(statement.source));
+
+const cloudflareStaticDependencySources = (program) =>
+  program.body
+    .filter(
+      (statement) =>
+        statement.type === 'ImportDeclaration' ||
+        ((statement.type === 'ExportAllDeclaration' ||
+          statement.type === 'ExportNamedDeclaration') &&
+          statement.source !== null)
+    )
+    .map((statement) => literalString(statement.source));
+
+const cloudflareDynamicImportSources = (program) => {
+  const sources = [];
+  new Visitor({
+    ImportExpression(importExpression) {
+      sources.push(literalString(importExpression.source));
+    },
+  }).visit(program);
+  return sources;
+};
+
+const assertExactCloudflareStaticImportSources = (
+  program,
+  chunkFile,
+  sourcePatterns
+) => {
+  const sources = cloudflareStaticImportSources(program);
+  assert(
+    sources.length === sourcePatterns.length &&
+      sources.every((source, index) =>
+        sourcePatterns[index].test(source ?? '')
+      ),
+    `${chunkFile} must import only its trusted static owner chunks`
+  );
+};
+
+const assertExactCloudflareStaticImports = (
+  program,
+  chunkFile,
+  manifestRecord
+) => {
+  const message = `${chunkFile} must preserve its exact Vite static import graph`;
+  const importKeys = manifestRecord.entry.imports ?? [];
+  assert(Array.isArray(importKeys), message);
+  const expectedFiles = manifestFilesForKeys(
+    manifestRecord,
+    importKeys,
+    message
+  );
+  const sources = cloudflareStaticImportSources(program);
+  assert(
+    sources.every((source) => source?.startsWith('./')),
+    message
+  );
+  const linkedFiles = sources.map((source) => {
+    const linkedFile = path.resolve(path.dirname(chunkFile), source);
+    assert(isWithinDirectory(linkedFile, manifestRecord.artifactRoot), message);
+    return linkedFile;
+  });
+  const actualFiles = linkedFiles.map((linkedFile) =>
+    normalizeArtifactFile(manifestRecord.artifactRoot, linkedFile)
+  );
+  assert(exactSortedValues(actualFiles, expectedFiles), message);
+  linkedFiles.forEach((linkedFile) => {
+    assertFile(linkedFile);
+    assertNoCloudflareStaticChunkLoadEffects(linkedFile);
+  });
+};
+
+const isExactEntryInteropInitializer = (node, dependency) => {
+  if (nodeType(node) !== 'CallExpression') return false;
+  const [dependencyCall, interopMode] = node.arguments;
+  if (nodeType(dependencyCall) !== 'CallExpression') return false;
+  if (nodeType(interopMode) !== 'Literal') return false;
+  return [
+    identifierName(node.callee) === '__toESM',
+    node.arguments.length === 2,
+    identifierName(dependencyCall.callee) === dependency,
+    dependencyCall.arguments.length === 0,
+    interopMode.value === 1,
+  ].every(Boolean);
+};
+
+const exactObservedStreamCalls = [
+  'createRequestExceptionCaptureState',
+  'createSsrStreamResponse',
+  'getRequestExceptionState',
+  'isbot',
+  'registerRequestCompletion',
+  'transformReadableStreamWithRouter',
+  'waitForReadyOrAbort',
+];
+
+const astField = (node, field) => Reflect.get(Object(node), field);
+const astItem = (node, field, index) =>
+  Reflect.get(Object(astField(node, field)), String(index));
+
+const exactObservedStreamDeclarator = (statement, localName) => {
+  const declarations = astField(statement, 'declarations');
+  const declarator = astItem(statement, 'declarations', 0);
+  const matches = [
+    nodeType(statement) === 'VariableDeclaration',
+    astField(statement, 'kind') === 'const',
+    astField(declarations, 'length') === 1,
+    identifierName(astField(declarator, 'id')) === localName,
+  ].every(Boolean);
+  return Reflect.get({ true: declarator }, String(matches));
+};
+
+const isExactNamedCall = (node, calleeName, argumentNames) => {
+  const callArguments = astField(node, 'arguments');
+  const actualArguments = argumentNames.map((_, index) =>
+    identifierName(astItem(node, 'arguments', index))
+  );
+  return [
+    nodeType(node) === 'CallExpression',
+    identifierName(astField(node, 'callee')) === calleeName,
+    astField(callArguments, 'length') >= argumentNames.length,
+    actualArguments.join(':') === argumentNames.join(':'),
+  ].every(Boolean);
+};
+
+const isExactObservedStreamDataflow = (handler) => {
+  const statements = handler.body.body;
+  const stream = exactObservedStreamDeclarator(statements[1], 'stream');
+  const responseStream = exactObservedStreamDeclarator(
+    statements[4],
+    'responseStream'
+  );
+  const response = exactObservedStreamDeclarator(statements[5], 'response');
+  const returned = statements[6];
+  const render = astField(stream, 'init');
+  const renderCall = unwrapAwaitExpression(render);
+  const renderCallee = astField(renderCall, 'callee');
+  const responseInitializer = astField(response, 'init');
+  const responseOptions = astItem(responseInitializer, 'arguments', 1);
+  const responseOptionProperties = astField(responseOptions, 'properties');
+  const headersOption = astItem(responseOptions, 'properties', 0);
+  const statusOption = astItem(responseOptions, 'properties', 1);
+  const statusCall = astField(statusOption, 'value');
+  const statusGetter = astField(statusCall, 'callee');
+  const statusCode = astField(statusGetter, 'object');
+  const routerStores = astField(statusCode, 'object');
+  const returnedArgument = astField(returned, 'argument');
+  return [
+    nodeType(render) === 'AwaitExpression',
+    nodeType(renderCall) === 'CallExpression',
+    identifierName(astField(renderCallee, 'object')) === 'import_server_edge',
+    identifierName(astField(renderCallee, 'property')) ===
+      'renderToReadableStream',
+    isExactNamedCall(
+      astField(responseStream, 'init'),
+      'transformReadableStreamWithRouter',
+      ['router', 'stream']
+    ),
+    nodeType(responseInitializer) === 'NewExpression',
+    identifierName(astField(responseInitializer, 'callee')) === 'Response',
+    astField(astField(responseInitializer, 'arguments'), 'length') === 2,
+    identifierName(astItem(responseInitializer, 'arguments', 0)) ===
+      'responseStream',
+    nodeType(responseOptions) === 'ObjectExpression',
+    astField(responseOptionProperties, 'length') === 2,
+    propertyKeyName(headersOption) === 'headers',
+    identifierName(astField(headersOption, 'value')) === 'responseHeaders',
+    propertyKeyName(statusOption) === 'status',
+    nodeType(statusCall) === 'CallExpression',
+    astField(astField(statusCall, 'arguments'), 'length') === 0,
+    cloudflareMemberName(statusGetter) === 'get',
+    cloudflareMemberName(statusCode) === 'statusCode',
+    cloudflareMemberName(routerStores) === 'stores',
+    identifierName(astField(routerStores, 'object')) === 'router',
+    nodeType(returned) === 'ReturnStatement',
+    isExactNamedCall(returnedArgument, 'createSsrStreamResponse', [
+      'router',
+      'response',
+    ]),
+    astField(astField(returnedArgument, 'arguments'), 'length') === 2,
+  ].every(Boolean);
+};
+
+const cloudflareTanStackOwnerDigests = Object.freeze({
+  createStartHandler:
+    'dc012cbcd20bc6b2696eef2a27d81be5205e259b9f75efbcacdf4a9eb63819c4',
+  defineHandlerCallback:
+    'fc0a6c8a8a043acd7f5663dc017d92e76fc2cc48b4c30de7e3c0975ab8b7d3d9',
+  emptyPluginAdaptersChunk:
+    'e1e88ab713c682ecc3c074e3db0d0f06be6d13329e037d328f343d1f32ea6463',
+  routerLocalClosure:
+    '7c323069a35436956a3ed49d14facf8ebb10b0cc5c12dde4507d86fbe568ae04',
+  serverClosure:
+    '31a76bfd0a60524e691b75a49f3bb81b99cce58b1e105459bdf16cc2fb6b004e',
+  serverChunk:
+    '84b7277d0b8b260e3e08e11e6793b0853231fae120048be73b24315478c75dd8',
+  serverEdgeClosure:
+    '83d966a49ccd8001856810886e3b24e6fe75a5c10d4d5c4e76ac30776a3967ce',
+  serverEdgeChunk:
+    '4667849efded5081669f5b2555d53940d992509607f9186dfe966e3a91f53e8f',
+});
+const ignoredAstDigestKeys = new Set(['end', 'loc', 'raw', 'start']);
+const generatedAssetLiteral = /^\.\/.*-[A-Za-z0-9_-]{8}\.js$/u;
+const generatedAssetReference = /-[A-Za-z0-9_-]{8}(?=\.js$)/u;
+const normalizeGeneratedAssetReference = (value) =>
+  value.replace(generatedAssetReference, '-<hash>');
+const normalizeAstDigestValue = (key, value) =>
+  ignoredAstDigestKeys.has(key) ? undefined : value;
+const replaceModuleSourceLiteral = (source, replacement) => {
+  if (nodeType(source) === 'Literal' && typeof source.value === 'string') {
+    source.value = replacement(source.value);
+  }
+};
+const staticModuleSourceDeclarations = new Set([
+  'ExportAllDeclaration',
+  'ExportNamedDeclaration',
+  'ImportDeclaration',
+]);
+const normalizeStaticModuleSources = (program, replacement) => {
+  if (nodeType(program) !== 'Program') return;
+  for (const statement of program.body) {
+    if (!staticModuleSourceDeclarations.has(statement.type)) continue;
+    replaceModuleSourceLiteral(statement.source, (source) =>
+      replacement(source, 'static')
+    );
+  }
+};
+const normalizeDynamicModuleSources = (node, replacement) => {
+  new Visitor({
+    ImportExpression(importExpression) {
+      replaceModuleSourceLiteral(importExpression.source, (source) =>
+        replacement(source, 'dynamic')
+      );
+    },
+  }).visit(node);
+};
+const normalizeAstModuleSources = (node, replacement) => {
+  const normalized = structuredClone(node);
+  normalizeStaticModuleSources(normalized, replacement);
+  normalizeDynamicModuleSources(normalized, replacement);
+  return normalized;
+};
+const normalizeGeneratedModuleSource = (source) =>
+  generatedAssetLiteral.test(source)
+    ? normalizeGeneratedAssetReference(source)
+    : source;
+const astDigest = (node, moduleSourceReplacement) =>
+  createHash('sha256')
+    .update(
+      JSON.stringify(
+        moduleSourceReplacement
+          ? normalizeAstModuleSources(node, moduleSourceReplacement)
+          : node,
+        normalizeAstDigestValue
+      )
+    )
+    .digest('hex');
+const reviewedCloudflareClosureExternals = new Set([
+  'node:async_hooks',
+  'node:stream',
+  'node:stream/web',
+]);
+const cloudflareClosureNodeId = (key, file) =>
+  JSON.stringify([
+    normalizeGeneratedAssetReference(key),
+    normalizeGeneratedAssetReference(file),
+  ]);
+const isObjectRecord = (value) =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+const isStringArray = (value) =>
+  Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+const readCloudflareClosureNode = (key, manifestRecord, realRoot, message) => {
+  const entry = manifestRecord.manifest[key];
+  assert(isObjectRecord(entry), message);
+  const { file } = entry;
+  const imports = entry.imports ?? [];
+  assert(typeof file === 'string', message);
+  assert(isStringArray(imports), message);
+  const chunkFile = path.resolve(manifestRecord.artifactRoot, file);
+  assert(isWithinDirectory(chunkFile, manifestRecord.artifactRoot), message);
+  assertFile(chunkFile);
+  assert(isWithinDirectory(fs.realpathSync(chunkFile), realRoot), message);
+  const matchingKeys = Object.entries(manifestRecord.manifest)
+    .filter(([, candidate]) => candidate.file === file)
+    .map(([candidateKey]) => candidateKey);
+  assert(matchingKeys.length === 1, message);
+  assert(matchingKeys[0] === key, message);
+  return {
+    chunkFile,
+    file,
+    imports,
+    program: readParsedModule(chunkFile).program,
+  };
+};
+
+const cloudflareClosureSourceGraph = (
+  program,
+  chunkFile,
+  imports,
+  manifestRecord,
+  realRoot,
+  message
+) => {
+  const expectedFiles = manifestFilesForKeys(manifestRecord, imports, message);
+  assert(
+    new Set(imports).size === imports.length &&
+      new Set(expectedFiles).size === expectedFiles.length,
+    message
+  );
+  const expectedTargets = new Map(
+    imports.map((importKey, index) => [
+      expectedFiles[index],
+      cloudflareClosureNodeId(importKey, expectedFiles[index]),
+    ])
+  );
+  const staticSourceTargets = new Map();
+  const relativeFiles = [];
+  const edges = cloudflareStaticDependencySources(program).map((source) => {
+    if (!source.startsWith('.')) {
+      assert(reviewedCloudflareClosureExternals.has(source), message);
+      staticSourceTargets.set(source, `external:${source}`);
+      return { kind: 'external', target: source };
+    }
+    const linkedFile = path.resolve(path.dirname(chunkFile), source);
+    assert(isWithinDirectory(linkedFile, manifestRecord.artifactRoot), message);
+    assertFile(linkedFile);
+    assert(isWithinDirectory(fs.realpathSync(linkedFile), realRoot), message);
+    const artifactFile = normalizeArtifactFile(
+      manifestRecord.artifactRoot,
+      linkedFile
+    );
+    const target = expectedTargets.get(artifactFile);
+    assert(typeof target === 'string', message);
+    relativeFiles.push(artifactFile);
+    staticSourceTargets.set(source, `internal:${target}`);
+    return { kind: 'internal', target };
+  });
+  assert(exactSortedValues(relativeFiles, expectedFiles), message);
+  return { edges, staticSourceTargets };
+};
+
+const cloudflareClosureProgramDigest = (
+  program,
+  staticSourceTargets,
+  message
+) =>
+  astDigest(program, (source, kind) => {
+    if (kind === 'static') {
+      const target = staticSourceTargets.get(source);
+      assert(typeof target === 'string', message);
+      return target;
+    }
+    return generatedAssetLiteral.test(source)
+      ? `dynamic:${normalizeGeneratedAssetReference(source)}`
+      : `dynamic:${source}`;
+  });
+
+const cloudflareStaticImportClosureDigest = (
+  rootChunk,
+  manifestRecord,
+  message
+) => {
+  const pendingKeys = [manifestRecord.key];
+  const visitedKeys = new Set();
+  const nodes = [];
+  const realArtifactRoot = fs.realpathSync(manifestRecord.artifactRoot);
+  while (pendingKeys.length > 0) {
+    const key = pendingKeys.pop();
+    if (visitedKeys.has(key)) continue;
+    visitedKeys.add(key);
+    const { chunkFile, file, imports, program } = readCloudflareClosureNode(
+      key,
+      manifestRecord,
+      realArtifactRoot,
+      message
+    );
+    const { edges, staticSourceTargets } = cloudflareClosureSourceGraph(
+      program,
+      chunkFile,
+      imports,
+      manifestRecord,
+      realArtifactRoot,
+      message
+    );
+    assertNoCloudflareStaticChunkLoadEffects(chunkFile);
+    nodes.push({
+      astDigest: cloudflareClosureProgramDigest(
+        program,
+        staticSourceTargets,
+        message
+      ),
+      edges,
+      id: cloudflareClosureNodeId(key, file),
+    });
+    pendingKeys.push(...imports);
+  }
+  const orderedNodes = nodes.toSorted((left, right) =>
+    left.id.localeCompare(right.id)
+  );
+  assert(
+    new Set(orderedNodes.map(({ id }) => id)).size === orderedNodes.length,
+    message
+  );
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        nodes: orderedNodes,
+        root: cloudflareClosureNodeId(
+          manifestRecord.key,
+          normalizeArtifactFile(manifestRecord.artifactRoot, rootChunk)
+        ),
+        version: 1,
+      })
+    )
+    .digest('hex');
+};
+
+const isTanStackEmptyPluginAdaptersSource = (source) =>
+  typeof source === 'string' &&
+  source.endsWith(
+    '/node_modules/@tanstack/start-server-core/dist/esm/empty-plugin-adapters.js'
+  );
+
+const readTanStackDynamicOwnerRecord = (key, manifestRecord, message) => {
+  const entry = manifestRecord.manifest[key];
+  assert(isObjectRecord(entry), message);
+  assert(entry.isDynamicEntry === true, message);
+  assert(entry.src === key, message);
+  const chunkFile = path.resolve(manifestRecord.artifactRoot, entry.file);
+  const record = assertCloudflareChunkManifestMembership(
+    manifestRecord.artifactRoot,
+    chunkFile,
+    'TanStack dynamic owner'
+  );
+  assert(record.key === key, message);
+  return { chunkFile, entry, key };
+};
+
+const readTanStackDynamicOwnerRecords = (
+  dynamicKeys,
+  manifestRecord,
+  message
+) => {
+  const records = [];
+  for (const key of dynamicKeys) {
+    records.push(readTanStackDynamicOwnerRecord(key, manifestRecord, message));
+  }
+  return records;
+};
+
+const assertReviewedRouterOwner = (routerRecord, trustedOwnerDigests) => {
+  const routerProgram = readParsedModule(routerRecord.chunkFile).program;
+  const getRouterExports = routerProgram.body
+    .flatMap(namedExportEntries)
+    .filter(
+      ([exportedName, localName]) =>
+        exportedName === 'getRouter' && localName === 'getRouter'
+    );
+  const message = `${routerRecord.chunkFile} must use the reviewed getRouter local owner closure`;
+  assert(getRouterExports.length === 1, message);
+  const routerDigest = topLevelOwnerClosureDigest(
+    routerProgram,
+    'getRouter',
+    message
+  );
+  assert(
+    routerDigest === astField(trustedOwnerDigests, 'routerLocalClosure'),
+    `${message} (${routerDigest})`
+  );
+};
+
+const assertReviewedEmptyPluginOwner = (
+  emptyPluginRecord,
+  trustedOwnerDigests,
+  message
+) => {
+  const emptyPluginProgram = readParsedModule(
+    emptyPluginRecord.chunkFile
+  ).program;
+  assert(
+    (emptyPluginRecord.entry.imports ?? []).length === 0 &&
+      (emptyPluginRecord.entry.dynamicImports ?? []).length === 0,
+    message
+  );
+  const digest = astDigest(emptyPluginProgram, normalizeGeneratedModuleSource);
+  assert(
+    digest === astField(trustedOwnerDigests, 'emptyPluginAdaptersChunk'),
+    `${emptyPluginRecord.chunkFile} must use the reviewed empty plugin adapters owner (${digest})`
+  );
+};
+
+const tanStackDynamicOwnerKinds = (records) => ({
+  emptyPluginRecords: records.filter(({ key }) =>
+    isTanStackEmptyPluginAdaptersSource(key)
+  ),
+  manifestOwner: records.find(({ key }) => key === 'tanstack-start-manifest:v'),
+  routerRecord: records.find(({ key }) => key === 'src/router.tsx'),
+  startRecord: records.find(({ key }) => key === 'src/start.ts'),
+});
+
+const tanStackDynamicSourceFiles = (
+  helperProgram,
+  helperChunk,
+  dynamicKeys,
+  manifestRecord,
+  message
+) => {
+  const sources = cloudflareDynamicImportSources(helperProgram);
+  assert(Array.isArray(dynamicKeys), message);
+  assert(new Set(dynamicKeys).size === dynamicKeys.length, message);
+  assert(sources.length === dynamicKeys.length, message);
+  assert(
+    sources.every((source) => source?.startsWith('./')),
+    message
+  );
+  return sources.map((source) => {
+    const linkedFile = path.resolve(path.dirname(helperChunk), source);
+    assert(isWithinDirectory(linkedFile, manifestRecord.artifactRoot), message);
+    assertFile(linkedFile);
+    assert(
+      isWithinDirectory(
+        fs.realpathSync(linkedFile),
+        fs.realpathSync(manifestRecord.artifactRoot)
+      ),
+      message
+    );
+    return normalizeArtifactFile(manifestRecord.artifactRoot, linkedFile);
+  });
+};
+
+const assertReviewedTanStackDynamicOwners = (
+  helperProgram,
+  helperChunk,
+  manifestRecord,
+  trustedOwnerDigests
+) => {
+  const message = `${helperChunk} must preserve its reviewed TanStack dynamic owner graph`;
+  const dynamicKeys = manifestRecord.entry.dynamicImports;
+  const expectedFiles = manifestFilesForKeys(
+    manifestRecord,
+    dynamicKeys,
+    message
+  );
+  const actualFiles = tanStackDynamicSourceFiles(
+    helperProgram,
+    helperChunk,
+    dynamicKeys,
+    manifestRecord,
+    message
+  );
+  assert(exactSortedValues(actualFiles, expectedFiles), message);
+  const records = readTanStackDynamicOwnerRecords(
+    dynamicKeys,
+    manifestRecord,
+    message
+  );
+  const { emptyPluginRecords, manifestOwner, routerRecord, startRecord } =
+    tanStackDynamicOwnerKinds(records);
+  assert(records.length === 4, message);
+  assert(routerRecord, message);
+  assert(startRecord, message);
+  assert(manifestOwner, message);
+  assert(emptyPluginRecords.length === 1, message);
+  assertReviewedRouterOwner(routerRecord, trustedOwnerDigests);
+  assertReviewedEmptyPluginOwner(
+    emptyPluginRecords[0],
+    trustedOwnerDigests,
+    message
+  );
+};
+
+const assertCloudflareTanStackOwnerDigest = (
+  helperProgram,
+  helperChunk,
+  ownerName,
+  expectedDigest
+) => {
+  const owners = helperProgram.body
+    .flatMap(topLevelFunctionEntries)
+    .filter(([name]) => name === ownerName);
+  assert(
+    owners.length === 1 && typeof expectedDigest === 'string',
+    `${helperChunk} must use the reviewed ${ownerName} implementation`
+  );
+  assert(
+    astDigest(owners[0][1]) === expectedDigest,
+    `${helperChunk} must use the reviewed ${ownerName} implementation`
+  );
+};
+
+const isExactObservedStreamHandler = (handler) => {
+  if (nodeType(handler) !== 'ArrowFunctionExpression') return false;
+  if (nodeType(handler.body) !== 'BlockStatement') return false;
+  const calls = directFunctionCalls(handler, nestedFunctionRanges(handler));
+  return [
+    handler.async,
+    handler.params.length === 1,
+    bindingNames(handler.params[0]).join(':') ===
+      'request:responseHeaders:router',
+    handler.body.body.length === 7,
+    exactSortedValues([...calls], exactObservedStreamCalls),
+    isExactObservedStreamDataflow(handler),
+    identifierOccurrenceCount(handler, 'renderToReadableStream') === 1,
+    identifierOccurrenceCount(handler, 'createElement') === 1,
+    identifierOccurrenceCount(handler, 'StartServer') === 1,
+    identifierOccurrenceCount(handler, 'fetch') === 0,
+  ].every(Boolean);
+};
+
+const isExactObservedStreamInitializer = (node) => {
+  if (nodeType(node) !== 'CallExpression') return false;
+  const [handler] = node.arguments;
+  return [
+    identifierName(node.callee) === 'defineHandlerCallback',
+    node.arguments.length === 1,
+    isExactObservedStreamHandler(handler),
+  ].every(Boolean);
+};
+
+const isExactCreateServerEntryInitializer = (node) => {
+  if (nodeType(node) !== 'ArrowFunctionExpression') return false;
+  const [serverEntry] = node.params;
+  return [
+    node.async === false,
+    node.expression === true,
+    node.params.length === 1,
+    identifierName(serverEntry) === 'serverEntry',
+    identifierName(node.body) === 'serverEntry',
+  ].every(Boolean);
+};
+
+const isExactTanStackEntryFetchCall = (node) => {
+  if (nodeType(node) !== 'CallExpression') return false;
+  return [
+    identifierName(node.callee) === 'createStartHandler',
+    node.arguments.length === 1,
+    identifierName(node.arguments[0]) === 'observedStreamHandler',
+  ].every(Boolean);
+};
+
+const isExactTanStackEntryFetchProperty = (property) => {
+  if (nodeType(property) !== 'Property') return false;
+  return [
+    property.computed === false,
+    property.kind === 'init',
+    property.method === false,
+    propertyKeyName(property) === 'fetch',
+    isExactTanStackEntryFetchCall(property.value),
+  ].every(Boolean);
+};
+
+const isExactTanStackEntryInitializer = (node) => {
+  if (nodeType(node) !== 'ObjectExpression') return false;
+  return [
+    node.properties.length === 1,
+    isExactTanStackEntryFetchProperty(node.properties[0]),
+  ].every(Boolean);
+};
+
+const tanStackEntryInitializerReaders = {
+  createServerEntry: isExactCreateServerEntryInitializer,
+  entry: isExactTanStackEntryInitializer,
+  import_react: (node) => isExactEntryInteropInitializer(node, 'require_react'),
+  import_server_edge: (node) =>
+    isExactEntryInteropInitializer(node, 'require_server_edge'),
+  isAbortError: (node) => nodeType(node) === 'ArrowFunctionExpression',
+  noop: (node) => nodeType(node) === 'ArrowFunctionExpression',
+  observedStreamHandler: isExactObservedStreamInitializer,
+  waitForReadyOrAbort: (node) => nodeType(node) === 'ArrowFunctionExpression',
+};
+
+const assertReviewedTanStackServerOwners = (
+  program,
+  chunkFile,
+  trustedOwnerDigests
+) => {
+  const sourcePattern = /^\.\/server(?:-[\w-]+)?\.js$/;
+  const startHandlerOwner = assertExactStaticChunkHelper(
+    program,
+    chunkFile,
+    'createStartHandler',
+    sourcePattern
+  );
+  const handlerCallbackOwner = assertExactStaticChunkHelper(
+    program,
+    chunkFile,
+    'defineHandlerCallback',
+    sourcePattern
+  );
+  assertCloudflareTanStackOwnerDigest(
+    startHandlerOwner.helperProgram,
+    startHandlerOwner.helperChunk,
+    'createStartHandler',
+    astField(trustedOwnerDigests, 'createStartHandler')
+  );
+  assertCloudflareTanStackOwnerDigest(
+    handlerCallbackOwner.helperProgram,
+    handlerCallbackOwner.helperChunk,
+    'defineHandlerCallback',
+    astField(trustedOwnerDigests, 'defineHandlerCallback')
+  );
+  const serverImplementationMessage = `${chunkFile} must use the reviewed TanStack server implementation closure`;
+  assert(
+    startHandlerOwner.helperChunk === handlerCallbackOwner.helperChunk,
+    serverImplementationMessage
+  );
+  const serverChunkDigest = astDigest(
+    startHandlerOwner.helperProgram,
+    normalizeGeneratedModuleSource
+  );
+  assert(
+    serverChunkDigest === astField(trustedOwnerDigests, 'serverChunk'),
+    `${serverImplementationMessage} (${serverChunkDigest})`
+  );
+  const serverClosureMessage = `${chunkFile} must use the reviewed TanStack server static import closure`;
+  const serverClosureDigest = cloudflareStaticImportClosureDigest(
+    startHandlerOwner.helperChunk,
+    startHandlerOwner.manifestRecord,
+    serverClosureMessage
+  );
+  assert(
+    serverClosureDigest === astField(trustedOwnerDigests, 'serverClosure'),
+    `${serverClosureMessage} (${serverClosureDigest})`
+  );
+  assertReviewedTanStackDynamicOwners(
+    startHandlerOwner.helperProgram,
+    startHandlerOwner.helperChunk,
+    startHandlerOwner.manifestRecord,
+    trustedOwnerDigests
+  );
+  const edgeImports = staticImportsForBinding(program, 'require_server_edge');
+  assertConditions(
+    [
+      edgeImports.length === 1,
+      /^\.\/server\.edge(?:-[\w-]+)?\.js$/.test(
+        astField(edgeImports[0], 'source')
+      ),
+    ],
+    `${chunkFile} must import the reviewed React server renderer`
+  );
+  const edgeChunk = path.resolve(
+    path.dirname(chunkFile),
+    astField(edgeImports[0], 'source')
+  );
+  assertFile(edgeChunk);
+  const edgeProgram = readParsedModule(edgeChunk).program;
+  const edgeManifestRecord = assertCloudflareChunkManifestMembership(
+    path.dirname(path.dirname(chunkFile)),
+    edgeChunk,
+    'React server renderer'
+  );
+  const edgeImplementationMessage = `${chunkFile} must use the reviewed React server renderer implementation closure`;
+  const edgeChunkDigest = astDigest(
+    edgeProgram,
+    normalizeGeneratedModuleSource
+  );
+  assert(
+    edgeChunkDigest === astField(trustedOwnerDigests, 'serverEdgeChunk'),
+    `${edgeImplementationMessage} (${edgeChunkDigest})`
+  );
+  const edgeClosureMessage = `${chunkFile} must use the reviewed React server renderer static import closure`;
+  const edgeClosureDigest = cloudflareStaticImportClosureDigest(
+    edgeChunk,
+    edgeManifestRecord,
+    edgeClosureMessage
+  );
+  assert(
+    edgeClosureDigest === astField(trustedOwnerDigests, 'serverEdgeClosure'),
+    `${edgeClosureMessage} (${edgeClosureDigest})`
+  );
+};
+
+const assertCloudflareTanStackEntryChunk = (
+  program,
+  chunkFile,
+  manifestRecord,
+  trustedOwnerDigests = cloudflareTanStackOwnerDigests
+) => {
+  const message = `${chunkFile} must preserve the import-safe TanStack server entry shape`;
+  assertExactCloudflareStaticImportSources(program, chunkFile, [
+    /^\.\/rolldown-runtime(?:-[\w-]+)?\.js$/,
+    /^\.\/react(?:-[\w-]+)?\.js$/,
+    /^\.\/server(?:-[\w-]+)?\.js$/,
+    /^\.\/server\.edge(?:-[\w-]+)?\.js$/,
+    /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+    /^\.\/request-completion(?:-[\w-]+)?\.js$/,
+    /^\.\/request-exception-state(?:-[\w-]+)?\.js$/,
+  ]);
+  const declarations = program.body
+    .filter((statement) => statement.type === 'VariableDeclaration')
+    .flatMap((statement) => statement.declarations);
+  assert(program.body.length === 16 && declarations.length === 8, message);
+  const declarationNames = declarations.map((declarator) =>
+    identifierName(declarator.id)
+  );
+  assert(
+    declarationNames.join(':') ===
+      'import_react:import_server_edge:noop:isAbortError:waitForReadyOrAbort:observedStreamHandler:entry:createServerEntry',
+    message
+  );
+  assert(
+    declarations.every((declarator) =>
+      tanStackEntryInitializerReaders[identifierName(declarator.id)]?.(
+        declarator.init
+      )
+    ),
+    message
+  );
+  assert(
+    program.body.flatMap(namedExportEntries).join(':') ===
+      'createServerEntry,createServerEntry:default,entry',
+    message
+  );
+  assertReviewedTanStackServerOwners(program, chunkFile, trustedOwnerDigests);
+  assertExactCloudflareStaticImports(program, chunkFile, manifestRecord);
+};
+
+const assertBoundedCloudflareChunkTopLevel = (
+  program,
+  chunkFile,
+  manifestRecord,
+  allowedInitializers = {}
+) => {
+  assert(
+    program.body.every((statement) =>
+      isInertTopLevelStatement(statement, allowedInitializers)
+    ),
+    `${chunkFile} must contain only inert top-level declarations`
+  );
+  assertExactCloudflareStaticImports(program, chunkFile, manifestRecord);
+  const mutated = mutatedNames(program);
+  for (const constructor of inertTopLevelConstructors) {
+    assert(
+      topLevelDeclarationsForBinding(program, constructor).length === 0 &&
+        !mutated.has(constructor),
+      `${chunkFile} must use trusted inert collection constructors`
+    );
+  }
+};
+
+const isCreateNoOpTelemetryCall = (node) =>
+  nodeType(node) === 'CallExpression' &&
+  identifierName(node.callee) === 'createNoOpTelemetry' &&
+  node.arguments.length === 0;
+
+const isNoOpManualSpanMember = (node) => {
+  if (nodeType(node) !== 'MemberExpression') return false;
+  return [
+    node.computed === false,
+    identifierName(node.property) === 'startManualSpan',
+    isCreateNoOpTelemetryCall(node.object),
+  ].every(Boolean);
+};
+
+const isNoOpManualSpanOptions = (options) => {
+  if (nodeType(options) !== 'ObjectExpression') return false;
+  const [property] = options.properties;
+  return [
+    options.properties.length === 1,
+    propertyKeyName(property) === 'name',
+    literalString(property?.value) === 'telemetry.noop',
+  ].every(Boolean);
+};
+
+const isNoOpManualSpanCall = (node) => {
+  if (nodeType(node) !== 'CallExpression') return false;
+  return [
+    isNoOpManualSpanMember(node.callee),
+    node.arguments.length === 1,
+    isNoOpManualSpanOptions(node.arguments[0]),
+  ].every(Boolean);
+};
+
+const isTelemetryProxyInitializer = (node) => {
+  if (nodeType(node) !== 'ObjectExpression') return false;
+  const expectedProperties = [
+    'captureException',
+    'currentCorrelation',
+    'emitLog',
+    'forceFlush',
+    'recordMetric',
+    'setUser',
+    'startManualSpan',
+    'startSpan',
+  ];
+  const properties = node.properties.toSorted((left, right) =>
+    String(propertyKeyName(left)).localeCompare(String(propertyKeyName(right)))
+  );
+  if (
+    properties.map(propertyKeyName).join(':') !== expectedProperties.join(':')
+  ) {
+    return false;
+  }
+  return properties.every((property) => {
+    if (propertyKeyName(property) === 'startSpan') {
+      return identifierName(property.value) === 'startSpanSafely';
+    }
+    return inertTopLevelObjectProperty(property);
+  });
+};
+
+const boundedCloudflareHelperNames = new Set([
+  'bindRequestExceptionState',
+  'claimRequestException',
+  'createRequestExceptionCaptureState',
+  'forceFlushRequestTelemetry',
+  'isUnexpectedRequestFailure',
+  'registerRequestCompletion',
+  'snapshotRequestCompletions',
+]);
+
+const telemetryHelperNames = new Set([
+  'createNoOpTelemetry',
+  'getTelemetry',
+  'reportTelemetryFailure',
+  'setTelemetry',
+]);
+
+const assertUnmutatedCloudflareHelperChunk = (program, chunkFile) => {
+  const helperNames = [
+    ...boundedCloudflareHelperNames,
+    ...telemetryHelperNames,
+  ].filter(
+    (helper) => topLevelDeclarationsForBinding(program, helper).length > 0
+  );
+  const mutated = mutatedNames(program);
+  for (const helper of helperNames) {
+    assert(
+      !mutated.has(helper),
+      `${chunkFile} must not mutate trusted helper ${helper}`
+    );
+  }
+};
+
+const assertBoundedSmallCloudflareHelperChunk = (
+  program,
+  chunkFile,
+  manifestRecord,
+  localName
+) => {
+  if (!boundedCloudflareHelperNames.has(localName)) return;
+  const sourcePatterns = new Set([
+    'forceFlushRequestTelemetry',
+    'registerRequestCompletion',
+    'snapshotRequestCompletions',
+  ]).has(localName)
+    ? [/^\.\/telemetry(?:-[\w-]+)?\.js$/]
+    : [];
+  assertExactCloudflareStaticImportSources(program, chunkFile, sourcePatterns);
+  assertBoundedCloudflareChunkTopLevel(program, chunkFile, manifestRecord);
+};
+
+const assertBoundedTelemetryHelperChunk = (
+  program,
+  chunkFile,
+  manifestRecord,
+  localName
+) => {
+  if (!telemetryHelperNames.has(localName)) return;
+  assertExactCloudflareStaticImportSources(program, chunkFile, []);
+  assertBoundedCloudflareChunkTopLevel(program, chunkFile, manifestRecord, {
+    activeAdapter: isCreateNoOpTelemetryCall,
+    noOpManualSpan: isNoOpManualSpanCall,
+    telemetryProxy: isTelemetryProxyInitializer,
+  });
+};
+
+const assertBoundedCloudflareHelperChunk = (
+  program,
+  chunkFile,
+  manifestRecord,
+  localName
+) => {
+  assertUnmutatedCloudflareHelperChunk(program, chunkFile);
+  assertBoundedSmallCloudflareHelperChunk(
+    program,
+    chunkFile,
+    manifestRecord,
+    localName
+  );
+  assertBoundedTelemetryHelperChunk(
+    program,
+    chunkFile,
+    manifestRecord,
+    localName
+  );
+};
+
 const assertTrustedChunkBuiltIns = (program, chunkFile, builtIns) => {
   const mutated = mutatedNames(program);
   ['globalThis', 'self', 'window', 'global'].forEach((globalAlias) => {
@@ -2411,13 +3908,17 @@ const assertTrustedChunkBuiltIns = (program, chunkFile, builtIns) => {
     );
   });
   Object.entries(builtIns).forEach(([builtIn, expectedOccurrences]) => {
+    const message =
+      expectedOccurrences === 0
+        ? `${chunkFile} must not access the ${builtIn} built-in`
+        : `${chunkFile} must use the trusted ${builtIn} built-in`;
     assertConditions(
       [
         topLevelDeclarationsForBinding(program, builtIn).length === 0,
         !mutated.has(builtIn) &&
           identifierOccurrenceCount(program, builtIn) === expectedOccurrences,
       ],
-      `${chunkFile} must use the trusted ${builtIn} built-in`
+      message
     );
   });
 };
@@ -4338,7 +5839,8 @@ const assertCloudflareSentryRequestChunk = (program, chunkFile) => {
 const assertCloudflareRuntimeOwnerImports = (
   program,
   fetchFunction,
-  filePath
+  filePath,
+  tanStackOwnerDigests
 ) => {
   const telemetryEntryImport = assertExactEntryDynamicImport(
     program,
@@ -4350,7 +5852,10 @@ const assertCloudflareRuntimeOwnerImports = (
     path.dirname(filePath),
     telemetryEntryImport.importSource
   );
-  const { program: telemetryEntryProgram } = assertCloudflareChunkProvenance(
+  const {
+    manifestRecord: telemetryEntryManifestRecord,
+    program: telemetryEntryProgram,
+  } = assertCloudflareChunkProvenance(
     filePath,
     telemetryEntryChunk,
     'src/platform/telemetry/index.ts',
@@ -4375,6 +5880,22 @@ const assertCloudflareRuntimeOwnerImports = (
       `${telemetryEntryChunk} must not mutate trusted helper ${helper}`
     );
   }
+  assertExactCloudflareStaticImportSources(
+    telemetryEntryProgram,
+    telemetryEntryChunk,
+    [
+      /^\.\/tags(?:-[\w-]+)?\.js$/,
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      /^\.\/request-completion(?:-[\w-]+)?\.js$/,
+      /^\.\/request-exception-state(?:-[\w-]+)?\.js$/,
+      /^\.\/structured-console(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  assertBoundedCloudflareChunkTopLevel(
+    telemetryEntryProgram,
+    telemetryEntryChunk,
+    telemetryEntryManifestRecord
+  );
   const telemetryAdapterImport = assertExactEntryDynamicImport(
     program,
     filePath,
@@ -4385,7 +5906,10 @@ const assertCloudflareRuntimeOwnerImports = (
     path.dirname(filePath),
     telemetryAdapterImport.importSource
   );
-  const { program: telemetryAdapterProgram } = assertCloudflareChunkProvenance(
+  const {
+    manifestRecord: telemetryAdapterManifestRecord,
+    program: telemetryAdapterProgram,
+  } = assertCloudflareChunkProvenance(
     filePath,
     telemetryAdapterChunk,
     'src/runtime/cloudflare/telemetry-adapter.ts',
@@ -4396,6 +5920,19 @@ const assertCloudflareRuntimeOwnerImports = (
     telemetryAdapterChunk,
     'createCloudflareTelemetryAdapter'
   );
+  assertExactCloudflareStaticImportSources(
+    telemetryAdapterProgram,
+    telemetryAdapterChunk,
+    [
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      /^\.\/structured-console(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  assertBoundedCloudflareChunkTopLevel(
+    telemetryAdapterProgram,
+    telemetryAdapterChunk,
+    telemetryAdapterManifestRecord
+  );
   assertExactEntryDynamicImport(
     program,
     filePath,
@@ -4404,7 +5941,8 @@ const assertCloudflareRuntimeOwnerImports = (
   );
   const applicationDeclarator = assertCloudflareApplicationOwner(
     program,
-    filePath
+    filePath,
+    tanStackOwnerDigests
   );
   const sdkDeclarator = assertCloudflareSdkOwner(program, filePath);
   const sentryOwners = [
@@ -4433,6 +5971,19 @@ const assertCloudflareRuntimeOwnerImports = (
     sentryImport.program,
     sentryImport.chunkFile
   );
+  assertExactCloudflareStaticImportSources(
+    sentryImport.program,
+    sentryImport.chunkFile,
+    [
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      /^\.\/request-completion(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  assertBoundedCloudflareChunkTopLevel(
+    sentryImport.program,
+    sentryImport.chunkFile,
+    sentryImport.manifestRecord
+  );
   const databaseOwner = 'runWithCloudflareDatabase';
   const databaseImport = assertCloudflareNamedOwnerImport(program, filePath, {
     assetPattern: /^\.\/assets\/database-request(?:-[\w-]+)?\.js$/,
@@ -4457,6 +6008,20 @@ const assertCloudflareRuntimeOwnerImports = (
     databaseImport.program,
     databaseImport.chunkFile
   );
+  assertExactCloudflareStaticImportSources(
+    databaseImport.program,
+    databaseImport.chunkFile,
+    [
+      /^\.\/client(?:-[\w-]+)?\.js$/,
+      /^\.\/backend(?:-[\w-]+)?\.js$/,
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  assertBoundedCloudflareChunkTopLevel(
+    databaseImport.program,
+    databaseImport.chunkFile,
+    databaseImport.manifestRecord
+  );
   const lifecycleOwner = 'scheduleCloudflareRequestFlush';
   const lifecycleImport = assertCloudflareNamedOwnerImport(program, filePath, {
     assetPattern: /^\.\/assets\/request-lifecycle(?:-[\w-]+)?\.js$/,
@@ -4474,6 +6039,19 @@ const assertCloudflareRuntimeOwnerImports = (
   assertCloudflareLifecycleChunk(
     lifecycleImport.program,
     lifecycleImport.chunkFile
+  );
+  assertExactCloudflareStaticImportSources(
+    lifecycleImport.program,
+    lifecycleImport.chunkFile,
+    [
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      /^\.\/request-completion(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  assertBoundedCloudflareChunkTopLevel(
+    lifecycleImport.program,
+    lifecycleImport.chunkFile,
+    lifecycleImport.manifestRecord
   );
   const fetchOwnerDeclarator = topLevelBindingDeclarators(
     program,
@@ -4969,13 +6547,14 @@ const assertCloudflareFetchStatementSequence = (fetchFunction, filePath) => {
 
 const assertCloudflareEntryModuleBoundary = (program, filePath) => {
   assertTrustedChunkBuiltIns(program, filePath, { Response: 0 });
+  const expectedStatements = 13;
   assert(
-    program.body.length === 13,
-    `${filePath} must contain only its bounded Cloudflare module ownership sequence`
+    program.body.length === expectedStatements,
+    `${filePath} must contain only its bounded Cloudflare module ownership sequence (expected ${expectedStatements} top-level statements, received ${program.body.length})`
   );
 };
 
-const assertCloudflareDatabaseOwner = (filePath) => {
+const assertCloudflareDatabaseOwner = (filePath, tanStackOwnerDigests) => {
   const { program } = readParsedModule(filePath);
   assertCloudflareSentryOwner(program, filePath);
   const fetchFunction = findDefaultWorkerFetch(program, filePath);
@@ -4987,7 +6566,12 @@ const assertCloudflareDatabaseOwner = (filePath) => {
   assertNoCloudflareOwnerOverrides(program, fetchFunction, filePath);
   assertExactCloudflareOwnerUsage(fetchFunction, filePath);
   assertNoProgramCloudflareOwnerAliases(program, fetchFunction, filePath);
-  assertCloudflareRuntimeOwnerImports(program, fetchFunction, filePath);
+  assertCloudflareRuntimeOwnerImports(
+    program,
+    fetchFunction,
+    filePath,
+    tanStackOwnerDigests
+  );
   assertCloudflareApplicationHandler(fetchFunction, filePath);
   const options = cloudflareDatabaseOwnerProperties(fetchFunction, filePath);
   const sentryOptions = cloudflareOuterOwnerProperties(fetchFunction, filePath);
@@ -5138,6 +6722,12 @@ const assertExactStaticChunkHelper = (
   );
   assertFile(helperChunk);
   const { program: helperProgram } = readParsedModule(helperChunk);
+  const artifactRoot = path.dirname(path.dirname(chunkFile));
+  const manifestRecord = assertCloudflareChunkManifestMembership(
+    artifactRoot,
+    helperChunk,
+    `trusted helper ${localName}`
+  );
   const helperExports = helperProgram.body
     .filter(
       (statement) =>
@@ -5175,6 +6765,13 @@ const assertExactStaticChunkHelper = (
     topLevelBindingDeclarators(program, localName).length === 0,
     `${chunkFile} must not redeclare trusted helper ${localName}`
   );
+  assertBoundedCloudflareHelperChunk(
+    helperProgram,
+    helperChunk,
+    manifestRecord,
+    localName
+  );
+  return { helperChunk, helperProgram, manifestRecord };
 };
 
 const assertExactLocalChunkFunction = (program, chunkFile, localName) => {
@@ -5215,6 +6812,89 @@ const topLevelFunctionEntries = (statement) => {
   }
   if (statement.type !== 'FunctionDeclaration') return [];
   return statement.id ? [[statement.id.name, statement]] : [];
+};
+
+const variableOwnerEntries = (statement) =>
+  statement.declarations.flatMap((declarator) =>
+    bindingNames(declarator.id).map((name) => [
+      name,
+      { kind: statement.kind, node: declarator },
+    ])
+  );
+
+const declaredOwnerEntries = (statement) =>
+  statement.id
+    ? [[statement.id.name, { kind: statement.type, node: statement }]]
+    : [];
+const noOwnerEntries = () => [];
+const topLevelOwnerReaders = {
+  ClassDeclaration: declaredOwnerEntries,
+  FunctionDeclaration: declaredOwnerEntries,
+  VariableDeclaration: variableOwnerEntries,
+};
+const topLevelOwnerEntries = (statement) =>
+  (topLevelOwnerReaders[statement.type] ?? noOwnerEntries)(statement);
+
+const identifierNames = (node) => {
+  const names = new Set();
+  new Visitor({
+    Identifier(identifier) {
+      names.add(identifier.name);
+    },
+  }).visit(node);
+  return names;
+};
+
+const uniqueTopLevelOwners = (program, message) => {
+  const entries = program.body.flatMap(topLevelOwnerEntries);
+  const owners = new Map(entries);
+  assert(entries.length === owners.size, message);
+  return owners;
+};
+
+const enqueueReferencedOwners = (pending, owners, node) => {
+  for (const reference of identifierNames(node)) {
+    if (owners.has(reference)) pending.push(reference);
+  }
+};
+
+const visitTopLevelOwner = (name, pending, reachable, owners) => {
+  if (reachable.has(name)) return;
+  const owner = owners.get(name);
+  if (!owner) return;
+  reachable.add(name);
+  enqueueReferencedOwners(pending, owners, owner.node);
+};
+
+const reachableTopLevelOwners = (owners, initialName) => {
+  const pending = [initialName];
+  const reachable = new Set();
+  while (pending.length > 0) {
+    visitTopLevelOwner(pending.pop(), pending, reachable, owners);
+  }
+  return reachable;
+};
+
+const topLevelOwnerClosureDigest = (program, initialName, message) => {
+  const owners = uniqueTopLevelOwners(program, message);
+  assert(owners.has(initialName), message);
+  const reachable = reachableTopLevelOwners(owners, initialName);
+  const mutations = mutatedNames(program);
+  assert(
+    [...reachable].every((name) => !mutations.has(name)),
+    message
+  );
+  const records = [...reachable]
+    .toSorted((left, right) => left.localeCompare(right))
+    .map((name) => {
+      const owner = owners.get(name);
+      return [
+        name,
+        owner.kind,
+        astDigest(owner.node, normalizeGeneratedModuleSource),
+      ];
+    });
+  return createHash('sha256').update(JSON.stringify(records)).digest('hex');
 };
 
 const namedExportEntry = (specifier) => {
@@ -5524,7 +7204,7 @@ const verifyVercel = (root) => {
   );
 };
 
-const verifyCloudflare = (root, expectedAppSlug) => {
+const verifyCloudflare = (root, expectedAppSlug, tanStackOwnerDigests) => {
   const output = path.join(root, 'dist');
   const sourceConfig = readJson(path.join(root, 'wrangler.json'));
   const generatedConfig = readJson(path.join(output, 'server/wrangler.json'));
@@ -5574,7 +7254,7 @@ const verifyCloudflare = (root, expectedAppSlug) => {
   assertDirectory(path.join(output, 'client'));
   const serverEntry = path.join(output, 'server/index.js');
   assertOnlyProfileMarker(serverEntry, 'cloudflare');
-  assertCloudflareDatabaseOwner(serverEntry);
+  assertCloudflareDatabaseOwner(serverEntry, tanStackOwnerDigests);
   assertRequiredRuntimeTokens(path.join(output, 'server'), 'cloudflare');
   assertNoForbiddenRuntimeTokens(path.join(output, 'server'), 'cloudflare');
 };
@@ -5582,12 +7262,16 @@ const verifyCloudflare = (root, expectedAppSlug) => {
 export const verifyRuntimeProfile = (
   profile,
   root = process.cwd(),
-  { expectedAppSlug = process.env.APP_SLUG, forbiddenBuildTokens = [] } = {}
+  {
+    cloudflareTanStackOwnerDigests,
+    expectedAppSlug = process.env.APP_SLUG,
+    forbiddenBuildTokens = [],
+  } = {}
 ) => {
   assert(profiles.has(profile), `unknown profile ${String(profile)}`);
   if (profile === 'node') verifyNode(root);
   else if (profile === 'vercel') verifyVercel(root);
-  else verifyCloudflare(root, expectedAppSlug);
+  else verifyCloudflare(root, expectedAppSlug, cloudflareTanStackOwnerDigests);
   assertNoArtifactTokens(
     runtimeArtifactOutput(profile, root),
     forbiddenBuildTokens

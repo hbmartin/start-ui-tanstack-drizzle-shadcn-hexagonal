@@ -3,7 +3,33 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { verifyRuntimeProfile } from '../../../scripts/verify-runtime-profile.mjs';
+import { verifyRuntimeProfile as verifyRuntimeProfileImplementation } from '../../../scripts/verify-runtime-profile.mjs';
+
+const fixtureEmptyPluginAdaptersSource =
+  'node_modules/.pnpm/@tanstack+start-server-core@1.169.15_fixture/node_modules/@tanstack/start-server-core/dist/esm/empty-plugin-adapters.js';
+const fixtureTanStackOwnerDigests = {
+  createStartHandler:
+    '6a9731e0a46846cce538b09b6afe5c18b74ad3e12349bfd87d5e25fe5f86bb70',
+  defineHandlerCallback:
+    '6a9731e0a46846cce538b09b6afe5c18b74ad3e12349bfd87d5e25fe5f86bb70',
+  emptyPluginAdaptersChunk:
+    '4ac630a35e14c193022ea8123bebd83f8452615b082cbdceeac56ed3d5fa1050',
+  routerLocalClosure:
+    'a24c4029ad1a7fb1d1ff768be75188a6fc0102109a86da4caff5f042136d716d',
+  serverClosure:
+    '3c079d76ea46eeef306d8bbe717eb11bb0e61ab18bf25fcffa3cbdbfbbb0a35f',
+  serverChunk:
+    'bbc7ed3bdd688fa42957859cd4b08f190892330bfbba85eb3595327a3a798cf8',
+  serverEdgeClosure:
+    'd4ff590c216703c07b7f3cacec226f8608eb7b0be9483104f1e4c38e8cf87303',
+  serverEdgeChunk:
+    '226f687de42f69e116477d9650fa6a9f7a3f25c2414b6969d4e3f751cf1363ed',
+};
+const verifyRuntimeProfile = (profile, root, options = {}) =>
+  verifyRuntimeProfileImplementation(profile, root, {
+    cloudflareTanStackOwnerDigests: fixtureTanStackOwnerDigests,
+    ...options,
+  });
 
 const temporaryDirectories = [];
 
@@ -22,12 +48,83 @@ const write = (root, relativePath, contents = '') => {
 const writeJson = (root, relativePath, value) =>
   write(root, relativePath, `${JSON.stringify(value)}\n`);
 
+const replaceManifestBackedHashedDependency = (
+  root,
+  {
+    parentFile,
+    parentManifestKey,
+    replacementFile,
+    replacementManifestKey,
+    transform,
+    trustedFile,
+    trustedManifestKey,
+  }
+) => {
+  const assets = path.join(root, 'dist/server/assets');
+  write(
+    root,
+    `dist/server/assets/${replacementFile}`,
+    transform(fs.readFileSync(path.join(assets, trustedFile), 'utf8'))
+  );
+  const parentPath = path.join(assets, parentFile);
+  write(
+    root,
+    `dist/server/assets/${parentFile}`,
+    fs.readFileSync(parentPath, 'utf8').replace(trustedFile, replacementFile)
+  );
+  const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest[replacementManifestKey] = {
+    ...manifest[trustedManifestKey],
+    file: `assets/${replacementFile}`,
+  };
+  const parentImports = manifest[parentManifestKey].imports;
+  parentImports.splice(
+    parentImports.indexOf(trustedManifestKey),
+    1,
+    replacementManifestKey
+  );
+  delete manifest[trustedManifestKey];
+  fs.rmSync(path.join(assets, trustedFile));
+  writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+};
+
+const replaceManifestStaticEdge = (
+  root,
+  {
+    ownerFile,
+    ownerManifestKey,
+    replacementEntry,
+    replacementManifestKey,
+    replacementSource,
+    trustedManifestKey,
+    trustedSource,
+  }
+) => {
+  const ownerPath = path.join(root, ownerFile);
+  write(
+    root,
+    ownerFile,
+    fs.readFileSync(ownerPath, 'utf8').replace(trustedSource, replacementSource)
+  );
+  const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest[replacementManifestKey] = replacementEntry;
+  const ownerImports = manifest[ownerManifestKey].imports;
+  ownerImports.splice(
+    ownerImports.indexOf(trustedManifestKey),
+    1,
+    replacementManifestKey
+  );
+  writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+};
+
 const cloudflareSentryOwner =
   'const fetchCloudflareApplication=({context,handle,request,sentryOptions})=>sentryOptions?runWithCloudflareSentry({api:Sentry,handle,request,requestOptions:{captureErrors:false,context,options:sentryOptions,request}}):handle();';
 const cloudflareRuntimeOwners =
   'var Sentry=await import("./assets/esm-fixture.js");' +
   'var {initializeCloudflareSentryApplication,runWithCloudflareSentry}=await import("./assets/sentry-request-fixture.js");' +
-  'var {application,sentryRequestIsolationReady}=await initializeCloudflareSentryApplication(Sentry,async()=>{const kernel=await import("./assets/backend-fixture.js");kernel.requireRuntimeDatabaseClient();kernel.validateServerBuildConfig("cloudflare");const {createApplicationServerEntry}=await import("./assets/create-application-server-entry-fixture.js");return createApplicationServerEntry("cloudflare")});' +
+  'var {application,sentryRequestIsolationReady}=await initializeCloudflareSentryApplication(Sentry,async()=>{const kernel=await import("./assets/backend-kernel-fixture.js");kernel.requireRuntimeDatabaseClient();kernel.validateServerBuildConfig("cloudflare");const {createApplicationServerEntry}=await import("./assets/create-application-server-entry-fixture.js");return createApplicationServerEntry("cloudflare")});' +
   'var {tracing}=await import("cloudflare:workers");' +
   'var {createNoOpTelemetry,reportTelemetryFailure}=await import("./assets/telemetry-entry-fixture.js");' +
   'var {createCloudflareTelemetryAdapter}=await import("./assets/telemetry-adapter-fixture.js");' +
@@ -124,42 +221,234 @@ const createCloudflareArtifact = (root) => {
       },
     'src/runtime/create-application-server-entry.ts': {
       file: 'assets/create-application-server-entry-fixture.js',
+      imports: [
+        '_telemetry-fixture.js',
+        '_request-exception-state-fixture.js',
+        '_request-failure-fixture.js',
+      ],
+      dynamicImports: [
+        'src/platform/telemetry/index.ts',
+        'src/entry-server.ts',
+      ],
       isDynamicEntry: true,
       name: 'create-application-server-entry',
       src: 'src/runtime/create-application-server-entry.ts',
     },
+    'src/modules/kernel/backend.ts': {
+      file: 'assets/backend-kernel-fixture.js',
+      imports: [
+        '_auth-fixture.js',
+        '_telemetry-fixture.js',
+        '_client-fixture.js',
+        '_runtime-fixture.js',
+        '_backend-build-config-fixture.js',
+        '_book-fixture.js',
+      ],
+      isDynamicEntry: true,
+      name: 'backend',
+      src: 'src/modules/kernel/backend.ts',
+    },
+    '_backend-fixture.js': {
+      file: 'assets/backend-fixture.js',
+      imports: [],
+      name: 'backend',
+    },
+    '_auth-fixture.js': {
+      file: 'assets/auth-fixture.js',
+      imports: [],
+      name: 'auth',
+    },
+    '_backend-build-config-fixture.js': {
+      file: 'assets/backend-build-config-fixture.js',
+      imports: [],
+      name: 'backend',
+    },
+    '_client-fixture.js': {
+      file: 'assets/client-fixture.js',
+      imports: [],
+      name: 'client',
+    },
+    '_book-fixture.js': {
+      file: 'assets/book-fixture.js',
+      imports: [],
+      name: 'book',
+    },
+    '_react-fixture.js': {
+      file: 'assets/react-fixture.js',
+      imports: [],
+      name: 'react',
+    },
+    '_rolldown-runtime-fixture.js': {
+      file: 'assets/rolldown-runtime-fixture.js',
+      imports: [],
+      name: 'rolldown-runtime',
+    },
+    '_runtime-fixture.js': {
+      file: 'assets/runtime-fixture.js',
+      imports: [],
+      name: 'runtime',
+    },
+    '_sanitize-log-fields-fixture.js': {
+      file: 'assets/sanitize-log-fields-fixture.js',
+      imports: [],
+      name: 'sanitize-log-fields',
+    },
+    '_server-fixture.js': {
+      dynamicImports: [
+        'tanstack-start-manifest:v',
+        'src/router.tsx',
+        'src/start.ts',
+        fixtureEmptyPluginAdaptersSource,
+      ],
+      file: 'assets/server-fixture.js',
+      imports: ['_createCsrfMiddleware-AAAAAAAA.js'],
+      name: 'server',
+    },
+    '_server.edge-fixture.js': {
+      file: 'assets/server.edge-fixture.js',
+      imports: ['_react-dom-AAAAAAAA.js'],
+      name: 'server.edge',
+    },
+    '_createCsrfMiddleware-AAAAAAAA.js': {
+      file: 'assets/createCsrfMiddleware-AAAAAAAA.js',
+      imports: ['_server-fixture.js', '_cycle-marker-AAAAAAAA.js'],
+      name: 'createCsrfMiddleware',
+    },
+    '_cycle-marker-AAAAAAAA.js': {
+      file: 'runtime/cycle-marker-AAAAAAAA.js',
+      imports: [],
+      name: 'cycle-marker',
+    },
+    [fixtureEmptyPluginAdaptersSource]: {
+      file: 'assets/empty-plugin-adapters-AAAAAAAA.js',
+      isDynamicEntry: true,
+      imports: [],
+      name: 'empty-plugin-adapters',
+      src: fixtureEmptyPluginAdaptersSource,
+    },
+    'src/router.tsx': {
+      file: 'assets/router-AAAAAAAA.js',
+      isDynamicEntry: true,
+      imports: [],
+      name: 'router',
+      src: 'src/router.tsx',
+    },
+    'src/start.ts': {
+      file: 'assets/start-AAAAAAAA.js',
+      isDynamicEntry: true,
+      imports: [],
+      name: 'start',
+      src: 'src/start.ts',
+    },
+    'tanstack-start-manifest:v': {
+      file: 'assets/tanstack-start-manifest-AAAAAAAA.js',
+      isDynamicEntry: true,
+      imports: [],
+      name: 'tanstack-start-manifest',
+      src: 'tanstack-start-manifest:v',
+    },
+    '_react-dom-AAAAAAAA.js': {
+      file: 'assets/react-dom-AAAAAAAA.js',
+      imports: [],
+      name: 'react-dom',
+    },
+    '_structured-console-fixture.js': {
+      file: 'assets/structured-console-fixture.js',
+      imports: [],
+      name: 'structured-console',
+    },
+    '_tags-fixture.js': {
+      file: 'assets/tags-fixture.js',
+      imports: [],
+      name: 'tags',
+    },
+    '_request-completion-fixture.js': {
+      file: 'assets/request-completion-fixture.js',
+      imports: ['_telemetry-fixture.js'],
+      name: 'request-completion',
+    },
+    '_request-exception-state-fixture.js': {
+      file: 'assets/request-exception-state-fixture.js',
+      imports: [],
+      name: 'request-exception-state',
+    },
+    '_request-failure-fixture.js': {
+      file: 'assets/request-failure-fixture.js',
+      imports: [],
+      name: 'request-failure',
+    },
+    '_telemetry-fixture.js': {
+      file: 'assets/telemetry-fixture.js',
+      imports: [],
+      name: 'telemetry',
+    },
+    'src/entry-server.ts': {
+      file: 'assets/entry-server-fixture.js',
+      imports: [
+        '_rolldown-runtime-fixture.js',
+        '_react-fixture.js',
+        '_server-fixture.js',
+        '_server.edge-fixture.js',
+        '_telemetry-fixture.js',
+        '_request-completion-fixture.js',
+        '_request-exception-state-fixture.js',
+      ],
+      isDynamicEntry: true,
+      name: 'entry-server',
+      src: 'src/entry-server.ts',
+    },
     'src/platform/telemetry/index.ts': {
       file: 'assets/telemetry-entry-fixture.js',
+      imports: [
+        '_tags-fixture.js',
+        '_telemetry-fixture.js',
+        '_request-completion-fixture.js',
+        '_request-exception-state-fixture.js',
+        '_structured-console-fixture.js',
+      ],
       isDynamicEntry: true,
       name: 'telemetry',
       src: 'src/platform/telemetry/index.ts',
     },
     'src/runtime/cloudflare/database-request.ts': {
       file: 'assets/database-request-fixture.js',
+      imports: [
+        '_client-fixture.js',
+        '_backend-fixture.js',
+        '_telemetry-fixture.js',
+      ],
       isDynamicEntry: true,
       name: 'database-request',
       src: 'src/runtime/cloudflare/database-request.ts',
     },
     'src/runtime/cloudflare/request-lifecycle.ts': {
       file: 'assets/request-lifecycle-fixture.js',
+      imports: ['_telemetry-fixture.js', '_request-completion-fixture.js'],
       isDynamicEntry: true,
       name: 'request-lifecycle',
       src: 'src/runtime/cloudflare/request-lifecycle.ts',
     },
     'src/runtime/cloudflare/request-telemetry.ts': {
       file: 'assets/request-telemetry-fixture.js',
+      imports: [
+        '_tags-fixture.js',
+        '_sanitize-log-fields-fixture.js',
+        '_telemetry-fixture.js',
+      ],
       isDynamicEntry: true,
       name: 'request-telemetry',
       src: 'src/runtime/cloudflare/request-telemetry.ts',
     },
     'src/runtime/cloudflare/sentry-request.ts': {
       file: 'assets/sentry-request-fixture.js',
+      imports: ['_telemetry-fixture.js', '_request-completion-fixture.js'],
       isDynamicEntry: true,
       name: 'sentry-request',
       src: 'src/runtime/cloudflare/sentry-request.ts',
     },
     'src/runtime/cloudflare/telemetry-adapter.ts': {
       file: 'assets/telemetry-adapter-fixture.js',
+      imports: ['_telemetry-fixture.js', '_structured-console-fixture.js'],
       isDynamicEntry: true,
       name: 'telemetry-adapter',
       src: 'src/runtime/cloudflare/telemetry-adapter.ts',
@@ -188,47 +477,57 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/assets/request-telemetry-fixture.js',
-    'import{reportTelemetryFailure,setTelemetry}from"./telemetry-fixture.js";const createCloudflareSentryOptions=()=>({});const createSentryTelemetryAdapter=()=>({});const createTelemetryAdapterChain=()=>({});const configureCloudflareRequestTelemetry=({environment,nativeTelemetry,request,sentry,sentryRequestIsolationReady})=>{setTelemetry(nativeTelemetry);if(!environment.SENTRY_DSN||!sentryRequestIsolationReady){return{}}try{const sentryOptions=createCloudflareSentryOptions(sentry,request,environment);const sentryTelemetry=createSentryTelemetryAdapter(sentry,{flushOwner:"request-wrapper"});setTelemetry(createTelemetryAdapterChain([nativeTelemetry,sentryTelemetry]));return{sentryOptions}}catch(failure){reportTelemetryFailure("sentry.cloudflare.configure",failure);return{}}};export{configureCloudflareRequestTelemetry};'
+    'import{toTelemetryStringTags}from"./tags-fixture.js";import{sanitizeLogFields}from"./sanitize-log-fields-fixture.js";import{reportTelemetryFailure,setTelemetry}from"./telemetry-fixture.js";const createCloudflareSentryOptions=()=>({});const createSentryTelemetryAdapter=()=>({});const createTelemetryAdapterChain=()=>({});const configureCloudflareRequestTelemetry=({environment,nativeTelemetry,request,sentry,sentryRequestIsolationReady})=>{setTelemetry(nativeTelemetry);if(!environment.SENTRY_DSN||!sentryRequestIsolationReady){return{}}try{const sentryOptions=createCloudflareSentryOptions(sentry,request,environment);const sentryTelemetry=createSentryTelemetryAdapter(sentry,{flushOwner:"request-wrapper"});setTelemetry(createTelemetryAdapterChain([nativeTelemetry,sentryTelemetry]));return{sentryOptions}}catch(failure){reportTelemetryFailure("sentry.cloudflare.configure",failure);return{}}};export{configureCloudflareRequestTelemetry};'
   );
   write(
     root,
     'dist/server/assets/request-lifecycle-fixture.js',
-    'import{forceFlushRequestTelemetry}from"./request-completion-fixture.js";import{getTelemetry,reportTelemetryFailure}from"./telemetry-fixture.js";const scheduleCloudflareRequestFlush=(request,waitUntil)=>{const flush=forceFlushRequestTelemetry(request,getTelemetry()).then(()=>void 0);try{waitUntil(flush)}catch(failure){reportTelemetryFailure("otel.cloudflare.wait_until",failure)}};export{scheduleCloudflareRequestFlush};'
+    'import{getTelemetry,reportTelemetryFailure}from"./telemetry-fixture.js";import{forceFlushRequestTelemetry}from"./request-completion-fixture.js";const scheduleCloudflareRequestFlush=(request,waitUntil)=>{const flush=forceFlushRequestTelemetry(request,getTelemetry()).then(()=>void 0);try{waitUntil(flush)}catch(failure){reportTelemetryFailure("otel.cloudflare.wait_until",failure)}};export{scheduleCloudflareRequestFlush};'
   );
   write(
     root,
     'dist/server/assets/telemetry-entry-fixture.js',
-    'import{createNoOpTelemetry,reportTelemetryFailure}from"./telemetry-fixture.js";export{createNoOpTelemetry,reportTelemetryFailure};'
+    'import"./tags-fixture.js";import{createNoOpTelemetry,reportTelemetryFailure,telemetryProxy}from"./telemetry-fixture.js";import"./request-completion-fixture.js";import"./request-exception-state-fixture.js";import"./structured-console-fixture.js";export{createNoOpTelemetry,reportTelemetryFailure,telemetryProxy};'
   );
   write(
     root,
     'dist/server/assets/telemetry-adapter-fixture.js',
-    'const createCloudflareTelemetryAdapter=()=>({});export{createCloudflareTelemetryAdapter};'
+    'import"./telemetry-fixture.js";import{writeStructuredConsoleLog}from"./structured-console-fixture.js";const createCloudflareTelemetryAdapter=()=>({});export{createCloudflareTelemetryAdapter};'
   );
   write(
     root,
     'dist/server/assets/create-application-server-entry-fixture.js',
-    'import{reportTelemetryFailure}from"./telemetry-fixture.js";import{n as claimRequestException,r as createRequestExceptionCaptureState,t as bindRequestExceptionState}from"./request-exception-state-fixture.js";import{t as isUnexpectedRequestFailure}from"./request-failure-fixture.js";const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-fixture.js");const tanstack=await import("./entry-server-fixture.js");return tanstack.createServerEntry({async fetch(request){const handleRequest=async()=>{const telemetryCaptureState=createRequestExceptionCaptureState();bindRequestExceptionState(request,telemetryCaptureState);const context={requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState};try{return await tanstack.default.fetch(request,{context})}catch(error){if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{level:"error",tags:{event:"framework.request.failed",requestId:context.requestId}});throw error}finally{try{lifecycle?.onRequestSettled(request)}catch{}}};if(!requestScope)return handleRequest();let applicationResult;const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult};try{return requestScope(runApplicationOnce)}catch(failure){reportTelemetryFailure("sentry.request_scope",failure);return applicationResult??runApplicationOnce()}}})};export{createApplicationServerEntry};'
+    'import{reportTelemetryFailure}from"./telemetry-fixture.js";import{n as claimRequestException,r as createRequestExceptionCaptureState,t as bindRequestExceptionState}from"./request-exception-state-fixture.js";import{t as isUnexpectedRequestFailure}from"./request-failure-fixture.js";const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-entry-fixture.js");const tanstack=await import("./entry-server-fixture.js");return tanstack.createServerEntry({async fetch(request){const handleRequest=async()=>{const telemetryCaptureState=createRequestExceptionCaptureState();bindRequestExceptionState(request,telemetryCaptureState);const context={requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState};try{return await tanstack.default.fetch(request,{context})}catch(error){if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{level:"error",tags:{event:"framework.request.failed",requestId:context.requestId}});throw error}finally{try{lifecycle?.onRequestSettled(request)}catch{}}};if(!requestScope)return handleRequest();let applicationResult;const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult};try{return requestScope(runApplicationOnce)}catch(failure){reportTelemetryFailure("sentry.request_scope",failure);return applicationResult??runApplicationOnce()}}})};export{createApplicationServerEntry};'
   );
   write(
     root,
     'dist/server/assets/entry-server-fixture.js',
-    'const createServerEntry=(entry)=>entry;const application={fetch:()=>new Response()};export{createServerEntry,application as default};'
+    'import{__toESM}from"./rolldown-runtime-fixture.js";import{require_react}from"./react-fixture.js";import{createSsrStreamResponse,createStartHandler,defineHandlerCallback,isbot,StartServer,transformReadableStreamWithRouter}from"./server-fixture.js";import{require_server_edge}from"./server.edge-fixture.js";import"./telemetry-fixture.js";import{n as registerRequestCompletion}from"./request-completion-fixture.js";import{r as createRequestExceptionCaptureState,getRequestExceptionState}from"./request-exception-state-fixture.js";const import_react=__toESM(require_react(),1);const import_server_edge=__toESM(require_server_edge(),1);const noop=()=>{};const isAbortError=()=>false;const waitForReadyOrAbort=async()=>{};const observedStreamHandler=defineHandlerCallback(async({request,responseHeaders,router})=>{const exceptionCaptureState=getRequestExceptionState(request)??createRequestExceptionCaptureState();const stream=await import_server_edge.renderToReadableStream(import_react.createElement(StartServer,{router}));registerRequestCompletion(request,stream);if(isbot(request.headers.get("user-agent")))await waitForReadyOrAbort(stream,request.signal);const responseStream=transformReadableStreamWithRouter(router,stream);const response=new Response(responseStream,{headers:responseHeaders,status:router.stores.statusCode.get()});return createSsrStreamResponse(router,response)});const entry={fetch:createStartHandler(observedStreamHandler)};const createServerEntry=(serverEntry)=>serverEntry;export{createServerEntry,entry as default};'
   );
   write(
     root,
     'dist/server/assets/client-fixture.js',
-    'const createHyperdriveDbClient=()=>({});const runWithRuntimeDatabaseClient=(_database,handle)=>handle();export{createHyperdriveDbClient,runWithRuntimeDatabaseClient};'
+    'const createHyperdriveDbClient=()=>({});const requireRuntimeDatabaseClient=()=>{};const runWithRuntimeDatabaseClient=(_database,handle)=>handle();export{createHyperdriveDbClient,requireRuntimeDatabaseClient,runWithRuntimeDatabaseClient};'
   );
   write(
     root,
     'dist/server/assets/backend-fixture.js',
-    'const requireRuntimeDatabaseClient=()=>{};const validateServerBuildConfig=()=>{};const validateServerConfig=()=>{};export{requireRuntimeDatabaseClient,validateServerBuildConfig,validateServerConfig};'
+    'const validateServerConfig=()=>{};export{validateServerConfig};'
+  );
+  write(
+    root,
+    'dist/server/assets/backend-kernel-fixture.js',
+    'import"./auth-fixture.js";import"./telemetry-fixture.js";import{requireRuntimeDatabaseClient}from"./client-fixture.js";import"./runtime-fixture.js";import{validateServerBuildConfig}from"./backend-build-config-fixture.js";import"./book-fixture.js";export{requireRuntimeDatabaseClient,validateServerBuildConfig};'
+  );
+  write(
+    root,
+    'dist/server/assets/backend-build-config-fixture.js',
+    'const validateServerBuildConfig=()=>{};export{validateServerBuildConfig};'
   );
   write(
     root,
     'dist/server/assets/request-exception-state-fixture.js',
-    'const claimRequestException=()=>true;const createRequestExceptionCaptureState=()=>({});const bindRequestExceptionState=()=>{};export{claimRequestException as n,createRequestExceptionCaptureState as r,bindRequestExceptionState as t};'
+    'const claimRequestException=()=>true;const createRequestExceptionCaptureState=()=>({});const bindRequestExceptionState=()=>{};const getRequestExceptionState=()=>{};export{claimRequestException as n,createRequestExceptionCaptureState as r,bindRequestExceptionState as t,getRequestExceptionState};'
   );
   write(
     root,
@@ -238,13 +537,86 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/assets/request-completion-fixture.js',
-    'const forceFlushRequestTelemetry=()=>Promise.resolve();const registerRequestCompletion=()=>{};const snapshotRequestCompletions=()=>[];export{forceFlushRequestTelemetry,registerRequestCompletion as n,snapshotRequestCompletions as r};'
+    'import{reportTelemetryFailure}from"./telemetry-fixture.js";const forceFlushRequestTelemetry=()=>Promise.resolve();const registerRequestCompletion=()=>{};const snapshotRequestCompletions=()=>[];export{forceFlushRequestTelemetry,registerRequestCompletion as n,snapshotRequestCompletions as r};'
   );
   write(
     root,
     'dist/server/assets/telemetry-fixture.js',
     'const createNoOpTelemetry=()=>({});const getTelemetry=()=>({});const reportTelemetryFailure=()=>{};const setTelemetry=()=>{};const telemetryProxy={};export{createNoOpTelemetry,getTelemetry,reportTelemetryFailure,setTelemetry,telemetryProxy};'
   );
+  write(
+    root,
+    'dist/server/assets/rolldown-runtime-fixture.js',
+    'const __toESM=(value)=>value;export{__toESM};'
+  );
+  write(
+    root,
+    'dist/server/assets/react-fixture.js',
+    'const require_react=()=>({});export{require_react};'
+  );
+  write(
+    root,
+    'dist/server/assets/server-fixture.js',
+    'import{createCsrfMiddleware}from"./createCsrfMiddleware-AAAAAAAA.js";const loadOwners=()=>Promise.all([import("./tanstack-start-manifest-AAAAAAAA.js"),import("./router-AAAAAAAA.js"),import("./start-AAAAAAAA.js"),import("./empty-plugin-adapters-AAAAAAAA.js")]);const createSsrStreamResponse=(_router,response)=>response;const createStartHandler=(handler)=>handler;const defineHandlerCallback=(handler)=>handler;const isbot=()=>false;const StartServer=()=>{};const transformReadableStreamWithRouter=(stream)=>stream;export{createSsrStreamResponse,createStartHandler,defineHandlerCallback,isbot,StartServer,transformReadableStreamWithRouter};'
+  );
+  write(
+    root,
+    'dist/server/assets/server.edge-fixture.js',
+    'import{renderToReadableStream}from"./react-dom-AAAAAAAA.js";const require_server_edge=()=>({renderToReadableStream});export{require_server_edge};'
+  );
+  write(
+    root,
+    'dist/server/assets/createCsrfMiddleware-AAAAAAAA.js',
+    'import"node:stream";import"./server-fixture.js";export{serverCycleMarker}from"../runtime/cycle-marker-AAAAAAAA.js";const createCsrfMiddleware=()=>{};export{createCsrfMiddleware};'
+  );
+  write(
+    root,
+    'dist/server/runtime/cycle-marker-AAAAAAAA.js',
+    'const serverCycleMarker=true;export{serverCycleMarker};'
+  );
+  write(
+    root,
+    'dist/server/assets/empty-plugin-adapters-AAAAAAAA.js',
+    'const emptyPluginAdapter=true;export{emptyPluginAdapter};'
+  );
+  write(
+    root,
+    'dist/server/assets/router-AAAAAAAA.js',
+    'const getRouterCspNonce=()=>undefined;function getRouter(){const cspNonce=getRouterCspNonce();return{cspNonce}}export{getRouter};'
+  );
+  write(
+    root,
+    'dist/server/assets/start-AAAAAAAA.js',
+    'const startInstance={};export{startInstance};'
+  );
+  write(
+    root,
+    'dist/server/assets/tanstack-start-manifest-AAAAAAAA.js',
+    'const tsrStartManifest=()=>({});export{tsrStartManifest};'
+  );
+  write(
+    root,
+    'dist/server/assets/react-dom-AAAAAAAA.js',
+    'const renderToReadableStream=()=>new ReadableStream();export{renderToReadableStream};'
+  );
+  write(
+    root,
+    'dist/server/assets/tags-fixture.js',
+    'const toTelemetryStringTags=()=>({});export{toTelemetryStringTags};'
+  );
+  write(
+    root,
+    'dist/server/assets/sanitize-log-fields-fixture.js',
+    'const sanitizeLogFields=()=>({});export{sanitizeLogFields};'
+  );
+  write(
+    root,
+    'dist/server/assets/structured-console-fixture.js',
+    'const writeStructuredConsoleLog=()=>{};export{writeStructuredConsoleLog};'
+  );
+  for (const emptyChunk of ['auth', 'book', 'runtime']) {
+    write(root, `dist/server/assets/${emptyChunk}-fixture.js`);
+  }
   fs.mkdirSync(path.join(root, 'dist/client'));
 };
 
@@ -2784,7 +3156,7 @@ describe('runtime artifact verifier', () => {
     const databaseImport =
       'var {runWithCloudflareDatabase}=await import("./assets/database-request-fixture.js");';
     const applicationInitialization =
-      'var {application,sentryRequestIsolationReady}=await initializeCloudflareSentryApplication(Sentry,async()=>{const kernel=await import("./assets/backend-fixture.js");kernel.requireRuntimeDatabaseClient();kernel.validateServerBuildConfig("cloudflare");const {createApplicationServerEntry}=await import("./assets/create-application-server-entry-fixture.js");return createApplicationServerEntry("cloudflare")});';
+      'var {application,sentryRequestIsolationReady}=await initializeCloudflareSentryApplication(Sentry,async()=>{const kernel=await import("./assets/backend-kernel-fixture.js");kernel.requireRuntimeDatabaseClient();kernel.validateServerBuildConfig("cloudflare");const {createApplicationServerEntry}=await import("./assets/create-application-server-entry-fixture.js");return createApplicationServerEntry("cloudflare")});';
     const source = fs.readFileSync(entryPath, 'utf8');
     write(
       root,
@@ -3216,7 +3588,7 @@ describe('runtime artifact verifier', () => {
     write(
       root,
       'dist/server/assets/request-completion-fixture.js',
-      'const forceFlushTelemetry=()=>Promise.resolve();const forceFlushRequestTelemetry=()=>Promise.resolve();const registerRequestCompletion=()=>{};const snapshotRequestCompletions=()=>[];export{forceFlushTelemetry,forceFlushRequestTelemetry,registerRequestCompletion as n,snapshotRequestCompletions as r};'
+      'import{reportTelemetryFailure}from"./telemetry-fixture.js";const forceFlushTelemetry=()=>Promise.resolve();const forceFlushRequestTelemetry=()=>Promise.resolve();const registerRequestCompletion=()=>{};const snapshotRequestCompletions=()=>[];export{forceFlushTelemetry,forceFlushRequestTelemetry,registerRequestCompletion as n,snapshotRequestCompletions as r};'
     );
     write(
       root,
@@ -3978,8 +4350,8 @@ describe('runtime artifact verifier', () => {
   it.each([
     [
       'an injected loader import',
-      'const kernel=await import("./assets/backend-fixture.js");',
-      'await import("./assets/evil.js");const kernel=await import("./assets/backend-fixture.js");',
+      'const kernel=await import("./assets/backend-kernel-fixture.js");',
+      'await import("./assets/evil.js");const kernel=await import("./assets/backend-kernel-fixture.js");',
     ],
     [
       'a missing runtime-database guard',
@@ -3999,6 +4371,87 @@ describe('runtime artifact verifier', () => {
       root,
       'dist/server/index.js',
       fs.readFileSync(entryPath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('application loader must run exact Cloudflare kernel guards');
+  });
+
+  it('rejects a missing Cloudflare kernel owner chunk', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    fs.rmSync(path.join(root, 'dist/server/assets/backend-kernel-fixture.js'));
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('backend-kernel-fixture.js');
+  });
+
+  it.each([
+    ['src', 'src/modules/kernel/forged.ts'],
+    ['isDynamicEntry', false],
+  ])('rejects forged kernel %s provenance', (field, value) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest['src/modules/kernel/backend.ts'][field] = value;
+    writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must originate from src/modules/kernel/backend.ts');
+  });
+
+  it('rejects a kernel facade missing a required guard export', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/backend-kernel-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'export{requireRuntimeDatabaseClient,validateServerBuildConfig}',
+          'export{validateServerBuildConfig}'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must expose exact Cloudflare kernel guards: requireRuntimeDatabaseClient'
+    );
+  });
+
+  it('rejects a local decoy application factory in the guarded loader', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          '{createApplicationServerEntry}=await import',
+          '{createApplicationServerEntry:realCreateApplicationServerEntry}=await import'
+        )
+        .replace(
+          'return createApplicationServerEntry("cloudflare")',
+          'const createApplicationServerEntry=()=>({fetch:()=>new Response("bypassed")});return createApplicationServerEntry("cloudflare")'
+        )
     );
 
     expect(() =>
@@ -4045,6 +4498,36 @@ describe('runtime artifact verifier', () => {
       'if(!requestScope)return await handleRequest();',
       'universal request owner must execute its application exactly once',
     ],
+    [
+      'a non-call lifecycle settlement statement',
+      'lifecycle?.onRequestSettled(request)',
+      '1',
+      'universal request owner must settle its active lifecycle',
+    ],
+    [
+      'a missing application result declaration',
+      'let applicationResult;',
+      ';',
+      'universal request owner must execute its application exactly once',
+    ],
+    [
+      'an expression-bodied application memoizer',
+      'const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult}',
+      'const runApplicationOnce=()=>applicationResult??=handleRequest()',
+      'universal request owner must memoize one application execution',
+    ],
+    [
+      'a request scope without a failure handler',
+      'try{return requestScope(runApplicationOnce)}catch(failure){reportTelemetryFailure("sentry.request_scope",failure);return applicationResult??runApplicationOnce()}',
+      'try{return requestScope(runApplicationOnce)}finally{}',
+      'universal request owner must preserve scoped execution',
+    ],
+    [
+      'a non-call TanStack entry return',
+      'return tanstack.createServerEntry({',
+      'return 1||tanstack.createServerEntry({',
+      'must return one TanStack server entry',
+    ],
   ])(
     'rejects %s with a bounded universal-entry diagnostic',
     (_label, search, replacement, error) => {
@@ -4066,6 +4549,32 @@ describe('runtime artifact verifier', () => {
       ).toThrow(error);
     }
   );
+
+  it('rejects an expression-bodied universal request handler cleanly', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath =
+      'dist/server/assets/create-application-server-entry-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    const source = fs.readFileSync(chunkPath, 'utf8');
+    const startMarker = 'const handleRequest=async()=>{';
+    const endMarker = '};if(!requestScope)';
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start);
+    const mutated =
+      source.slice(0, start) +
+      'const handleRequest=async()=>tanstack.default.fetch(request);if(!requestScope)' +
+      source.slice(end + endMarker.length);
+    write(root, relativePath, mutated);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'universal application server entry must own one live request handler'
+    );
+  });
 
   it('rejects a non-function universal fetch owner cleanly', () => {
     const root = fixture();
@@ -4121,6 +4630,953 @@ describe('runtime artifact verifier', () => {
     ).toThrow(
       'must import trusted helper createRequestExceptionCaptureState exactly once'
     );
+  });
+
+  it('rejects a universal helper without a Vite manifest record', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    delete manifest['_request-failure-fixture.js'];
+    writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must have one Vite trusted helper isUnexpectedRequestFailure provenance record'
+    );
+  });
+
+  it('rejects a universal helper detached from its application manifest edge', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const application =
+      manifest['src/runtime/create-application-server-entry.ts'];
+    application.imports = application.imports.filter(
+      (key) => key !== '_request-failure-fixture.js'
+    );
+    writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must import exactly its trusted helper manifest records');
+  });
+
+  it.each([
+    'dist/server/assets/create-application-server-entry-fixture.js',
+    'dist/server/assets/database-request-fixture.js',
+    'dist/server/assets/request-failure-fixture.js',
+  ])('rejects load-time execution in %s', (relativePath) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      `fetch("https://invalid.example");${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must contain only inert top-level declarations');
+  });
+
+  it('rejects an unbound top-level application initializer', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath =
+      'dist/server/assets/create-application-server-entry-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      `const sabotage=missingIdentifier;${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must contain only inert top-level declarations');
+  });
+
+  it.each([
+    'const sabotage={valueOf:()=>fetch("https://invalid.example")}+1;',
+    'const sabotage=+{valueOf:()=>fetch("https://invalid.example")};',
+  ])('rejects coercing top-level application initializers', (initializer) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath =
+      'dist/server/assets/create-application-server-entry-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      `${initializer}${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must contain only inert top-level declarations');
+  });
+
+  it('rejects a collection initializer that crashes during module evaluation', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath =
+      'dist/server/assets/create-application-server-entry-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      `const sabotage=new Set({});${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must contain only inert top-level declarations');
+  });
+
+  it('rejects load-time execution in the TanStack entry chunk', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/entry-server-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      `fetch("https://invalid.example");${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must preserve the import-safe TanStack server entry shape');
+  });
+
+  it.each([
+    [
+      'const entry={fetch:createStartHandler(observedStreamHandler)};',
+      'const entry={fetch:fetch("https://invalid.example")};',
+    ],
+    [
+      'const createServerEntry=(serverEntry)=>serverEntry;',
+      'const createServerEntry=(serverEntry)=>(fetch("https://invalid.example"),serverEntry);',
+    ],
+  ])(
+    'rejects executable substitutions in the TanStack entry owners',
+    (trustedOwner, substitutedOwner) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const relativePath = 'dist/server/assets/entry-server-fixture.js';
+      const chunkPath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        fs
+          .readFileSync(chunkPath, 'utf8')
+          .replace(trustedOwner, substitutedOwner)
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('must preserve the import-safe TanStack server entry shape');
+    }
+  );
+
+  it('rejects a substituted TanStack observed stream handler', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/entry-server-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          /const observedStreamHandler=.*?;const entry=/u,
+          'const observedStreamHandler=defineHandlerCallback(async()=>fetch("https://invalid.example"));const entry='
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must preserve the import-safe TanStack server entry shape');
+  });
+
+  it('rejects a TanStack observed stream handler that discards its response', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/entry-server-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'return createSsrStreamResponse(router,response)',
+          'return(createSsrStreamResponse(router,response),new Response("bypassed"))'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must preserve the import-safe TanStack server entry shape');
+  });
+
+  it.each([
+    'new Response(responseStream)',
+    'new Response(responseStream,(globalThis["fetch"]("https://invalid.example"),{headers:responseHeaders,status:router.stores.statusCode.get()}))',
+  ])('rejects substituted TanStack response options: %s', (substitution) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/entry-server-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'new Response(responseStream,{headers:responseHeaders,status:router.stores.statusCode.get()})',
+          substitution
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must preserve the import-safe TanStack server entry shape');
+  });
+
+  it.each(['createStartHandler', 'defineHandlerCallback'])(
+    'rejects a synchronized same-family %s owner substitution',
+    (ownerName) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const trustedFile = 'server-fixture.js';
+      const substitutedFile = 'server-decoy-fixture.js';
+      const trustedPath = path.join(root, 'dist/server/assets', trustedFile);
+      const substitutedOwner = `${ownerName}Decoy`;
+      const trustedExports =
+        'export{createSsrStreamResponse,createStartHandler,defineHandlerCallback,isbot,StartServer,transformReadableStreamWithRouter}';
+      write(
+        root,
+        `dist/server/assets/${substitutedFile}`,
+        fs
+          .readFileSync(trustedPath, 'utf8')
+          .replace(`const ${ownerName}=`, `const ${substitutedOwner}=`)
+          .replace(
+            trustedExports,
+            trustedExports.replace(
+              ownerName,
+              `${substitutedOwner} as ${ownerName}`
+            )
+          )
+      );
+      const entryPath = 'dist/server/assets/entry-server-fixture.js';
+      write(
+        root,
+        entryPath,
+        fs
+          .readFileSync(path.join(root, entryPath), 'utf8')
+          .replace(trustedFile, substitutedFile)
+      );
+      const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const trustedManifestKey = '_server-fixture.js';
+      const substitutedManifestKey = '_server-decoy-fixture.js';
+      manifest[substitutedManifestKey] = {
+        ...manifest[trustedManifestKey],
+        file: `assets/${substitutedFile}`,
+      };
+      const entryImports = manifest['src/entry-server.ts'].imports;
+      entryImports.splice(
+        entryImports.indexOf(trustedManifestKey),
+        1,
+        substitutedManifestKey
+      );
+      writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(`must import the ${ownerName} export from its owner chunk`);
+    }
+  );
+
+  it.each(['createStartHandler', 'defineHandlerCallback'])(
+    'rejects a synchronized same-name %s body substitution',
+    (ownerName) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const trustedFile = 'server-fixture.js';
+      const substitutedFile = 'server-decoy-fixture.js';
+      const trustedPath = path.join(root, 'dist/server/assets', trustedFile);
+      write(
+        root,
+        `dist/server/assets/${substitutedFile}`,
+        fs
+          .readFileSync(trustedPath, 'utf8')
+          .replace(
+            `const ${ownerName}=(handler)=>handler`,
+            `const ${ownerName}=(handler)=>(fetch("https://invalid.example"),handler)`
+          )
+      );
+      const entryPath = 'dist/server/assets/entry-server-fixture.js';
+      write(
+        root,
+        entryPath,
+        fs
+          .readFileSync(path.join(root, entryPath), 'utf8')
+          .replace(trustedFile, substitutedFile)
+      );
+      const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const trustedManifestKey = '_server-fixture.js';
+      const substitutedManifestKey = '_server-decoy-fixture.js';
+      manifest[substitutedManifestKey] = {
+        ...manifest[trustedManifestKey],
+        file: `assets/${substitutedFile}`,
+      };
+      const entryImports = manifest['src/entry-server.ts'].imports;
+      entryImports.splice(
+        entryImports.indexOf(trustedManifestKey),
+        1,
+        substitutedManifestKey
+      );
+      writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(`must use the reviewed ${ownerName} implementation`);
+    }
+  );
+
+  it('rejects a synchronized transitive TanStack server substitution', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const trustedFile = 'server-fixture.js';
+    const substitutedFile = 'server-decoy-fixture.js';
+    const trustedPath = path.join(root, 'dist/server/assets', trustedFile);
+    write(
+      root,
+      `dist/server/assets/${substitutedFile}`,
+      fs
+        .readFileSync(trustedPath, 'utf8')
+        .replace(
+          'const createSsrStreamResponse=(_router,response)=>response',
+          'const createSsrStreamResponse=(_router,response)=>(fetch("https://invalid.example"),response)'
+        )
+    );
+    const entryPath = 'dist/server/assets/entry-server-fixture.js';
+    write(
+      root,
+      entryPath,
+      fs
+        .readFileSync(path.join(root, entryPath), 'utf8')
+        .replace(trustedFile, substitutedFile)
+    );
+    const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const trustedManifestKey = '_server-fixture.js';
+    const substitutedManifestKey = '_server-decoy-fixture.js';
+    manifest[substitutedManifestKey] = {
+      ...manifest[trustedManifestKey],
+      file: `assets/${substitutedFile}`,
+    };
+    const entryImports = manifest['src/entry-server.ts'].imports;
+    entryImports.splice(
+      entryImports.indexOf(trustedManifestKey),
+      1,
+      substitutedManifestKey
+    );
+    writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must use the reviewed TanStack server implementation closure');
+  });
+
+  it.each([
+    [
+      'TanStack server',
+      {
+        parentFile: 'server-fixture.js',
+        parentManifestKey: '_server-fixture.js',
+        replacementFile: 'createCsrfMiddleware-BBBBBBBB.js',
+        replacementManifestKey: '_createCsrfMiddleware-BBBBBBBB.js',
+        transform: (source) =>
+          source.replace(
+            'const createCsrfMiddleware=()=>{}',
+            'const createCsrfMiddleware=()=>true'
+          ),
+        trustedFile: 'createCsrfMiddleware-AAAAAAAA.js',
+        trustedManifestKey: '_createCsrfMiddleware-AAAAAAAA.js',
+      },
+      'must use the reviewed TanStack server static import closure',
+    ],
+    [
+      'React server renderer',
+      {
+        parentFile: 'server.edge-fixture.js',
+        parentManifestKey: '_server.edge-fixture.js',
+        replacementFile: 'react-dom-BBBBBBBB.js',
+        replacementManifestKey: '_react-dom-BBBBBBBB.js',
+        transform: (source) =>
+          source.replace(
+            'const renderToReadableStream=()=>new ReadableStream()',
+            'const renderToReadableStream=()=>fetch("https://invalid.example")'
+          ),
+        trustedFile: 'react-dom-AAAAAAAA.js',
+        trustedManifestKey: '_react-dom-AAAAAAAA.js',
+      },
+      'must use the reviewed React server renderer static import closure',
+    ],
+  ])(
+    'rejects a synchronized hashed dependency substitution in the %s closure',
+    (_label, substitution, expectedMessage) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      replaceManifestBackedHashedDependency(root, substitution);
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(expectedMessage);
+    }
+  );
+
+  it('accepts a content-identical hashed dependency rename', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    replaceManifestBackedHashedDependency(root, {
+      parentFile: 'server-fixture.js',
+      parentManifestKey: '_server-fixture.js',
+      replacementFile: 'createCsrfMiddleware-BBBBBBBB.js',
+      replacementManifestKey: '_createCsrfMiddleware-BBBBBBBB.js',
+      transform: (source) => source,
+      trustedFile: 'createCsrfMiddleware-AAAAAAAA.js',
+      trustedManifestKey: '_createCsrfMiddleware-AAAAAAAA.js',
+    });
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects a synchronized dynamic dependency substitution', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const assets = path.join(root, 'dist/server/assets');
+    const trustedFile = 'empty-plugin-adapters-AAAAAAAA.js';
+    const replacementFile = 'empty-plugin-adapters-BBBBBBBB.js';
+    write(
+      root,
+      `dist/server/assets/${replacementFile}`,
+      fs
+        .readFileSync(path.join(assets, trustedFile), 'utf8')
+        .replace(
+          'const emptyPluginAdapter=true',
+          'const emptyPluginAdapter=fetch("https://invalid.example")'
+        )
+    );
+    const serverPath = path.join(assets, 'server-fixture.js');
+    write(
+      root,
+      'dist/server/assets/server-fixture.js',
+      fs.readFileSync(serverPath, 'utf8').replace(trustedFile, replacementFile)
+    );
+    const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest[fixtureEmptyPluginAdaptersSource] = {
+      ...manifest[fixtureEmptyPluginAdaptersSource],
+      file: `assets/${replacementFile}`,
+    };
+    fs.rmSync(path.join(assets, trustedFile));
+    writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must use the reviewed empty plugin adapters owner');
+  });
+
+  it('rejects mutation of the dynamically loaded getRouter owner', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/router-AAAAAAAA.js';
+    const routerPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(routerPath, 'utf8')
+        .replace(
+          'function getRouter(){',
+          'function getRouter(){globalThis.fetch("https://invalid.example");'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must use the reviewed getRouter local owner closure');
+  });
+
+  it('rejects mutation of a local helper reachable from getRouter', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/router-AAAAAAAA.js';
+    const routerPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(routerPath, 'utf8')
+        .replace(
+          'const getRouterCspNonce=()=>undefined',
+          'const getRouterCspNonce=()=>globalThis.fetch("https://invalid.example")'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must use the reviewed getRouter local owner closure');
+  });
+
+  it('rejects an unreviewed external inside the reviewed static closure', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/createCsrfMiddleware-AAAAAAAA.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace('import"node:stream"', 'import"unreviewed:runtime"')
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must use the reviewed TanStack server static import closure');
+  });
+
+  it.each([
+    [
+      'lexical escape',
+      '../../outside-BBBBBBBB.js',
+      '../outside-BBBBBBBB.js',
+      () => {},
+    ],
+    [
+      'symlink escape',
+      './cycle-marker-BBBBBBBB.js',
+      'assets/cycle-marker-BBBBBBBB.js',
+      (root) =>
+        fs.symlinkSync(
+          '../../outside-BBBBBBBB.js',
+          path.join(root, 'dist/server/assets/cycle-marker-BBBBBBBB.js')
+        ),
+    ],
+  ])(
+    'rejects a %s inside the reviewed static closure',
+    (_label, replacementSource, replacementFile, prepareEscape) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      write(
+        root,
+        'dist/outside-BBBBBBBB.js',
+        'const serverCycleMarker=false;export{serverCycleMarker};'
+      );
+      prepareEscape(root);
+      replaceManifestStaticEdge(root, {
+        ownerFile: 'dist/server/assets/createCsrfMiddleware-AAAAAAAA.js',
+        ownerManifestKey: '_createCsrfMiddleware-AAAAAAAA.js',
+        replacementEntry: {
+          file: replacementFile,
+          imports: [],
+          name: 'cycle-marker',
+        },
+        replacementManifestKey: '_cycle-marker-BBBBBBBB.js',
+        replacementSource,
+        trustedManifestKey: '_cycle-marker-AAAAAAAA.js',
+        trustedSource: '../runtime/cycle-marker-AAAAAAAA.js',
+      });
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('must use the reviewed TanStack server static import closure');
+    }
+  );
+
+  it('rejects a substituted React server renderer implementation', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/server.edge-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'const require_server_edge=()=>({renderToReadableStream})',
+          'const require_server_edge=()=>(globalThis.fetch("https://invalid.example"),{renderToReadableStream})'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must use the reviewed React server renderer implementation closure'
+    );
+  });
+
+  it.each([
+    [
+      'dist/server/assets/request-failure-fixture.js',
+      '_request-failure-fixture.js',
+    ],
+    [
+      'dist/server/assets/request-exception-state-fixture.js',
+      '_request-exception-state-fixture.js',
+    ],
+    [
+      'dist/server/assets/request-completion-fixture.js',
+      '_request-completion-fixture.js',
+    ],
+    ['dist/server/assets/telemetry-fixture.js', '_telemetry-fixture.js'],
+  ])(
+    'rejects a manifest-backed untrusted helper import in %s',
+    (relativePath, manifestKey) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      write(
+        root,
+        'dist/server/assets/evil.js',
+        'fetch("https://invalid.example");'
+      );
+      const chunkPath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        `import"./evil.js";${fs.readFileSync(chunkPath, 'utf8')}`
+      );
+      const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest['_evil.js'] = {
+        file: 'assets/evil.js',
+        imports: [],
+        name: 'evil',
+      };
+      manifest[manifestKey].imports.push('_evil.js');
+      writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('must import only its trusted static owner chunks');
+    }
+  );
+
+  it.each([
+    [
+      'dist/server/assets/create-application-server-entry-fixture.js',
+      'src/runtime/create-application-server-entry.ts',
+      'must import exactly its trusted helper manifest records',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      'must import only its trusted static owner chunks',
+    ],
+    [
+      'dist/server/assets/backend-kernel-fixture.js',
+      'src/modules/kernel/backend.ts',
+      'must import only its trusted static owner chunks',
+    ],
+  ])(
+    'rejects a manifest-backed untrusted static import in %s',
+    (relativePath, manifestKey, expectedMessage) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      write(
+        root,
+        'dist/server/assets/evil.js',
+        'fetch("https://invalid.example");'
+      );
+      const chunkPath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        `import"./evil.js";${fs.readFileSync(chunkPath, 'utf8')}`
+      );
+      const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest['_evil.js'] = {
+        file: 'assets/evil.js',
+        imports: [],
+        name: 'evil',
+      };
+      manifest[manifestKey].imports.push('_evil.js');
+      writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(expectedMessage);
+    }
+  );
+
+  it.each([
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'client-fixture.js',
+      'client-evil-fixture.js',
+      '_client-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      'fetch("https://invalid.example");',
+    ],
+    [
+      'dist/server/assets/backend-kernel-fixture.js',
+      'book-fixture.js',
+      'book-evil-fixture.js',
+      '_book-fixture.js',
+      'src/modules/kernel/backend.ts',
+      'fetch("https://invalid.example");',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'client-fixture.js',
+      'client-evil-fixture.js',
+      '_client-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      '(()=>fetch("https://invalid.example"))();',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'client-fixture.js',
+      'client-evil-fixture.js',
+      '_client-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      'const run=()=>fetch("https://invalid.example");run();',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'client-fixture.js',
+      'client-evil-fixture.js',
+      '_client-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      '(0,fetch)("https://invalid.example");',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'client-fixture.js',
+      'client-evil-fixture.js',
+      '_client-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      'fetch.call(null,"https://invalid.example");',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'client-fixture.js',
+      'client-evil-fixture.js',
+      '_client-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      'globalThis["fetch"]("https://invalid.example");',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'client-fixture.js',
+      'client-evil-fixture.js',
+      '_client-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      'new (function(){fetch("https://invalid.example")})();',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'client-fixture.js',
+      'client-evil-fixture.js',
+      '_client-fixture.js',
+      'src/runtime/cloudflare/database-request.ts',
+      '(function(){fetch("https://invalid.example")})`x`;',
+    ],
+  ])(
+    'rejects a matching-family static chunk substitution in %s (%s -> %s; %s; %s; %s)',
+    (
+      ownerPath,
+      trustedFile,
+      substitutedFile,
+      manifestKey,
+      ownerManifestKey,
+      executablePrefix
+    ) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const trustedPath = path.join(root, 'dist/server/assets', trustedFile);
+      write(
+        root,
+        `dist/server/assets/${substitutedFile}`,
+        `${executablePrefix}${fs.readFileSync(trustedPath, 'utf8')}`
+      );
+      const ownerFile = path.join(root, ownerPath);
+      write(
+        root,
+        ownerPath,
+        fs.readFileSync(ownerFile, 'utf8').replace(trustedFile, substitutedFile)
+      );
+      const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const substitutedManifestKey = `_${substitutedFile}`;
+      manifest[substitutedManifestKey] = {
+        ...manifest[manifestKey],
+        file: `assets/${substitutedFile}`,
+      };
+      const ownerImports = manifest[ownerManifestKey].imports;
+      ownerImports.splice(
+        ownerImports.indexOf(manifestKey),
+        1,
+        substitutedManifestKey
+      );
+      writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(
+        'must not execute fetch, eval, or worker effects while loading'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'dist/server/assets/create-application-server-entry-fixture.js',
+      'must import only its trusted static owner chunks',
+    ],
+    [
+      'dist/server/assets/database-request-fixture.js',
+      'must import only its trusted static owner chunks',
+    ],
+    [
+      'dist/server/assets/request-failure-fixture.js',
+      'must import only its trusted static owner chunks',
+    ],
+  ])('rejects a detached side-effect import in %s', (relativePath, message) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(
+      root,
+      'dist/server/assets/evil.js',
+      'fetch("https://invalid.example");'
+    );
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      `import"./evil.js";${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(message);
+  });
+
+  it.each([
+    ['entry-server', 'tanstack'],
+    ['telemetry-entry', 'telemetryProxy'],
+  ])('rejects a detached dynamic %s owner chunk', (ownerFile, ownerName) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const sourceRelativePath = `dist/server/assets/${ownerFile}-fixture.js`;
+    const sourcePath = path.join(root, sourceRelativePath);
+    const decoyFile = `${ownerFile}-decoy.js`;
+    write(
+      root,
+      `dist/server/assets/${decoyFile}`,
+      fs.readFileSync(sourcePath, 'utf8')
+    );
+    const applicationRelativePath =
+      'dist/server/assets/create-application-server-entry-fixture.js';
+    const applicationPath = path.join(root, applicationRelativePath);
+    write(
+      root,
+      applicationRelativePath,
+      fs
+        .readFileSync(applicationPath, 'utf8')
+        .replace(`${ownerFile}-fixture.js`, decoyFile)
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      `must have one Vite dynamic ${ownerName} owner provenance record`
+    );
+  });
+
+  it('rejects a detached application dynamic-import manifest edge', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest['src/runtime/create-application-server-entry.ts'].dynamicImports =
+      ['src/platform/telemetry/index.ts'];
+    writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must preserve its exact Vite dynamic import graph');
   });
 
   it('rejects a shadowed crypto owner in the universal entry', () => {
@@ -4179,6 +5635,23 @@ describe('runtime artifact verifier', () => {
     ).toThrow(
       'must contain only its bounded Cloudflare module ownership sequence'
     );
+  });
+
+  it('reports forbidden Worker Response access accurately', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      `new Response();${fs.readFileSync(entryPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not access the Response built-in');
   });
 
   it('rejects a non-object Vite manifest cleanly', () => {
