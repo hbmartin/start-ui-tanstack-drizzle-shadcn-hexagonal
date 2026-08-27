@@ -230,12 +230,15 @@ already-built output. Runtime selection is a trusted build input; the applicatio
 infers a deployment profile from request hosts, forwarding headers, or ambient
 provider variables.
 
-The Vercel build and preview commands validate the Vercel request adapter and
-therefore require a remote Neon-compatible `DATABASE_URL`,
-`DATABASE_DRIVER=neon-http`, and `DATABASE_TLS_POLICY=verify`. They cannot use
-the local Docker PostgreSQL endpoint; use the Node build/preview commands for
-that local driver. Maintenance migrations may still use a separate direct
-`node-pg` or `neon-websocket` connection.
+The Vercel build and preview commands validate
+`DATABASE_DRIVER=neon-http` and an effective `verify` TLS policy. Remote URLs
+default to `verify`; an artifact-only build that retains a loopback placeholder
+must select it explicitly. These checks do not connect to the database or prove
+endpoint compatibility. Before exercising a DB-backed Vercel request, supply a
+remote Neon-compatible `DATABASE_URL`; the Neon HTTP driver cannot serve
+requests against the local Docker PostgreSQL endpoint. Use the Node
+build/preview commands for that local driver. Maintenance migrations may still
+use a separate direct `node-pg` or `neon-websocket` connection.
 
 The v5 runtime work is intentionally incremental. The artifact commands prove
 isolated output shapes and trusted profile injection. `pnpm verify:node` also
