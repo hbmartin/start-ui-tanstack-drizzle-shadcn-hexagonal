@@ -397,12 +397,23 @@ describe('server config accessors', () => {
         })
       )
     ).toBe(true);
+    const transactionPoolerSearchParams: ReadonlyArray<Record<string, string>> =
+      [
+        { pgbouncer: 'true' },
+        { PGBOUNCER: 'TRUE' },
+        { pool_mode: 'transaction' },
+        { POOL_MODE: 'TRANSACTION' },
+      ];
+    for (const searchParams of transactionPoolerSearchParams) {
+      expect(
+        isLikelyTransactionPooledDatabaseUrl(
+          makeTestDatabaseUrl({ databaseName: 'db', searchParams })
+        )
+      ).toBe(true);
+    }
     expect(
       isLikelyTransactionPooledDatabaseUrl(
-        makeTestDatabaseUrl({
-          databaseName: 'db',
-          searchParams: { pool_mode: 'transaction' },
-        })
+        `${makeTestDatabaseUrl({ databaseName: 'db' })}?pgbouncer=false&PGBOUNCER=true`
       )
     ).toBe(true);
     expect(

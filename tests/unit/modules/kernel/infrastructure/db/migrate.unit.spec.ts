@@ -237,7 +237,7 @@ describe('createMigrationDbClient', () => {
         tlsPolicy: 'verify',
       })
     ).rejects.toThrow(
-      'Migration database client URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+      'migration database client URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });

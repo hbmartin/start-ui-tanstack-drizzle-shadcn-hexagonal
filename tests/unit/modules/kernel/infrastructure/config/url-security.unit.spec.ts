@@ -134,7 +134,7 @@ describe('assertDatabaseUrlTls', () => {
     ).toThrow(ConfigurationError);
   });
 
-  it('uses a natural defensive message for a caller-provided off policy', () => {
+  it('keeps defensive off-policy remediation neutral when given an env-style label', () => {
     expect(() =>
       assertDatabaseUrlTls({
         name: 'DATABASE_MIGRATION_URL',
@@ -142,6 +142,7 @@ describe('assertDatabaseUrlTls', () => {
         driver: 'node-pg',
         env: PROD,
         policy: 'off',
+        policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
       })
     ).toThrow(
       "DATABASE_MIGRATION_URL must not use TLS policy 'off' for a remote database; select a 'verify' policy or target a loopback endpoint."
@@ -151,16 +152,16 @@ describe('assertDatabaseUrlTls', () => {
   it('does not conflate URL-parameter removal with a policy override', () => {
     expect(() =>
       assertDatabaseUrlTls({
-        name: 'DATABASE_MIGRATION_URL',
+        name: 'DATABASE_URL',
         url: remote('sslmode=require'),
         driver: 'node-pg',
         env: PROD,
         policy: 'verify',
         policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
-        urlOwnerPolicyName: 'DATABASE_MIGRATION_TLS_POLICY',
+        urlOwnerPolicyName: 'DATABASE_TLS_POLICY',
       })
     ).toThrow(
-      'remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_MIGRATION_TLS_POLICY.'
+      'remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_TLS_POLICY.'
     );
   });
 

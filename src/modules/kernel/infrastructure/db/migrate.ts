@@ -105,7 +105,10 @@ export async function createMigrationDbClient(
     policy: config.tlsPolicy,
     url: config.databaseUrl,
   });
-  assertMigrationUrlSupportsMigrations(config.databaseUrl);
+  assertMigrationUrlSupportsMigrations(
+    config.databaseUrl,
+    'migration database client URL'
+  );
   const db =
     config.driver === 'node-pg'
       ? createNodePgMigrationDb(config.databaseUrl, config.tlsPolicy)

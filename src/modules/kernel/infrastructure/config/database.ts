@@ -117,10 +117,19 @@ export function getDatabaseConfig(): DatabaseConfig {
 export function isLikelyTransactionPooledDatabaseUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
+    const hasTransactionPoolerParameter = [...parsed.searchParams].some(
+      ([parameterName, parameterValue]) => {
+        const normalizedName = parameterName.toLowerCase();
+        const normalizedValue = parameterValue.toLowerCase();
+        return (
+          (normalizedName === 'pgbouncer' && normalizedValue === 'true') ||
+          (normalizedName === 'pool_mode' && normalizedValue === 'transaction')
+        );
+      }
+    );
     return (
-      parsed.hostname.includes('pooler') ||
-      parsed.searchParams.get('pgbouncer') === 'true' ||
-      parsed.searchParams.get('pool_mode') === 'transaction'
+      parsed.hostname.toLowerCase().includes('pooler') ||
+      hasTransactionPoolerParameter
     );
   } catch {
     return false;
@@ -129,7 +138,7 @@ export function isLikelyTransactionPooledDatabaseUrl(url: string): boolean {
 
 export function assertMigrationUrlSupportsMigrations(
   databaseUrl: string,
-  databaseUrlName?: 'DATABASE_MIGRATION_URL' | 'DATABASE_URL'
+  databaseUrlName = 'migration database client URL'
 ): void {
   if (!isLikelyTransactionPooledDatabaseUrl(databaseUrl)) return;
 
@@ -146,7 +155,7 @@ export function assertMigrationUrlSupportsMigrations(
   }
 
   throw new ConfigurationError(
-    'Migration database client URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+    `${databaseUrlName} must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.`
   );
 }
 
