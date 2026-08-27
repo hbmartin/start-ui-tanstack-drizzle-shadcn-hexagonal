@@ -218,11 +218,13 @@ describe('createMigrationDbClient', () => {
         driver: 'node-pg',
         tlsPolicy: 'verify',
       })
-    ).rejects.toThrow(ConfigurationError);
+    ).rejects.toThrow(
+      'migration database client URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with the caller-provided policy.'
+    );
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });
 
-  it('uses a neutral policy name for programmatic migration config', async () => {
+  it('uses natural policy remediation for programmatic migration config', async () => {
     const { createMigrationDbClient } =
       await import('@/modules/kernel/infrastructure/db/migrate');
 
@@ -232,7 +234,9 @@ describe('createMigrationDbClient', () => {
         driver: 'node-pg',
         tlsPolicy: 'off',
       })
-    ).rejects.toThrow('database TLS policy=off');
+    ).rejects.toThrow(
+      "migration database client URL must not use TLS policy 'off' for a remote database; pass a 'verify' policy or use a loopback endpoint."
+    );
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });
 

@@ -16,9 +16,9 @@ export type DatabaseTlsPolicy = (typeof DATABASE_TLS_POLICIES)[number];
  */
 export const resolveDatabaseTlsPolicy = ({
   configuredPolicy,
-  policyOverrideName = 'database TLS policy',
-  policySourceName = 'database TLS policy',
-  urlName = 'database URL',
+  policyOverrideName,
+  policySourceName,
+  urlName,
   url,
 }: {
   configuredPolicy: DatabaseTlsPolicy | undefined;
@@ -30,6 +30,12 @@ export const resolveDatabaseTlsPolicy = ({
   const policy = configuredPolicy ?? (isLocalhostUrl(url) ? 'off' : 'verify');
 
   if (policy === 'off' && !isLocalhostUrl(url)) {
+    if (!policyOverrideName || !policySourceName || !urlName) {
+      throw new ConfigurationError(
+        "TLS policy 'off' is allowed only for a loopback endpoint; pass tlsPolicy: 'verify' for this remote database."
+      );
+    }
+
     throw new ConfigurationError(
       `${urlName} uses ${policySourceName}=off, which is allowed only for a loopback endpoint; set ${policyOverrideName}=verify for this remote database.`
     );

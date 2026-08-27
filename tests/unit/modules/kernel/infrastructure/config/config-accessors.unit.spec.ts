@@ -214,10 +214,7 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/infrastructure/config/database');
 
     expect(() => getMigrationDatabaseConfig()).toThrow(
-      'DATABASE_TLS_POLICY=off'
-    );
-    expect(() => getMigrationDatabaseConfig()).toThrow(
-      'set DATABASE_MIGRATION_TLS_POLICY=verify'
+      'DATABASE_MIGRATION_URL uses DATABASE_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_MIGRATION_TLS_POLICY=verify for this remote database.'
     );
 
     vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'verify');
@@ -226,6 +223,17 @@ describe('server config accessors', () => {
       driver: 'node-pg',
       tlsPolicy: 'verify',
     });
+  });
+
+  it('corrects the shared runtime policy when migrations reuse a remote DATABASE_URL', async () => {
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL uses DATABASE_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_TLS_POLICY=verify for this remote database.'
+    );
   });
 
   it('attributes an explicit remote migration opt-out to the migration policy', async () => {
@@ -239,7 +247,76 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/infrastructure/config/database');
 
     expect(() => getMigrationDatabaseConfig()).toThrow(
-      'DATABASE_MIGRATION_TLS_POLICY=off'
+      'DATABASE_MIGRATION_URL uses DATABASE_MIGRATION_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_MIGRATION_TLS_POLICY=verify for this remote database.'
+    );
+  });
+
+  it('keeps an explicit migration policy scoped when reusing DATABASE_URL', async () => {
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'off');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL uses DATABASE_MIGRATION_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_MIGRATION_TLS_POLICY=verify for this remote database.'
+    );
+  });
+
+  it('corrects the shared runtime policy for Neon migrations using DATABASE_URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    vi.stubEnv('DATABASE_DRIVER', 'neon-http');
+    vi.stubEnv('DATABASE_TLS_POLICY', 'encrypt');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL uses a Neon adapter that owns secure transport; production requires DATABASE_TLS_POLICY=verify.'
+    );
+  });
+
+  it('scopes the Neon policy remedy to a distinct migration URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_DRIVER', 'neon-http');
+    vi.stubEnv('DATABASE_TLS_POLICY', 'encrypt');
+    vi.stubEnv(
+      'DATABASE_MIGRATION_URL',
+      makeTestDatabaseUrl({ host: 'db.example.com' })
+    );
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_URL uses a Neon adapter that owns secure transport; production requires DATABASE_MIGRATION_TLS_POLICY=verify.'
+    );
+  });
+
+  it('names the runtime policy for a derived Neon policy on shared DATABASE_URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_DRIVER', 'neon-http');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL uses a Neon adapter that owns secure transport; production requires DATABASE_TLS_POLICY=verify.'
+    );
+  });
+
+  it('names the migration policy for a derived Neon policy on a distinct URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_DRIVER', 'neon-http');
+    vi.stubEnv(
+      'DATABASE_MIGRATION_URL',
+      makeTestDatabaseUrl({ credentialLabel: 'migration' })
+    );
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_URL uses a Neon adapter that owns secure transport; production requires DATABASE_MIGRATION_TLS_POLICY=verify.'
     );
   });
 
@@ -941,7 +1018,9 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/domain/errors/configuration-error');
 
     expect(() => getDatabaseConfig()).toThrow(ConfigurationError);
-    expect(() => getDatabaseConfig()).toThrow('remove those parameters');
+    expect(() => getDatabaseConfig()).toThrow(
+      'DATABASE_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_TLS_POLICY.'
+    );
   });
 
   it('allows an explicit loopback-only off policy for production verification', async () => {
@@ -989,7 +1068,7 @@ describe('server config accessors', () => {
 
     expect(() => getMigrationDatabaseConfig()).toThrow(ConfigurationError);
     expect(() => getMigrationDatabaseConfig()).toThrow(
-      'DATABASE_MIGRATION_URL'
+      'DATABASE_MIGRATION_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_MIGRATION_TLS_POLICY.'
     );
   });
 

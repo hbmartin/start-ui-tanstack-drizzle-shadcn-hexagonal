@@ -55,7 +55,9 @@ describe('resolveDatabaseTlsPolicy', () => {
         configuredPolicy: 'off',
         url: remote,
       })
-    ).toThrow('database URL uses database TLS policy=off');
+    ).toThrow(
+      "TLS policy 'off' is allowed only for a loopback endpoint; pass tlsPolicy: 'verify' for this remote database."
+    );
   });
 
   it('attributes an inherited policy and recommends its scoped override', () => {
@@ -67,6 +69,8 @@ describe('resolveDatabaseTlsPolicy', () => {
         urlName: 'DATABASE_MIGRATION_URL',
         url: remote,
       })
-    ).toThrow('set DATABASE_MIGRATION_TLS_POLICY=verify');
+    ).toThrow(
+      'DATABASE_MIGRATION_URL uses DATABASE_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_MIGRATION_TLS_POLICY=verify for this remote database.'
+    );
   });
 });

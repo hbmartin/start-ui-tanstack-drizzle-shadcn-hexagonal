@@ -253,8 +253,11 @@ conventional direct PostgreSQL endpoint, and set
 otherwise inherit a non-`off` request policy. When neither policy is configured,
 the migration URL independently defaults to `off` for loopback and `verify` for
 remote endpoints.
-Conversely, a remote maintenance URL that would inherit
+Conversely, a distinct remote `DATABASE_MIGRATION_URL` that would inherit
 `DATABASE_TLS_POLICY=off` must set `DATABASE_MIGRATION_TLS_POLICY=verify`.
+When migrations reuse the remote `DATABASE_URL`, correct the shared
+`DATABASE_TLS_POLICY` instead so runtime requests and migrations enforce the
+same safe policy.
 
 The v5 runtime work is intentionally incremental. The artifact commands prove
 isolated output shapes and trusted profile injection. `pnpm verify:node` also

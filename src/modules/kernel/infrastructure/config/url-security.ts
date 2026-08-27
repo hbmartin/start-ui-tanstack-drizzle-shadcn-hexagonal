@@ -105,8 +105,7 @@ export const assertDatabaseUrlTls = ({
   driver,
   env,
   policy,
-  policyOverrideName = 'database TLS policy',
-  policySourceName = 'database TLS policy',
+  policyOverrideName,
 }: {
   name: string;
   url: string;
@@ -114,7 +113,6 @@ export const assertDatabaseUrlTls = ({
   env?: RuntimeEnv;
   policy: DatabaseTlsPolicy;
   policyOverrideName?: string;
-  policySourceName?: string;
 }): void => {
   let parsed: URL;
   try {
@@ -143,16 +141,19 @@ export const assertDatabaseUrlTls = ({
     ),
   ];
   if (forbiddenParameters.length > 0) {
+    const tlsPolicyRemedy = policyOverrideName
+      ? `configure TLS with ${policyOverrideName}`
+      : 'configure TLS with the caller-provided policy';
     throw new ConfigurationError(
       `${name} must not configure endpoint or TLS parameters in the URL (${forbiddenParameters.join(
         ', '
-      )}); remove those parameters and configure the endpoint through the URL authority and TLS through the scoped database policy.`
+      )}); remove those parameters, keep the endpoint in the URL authority, and ${tlsPolicyRemedy}.`
     );
   }
 
   if (policy === 'off' && !isLocalhostUrl(url)) {
     throw new ConfigurationError(
-      `${name} must not use ${policySourceName}=off for a remote database.`
+      `${name} must not use TLS policy 'off' for a remote database; pass a 'verify' policy or use a loopback endpoint.`
     );
   }
 
@@ -161,8 +162,11 @@ export const assertDatabaseUrlTls = ({
     policy !== 'verify' &&
     isProdRuntimeEnvironment(env)
   ) {
+    const requiredPolicy = policyOverrideName
+      ? `${policyOverrideName}=verify`
+      : "TLS policy 'verify'";
     throw new ConfigurationError(
-      `${name} uses a Neon adapter that owns secure transport; production requires ${policyOverrideName}=verify.`
+      `${name} uses a Neon adapter that owns secure transport; production requires ${requiredPolicy}.`
     );
   }
 };

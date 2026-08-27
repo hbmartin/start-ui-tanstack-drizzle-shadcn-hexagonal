@@ -100,7 +100,6 @@ export function getDatabaseConfig(): DatabaseConfig {
     env,
     policy: tlsPolicy,
     policyOverrideName: 'DATABASE_TLS_POLICY',
-    policySourceName: 'DATABASE_TLS_POLICY',
   });
   cachedDatabaseConfig = {
     databaseUrl: env.DATABASE_URL,
@@ -154,14 +153,20 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
     ? 'DATABASE_MIGRATION_URL'
     : 'DATABASE_URL';
   const tlsPolicySourceName =
-    env.DATABASE_TLS_POLICY !== undefined &&
-    env.DATABASE_MIGRATION_TLS_POLICY === undefined
-      ? 'DATABASE_TLS_POLICY'
-      : 'DATABASE_MIGRATION_TLS_POLICY';
+    env.DATABASE_MIGRATION_TLS_POLICY !== undefined
+      ? 'DATABASE_MIGRATION_TLS_POLICY'
+      : env.DATABASE_TLS_POLICY !== undefined
+        ? 'DATABASE_TLS_POLICY'
+        : undefined;
+  const tlsPolicyOverrideName =
+    env.DATABASE_MIGRATION_TLS_POLICY !== undefined ||
+    databaseUrlName === 'DATABASE_MIGRATION_URL'
+      ? 'DATABASE_MIGRATION_TLS_POLICY'
+      : 'DATABASE_TLS_POLICY';
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy:
       env.DATABASE_MIGRATION_TLS_POLICY ?? env.DATABASE_TLS_POLICY,
-    policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+    policyOverrideName: tlsPolicyOverrideName,
     policySourceName: tlsPolicySourceName,
     urlName: databaseUrlName,
     url: databaseUrl,
@@ -172,8 +177,7 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
     driver,
     env,
     policy: tlsPolicy,
-    policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
-    policySourceName: tlsPolicySourceName,
+    policyOverrideName: tlsPolicyOverrideName,
   });
   assertMigrationUrlSupportsMigrations(databaseUrl, databaseUrlName);
 

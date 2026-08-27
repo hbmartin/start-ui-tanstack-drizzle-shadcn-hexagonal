@@ -102,7 +102,9 @@ describe('assertDatabaseUrlTls', () => {
         env: PROD,
         policy: 'verify',
       })
-    ).toThrow('remove those parameters');
+    ).toThrow(
+      'remove those parameters, keep the endpoint in the URL authority, and configure TLS with the caller-provided policy.'
+    );
   });
 
   it.each(['encrypt', 'verify'] as const)(
@@ -132,7 +134,7 @@ describe('assertDatabaseUrlTls', () => {
     ).toThrow(ConfigurationError);
   });
 
-  it('attributes off to its source and keeps the override scoped', () => {
+  it('uses a natural defensive message for a caller-provided off policy', () => {
     expect(() =>
       assertDatabaseUrlTls({
         name: 'DATABASE_MIGRATION_URL',
@@ -140,10 +142,10 @@ describe('assertDatabaseUrlTls', () => {
         driver: 'node-pg',
         env: PROD,
         policy: 'off',
-        policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
-        policySourceName: 'DATABASE_TLS_POLICY',
       })
-    ).toThrow('DATABASE_TLS_POLICY=off');
+    ).toThrow(
+      "DATABASE_MIGRATION_URL must not use TLS policy 'off' for a remote database; pass a 'verify' policy or use a loopback endpoint."
+    );
   });
 
   it('does not conflate URL-parameter removal with a policy override', () => {
@@ -155,9 +157,10 @@ describe('assertDatabaseUrlTls', () => {
         env: PROD,
         policy: 'verify',
         policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
-        policySourceName: 'DATABASE_TLS_POLICY',
       })
-    ).toThrow('remove those parameters');
+    ).toThrow(
+      'remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_MIGRATION_TLS_POLICY.'
+    );
   });
 
   describe('Neon owns its production transport', () => {
@@ -194,9 +197,10 @@ describe('assertDatabaseUrlTls', () => {
           env: PROD,
           policy: 'encrypt',
           policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
-          policySourceName: 'DATABASE_TLS_POLICY',
         })
-      ).toThrow('requires DATABASE_MIGRATION_TLS_POLICY=verify');
+      ).toThrow(
+        'DATABASE_MIGRATION_URL uses a Neon adapter that owns secure transport; production requires DATABASE_MIGRATION_TLS_POLICY=verify.'
+      );
     });
 
     it('uses a neutral policy name for a programmatic Neon policy', () => {
@@ -208,7 +212,9 @@ describe('assertDatabaseUrlTls', () => {
           env: PROD,
           policy: 'encrypt',
         })
-      ).toThrow('requires database TLS policy=verify');
+      ).toThrow(
+        "database client URL uses a Neon adapter that owns secure transport; production requires TLS policy 'verify'."
+      );
     });
   });
 
