@@ -81,8 +81,8 @@ describe('server config accessors', () => {
     });
   });
 
-  it('rejects a remote production database with TLS disabled', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
+  it('rejects a remote database with TLS disabled in every environment', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
     vi.stubEnv('DATABASE_TLS_POLICY', 'off');
     const { getDatabaseConfig } =

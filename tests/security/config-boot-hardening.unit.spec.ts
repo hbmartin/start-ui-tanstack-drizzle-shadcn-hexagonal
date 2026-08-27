@@ -43,7 +43,7 @@ describe('validateServerConfig fails closed on insecure production config', () =
     expect(() => validateServerConfig('node')).toThrow(ConfigurationError);
   });
 
-  it('throws ConfigurationError when remote production database TLS is disabled', async () => {
+  it('throws ConfigurationError when remote database TLS is disabled', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('AUTH_SECRET', makeStrongTestSecret('auth'));
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));

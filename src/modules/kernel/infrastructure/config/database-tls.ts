@@ -1,4 +1,3 @@
-import { isProdRuntimeEnvironment } from './env-schema';
 import { isLocalhostUrl } from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
@@ -6,36 +5,27 @@ export const DATABASE_TLS_POLICIES = ['off', 'encrypt', 'verify'] as const;
 
 export type DatabaseTlsPolicy = (typeof DATABASE_TLS_POLICIES)[number];
 
-type RuntimeEnv = Record<string, unknown>;
-
 /**
  * Resolve the application-owned database transport policy.
  *
- * Production defaults to certificate and hostname verification. Local and
- * test runtimes default to cleartext so PGlite and local PostgreSQL remain
- * usable. An explicit production `off` policy is accepted only for a
- * loopback endpoint; this supports local verification of production bundles
- * without permitting a remote cleartext deployment.
+ * Loopback endpoints default to cleartext so PGlite and local PostgreSQL
+ * remain usable. Every remote endpoint defaults to certificate and hostname
+ * verification, including CLI/tooling processes without NODE_ENV. `off` is
+ * loopback-only. `encrypt` is an explicit opt-down that encrypts transport but
+ * disables certificate and hostname verification.
  */
 export const resolveDatabaseTlsPolicy = ({
   configuredPolicy,
-  env,
   url,
 }: {
   configuredPolicy: DatabaseTlsPolicy | undefined;
-  env?: RuntimeEnv;
   url: string;
 }): DatabaseTlsPolicy => {
-  const policy =
-    configuredPolicy ?? (isProdRuntimeEnvironment(env) ? 'verify' : 'off');
+  const policy = configuredPolicy ?? (isLocalhostUrl(url) ? 'off' : 'verify');
 
-  if (
-    policy === 'off' &&
-    isProdRuntimeEnvironment(env) &&
-    !isLocalhostUrl(url)
-  ) {
+  if (policy === 'off' && !isLocalhostUrl(url)) {
     throw new ConfigurationError(
-      'DATABASE_TLS_POLICY=off is allowed in production only for a loopback database endpoint.'
+      'DATABASE_TLS_POLICY=off is allowed only for a loopback database endpoint.'
     );
   }
 

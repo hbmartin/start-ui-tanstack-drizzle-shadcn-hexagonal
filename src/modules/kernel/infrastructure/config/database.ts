@@ -60,7 +60,6 @@ export function getDatabaseConfig(): DatabaseConfig {
   const env = parseEnv(databaseEnvSchema);
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy: env.DATABASE_TLS_POLICY,
-    env,
     url: env.DATABASE_URL,
   });
   assertDatabaseUrlTls({
@@ -104,7 +103,6 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy:
       env.DATABASE_MIGRATION_TLS_POLICY ?? env.DATABASE_TLS_POLICY,
-    env,
     url: databaseUrl,
   });
   assertDatabaseUrlTls({

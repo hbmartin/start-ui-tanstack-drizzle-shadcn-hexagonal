@@ -163,7 +163,7 @@ describe('assertDatabaseUrlTls', () => {
     }
   });
 
-  it('allows only explicit loopback off in production and local off elsewhere', () => {
+  it('allows off only for loopback endpoints in every environment', () => {
     expect(() =>
       assertDatabaseUrlTls({
         name: 'DATABASE_URL',
@@ -181,7 +181,7 @@ describe('assertDatabaseUrlTls', () => {
         env: DEV,
         policy: 'off',
       })
-    ).not.toThrow();
+    ).toThrow(ConfigurationError);
   });
 
   it('rejects non-PostgreSQL URL schemes in every environment', () => {

@@ -146,13 +146,9 @@ export const assertDatabaseUrlTls = ({
     );
   }
 
-  if (
-    policy === 'off' &&
-    isProdRuntimeEnvironment(env) &&
-    !isLocalhostUrl(url)
-  ) {
+  if (policy === 'off' && !isLocalhostUrl(url)) {
     throw new ConfigurationError(
-      `${name} must not use DATABASE_TLS_POLICY=off for a remote production database.`
+      `${name} must not use DATABASE_TLS_POLICY=off for a remote database.`
     );
   }
 

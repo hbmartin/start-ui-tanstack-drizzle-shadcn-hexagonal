@@ -84,6 +84,8 @@ until the distributed authentication limiter is configured.
 >
 > Setup a PostgreSQL database (locally or online) and replace the **DATABASE_URL** environment variable. Then you can run `pnpm db:push` to update your database schema and then run `pnpm db:seed` to seed your database.
 
+Database transport is controlled by `DATABASE_TLS_POLICY`, not URL parameters. Loopback URLs default to `off`; every remote URL defaults to `verify`, including migration and Drizzle CLI processes. `encrypt` is an explicit opt-down that encrypts traffic without verifying the certificate or hostname. For private certificate authorities, extend the Node trust store (for example with `NODE_EXTRA_CA_CERTS`) instead of adding `sslmode` or certificate parameters to the database URL.
+
 ## Run
 
 ```bash
