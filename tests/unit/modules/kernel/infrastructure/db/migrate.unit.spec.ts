@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
     query: vi.fn(),
   },
   neonClientConfig: undefined as string | undefined,
-  nodePgClientConfig: undefined as { connectionString: string } | undefined,
+  nodePgClientConfig: undefined as
+    | { connectionString: string; ssl: boolean | object }
+    | undefined,
   drizzleNeonWebsocket: vi.fn(),
   drizzleNodePg: vi.fn(),
   migrateNeonWebsocket: vi.fn(),
@@ -24,7 +26,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('pg', () => ({
   Client: class {
-    constructor(config: { connectionString: string }) {
+    constructor(config: { connectionString: string; ssl: boolean | object }) {
       mocks.nodePgClientConfig = config;
       return mocks.migrationClient;
     }
@@ -150,6 +152,7 @@ describe('migrateDatabase', () => {
 describe('createMigrationDbClient', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.nodePgClientConfig = undefined;
     mocks.migrationClient.connect.mockResolvedValue(undefined);
     mocks.migrationClient.end.mockResolvedValue(undefined);
     mocks.drizzleNodePg.mockImplementation((client) => ({ $client: client }));
@@ -166,9 +169,13 @@ describe('createMigrationDbClient', () => {
     const db = await createMigrationDbClient({
       databaseUrl,
       driver: 'node-pg',
+      tlsPolicy: 'verify',
     });
 
-    expect(mocks.nodePgClientConfig).toEqual({ connectionString: databaseUrl });
+    expect(mocks.nodePgClientConfig).toEqual({
+      connectionString: databaseUrl,
+      ssl: true,
+    });
     expect(mocks.drizzleNodePg).toHaveBeenCalledWith(mocks.migrationClient, {
       schema: expect.any(Object),
       casing: 'camelCase',
@@ -185,6 +192,7 @@ describe('createMigrationDbClient', () => {
     const db = await createMigrationDbClient({
       databaseUrl,
       driver: 'neon-websocket',
+      tlsPolicy: 'verify',
     });
 
     expect(mocks.neonClientConfig).toBe(databaseUrl);
@@ -197,5 +205,34 @@ describe('createMigrationDbClient', () => {
     });
     expect(mocks.migrationClient.connect).toHaveBeenCalledOnce();
     expect(db.$migrationDriver).toBe('neon-websocket');
+  });
+
+  it('rejects migration URL overrides before constructing a client', async () => {
+    const databaseUrl = `${makeTestDatabaseUrl()}?sslmode=disable`;
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl,
+        driver: 'node-pg',
+        tlsPolicy: 'verify',
+      })
+    ).rejects.toThrow(ConfigurationError);
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+  });
+
+  it('rejects malformed migration URLs before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: 'app',
+        driver: 'node-pg',
+        tlsPolicy: 'verify',
+      })
+    ).rejects.toThrow(ConfigurationError);
+    expect(mocks.nodePgClientConfig).toBeUndefined();
   });
 });

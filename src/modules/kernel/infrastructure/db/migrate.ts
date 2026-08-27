@@ -15,8 +15,10 @@ import {
   type MigrationDatabaseConfig,
   type MigrationDatabaseDriver,
 } from '@/modules/kernel/infrastructure/config/database';
+import { assertDatabaseUrlTls } from '@/modules/kernel/infrastructure/config/url-security';
 
 import * as schema from './schema';
+import { nodePostgresSslForPolicy } from './node-postgres-tls';
 
 const migrationConfig = {
   migrationsFolder: 'drizzle/migrations',
@@ -58,8 +60,14 @@ function withMigrationMetadata<TDb extends object>(
   }) as unknown as MigrationDatabase;
 }
 
-function createNodePgMigrationDb(url: string): MigrationDatabase {
-  const client = new PgClient({ connectionString: url });
+function createNodePgMigrationDb(
+  url: string,
+  tlsPolicy: MigrationDatabaseConfig['tlsPolicy']
+): MigrationDatabase {
+  const client = new PgClient({
+    connectionString: url,
+    ssl: nodePostgresSslForPolicy(tlsPolicy),
+  });
   const db = drizzleNodePg(client, { schema, casing: 'camelCase' });
 
   return withMigrationMetadata(db, {
@@ -90,9 +98,15 @@ function createNeonWebsocketMigrationDb(url: string): MigrationDatabase {
 export async function createMigrationDbClient(
   config: MigrationDatabaseConfig = getMigrationDatabaseConfig()
 ): Promise<MigrationDatabase> {
+  assertDatabaseUrlTls({
+    driver: config.driver,
+    name: 'migration database client URL',
+    policy: config.tlsPolicy,
+    url: config.databaseUrl,
+  });
   const db =
     config.driver === 'node-pg'
-      ? createNodePgMigrationDb(config.databaseUrl)
+      ? createNodePgMigrationDb(config.databaseUrl, config.tlsPolicy)
       : createNeonWebsocketMigrationDb(config.databaseUrl);
 
   try {

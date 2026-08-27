@@ -47,6 +47,7 @@ describe('server config accessors', () => {
     expect(getDatabaseConfig()).toBe(first);
     expect(getDatabaseConfig().databaseUrl).toBe(firstDatabaseUrl);
     expect(getDatabaseConfig().driver).toBe('node-pg');
+    expect(getDatabaseConfig().tlsPolicy).toBe('off');
   });
 
   it('parses explicit database driver config', async () => {
@@ -60,7 +61,37 @@ describe('server config accessors', () => {
     expect(getDatabaseConfig()).toEqual({
       databaseUrl,
       driver: 'neon-http',
+      tlsPolicy: 'off',
     });
+  });
+
+  it('parses an explicit encryption-only database policy', async () => {
+    const databaseUrl = makeTestDatabaseUrl({ host: 'db.example.com' });
+
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', databaseUrl);
+    vi.stubEnv('DATABASE_TLS_POLICY', 'encrypt');
+    const { getDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(getDatabaseConfig()).toEqual({
+      databaseUrl,
+      driver: 'node-pg',
+      tlsPolicy: 'encrypt',
+    });
+  });
+
+  it('rejects a remote production database with TLS disabled', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    const { getDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
+
+    expect(() => getDatabaseConfig()).toThrow(ConfigurationError);
+    expect(() => getDatabaseConfig()).toThrow('loopback');
   });
 
   it('defaults migration config to node-pg for node-pg runtime drivers', async () => {
@@ -74,6 +105,7 @@ describe('server config accessors', () => {
     expect(getMigrationDatabaseConfig()).toEqual({
       databaseUrl,
       driver: 'node-pg',
+      tlsPolicy: 'off',
     });
   });
 
@@ -90,6 +122,7 @@ describe('server config accessors', () => {
       expect(getMigrationDatabaseConfig()).toEqual({
         databaseUrl,
         driver: 'neon-websocket',
+        tlsPolicy: 'off',
       });
     }
   );
@@ -112,6 +145,23 @@ describe('server config accessors', () => {
     expect(getMigrationDatabaseConfig()).toEqual({
       databaseUrl: migrationDatabaseUrl,
       driver: 'node-pg',
+      tlsPolicy: 'off',
+    });
+  });
+
+  it('allows migrations to use a stricter TLS policy than runtime queries', async () => {
+    const databaseUrl = makeTestDatabaseUrl();
+
+    vi.stubEnv('DATABASE_URL', databaseUrl);
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'verify');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(getMigrationDatabaseConfig()).toEqual({
+      databaseUrl,
+      driver: 'node-pg',
+      tlsPolicy: 'verify',
     });
   });
 
@@ -772,19 +822,16 @@ describe('server config accessors', () => {
     expect(() => getEmailConfig()).toThrow('RESEND_WEBHOOK_SECRET');
   });
 
-  it('rejects cleartext production node-pg database URLs', async () => {
+  it('defaults production node-pg database transport to verification', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
     const { getDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
-    const { ConfigurationError } =
-      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(() => getDatabaseConfig()).toThrow(ConfigurationError);
-    expect(() => getDatabaseConfig()).toThrow('DATABASE_URL');
+    expect(getDatabaseConfig().tlsPolicy).toBe('verify');
   });
 
-  it('accepts production node-pg database URLs with a secure sslmode', async () => {
+  it('rejects URL TLS parameters even when they request verification', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const databaseUrl = makeTestDatabaseUrl({
       host: 'db.example.com',
@@ -793,21 +840,28 @@ describe('server config accessors', () => {
     vi.stubEnv('DATABASE_URL', databaseUrl);
     const { getDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(getDatabaseConfig().databaseUrl).toBe(databaseUrl);
+    expect(() => getDatabaseConfig()).toThrow(ConfigurationError);
+    expect(() => getDatabaseConfig()).toThrow('DATABASE_TLS_POLICY');
   });
 
-  it('accepts cleartext production database URLs that target localhost', async () => {
+  it('allows an explicit loopback-only off policy for production verification', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const databaseUrl = makeTestDatabaseUrl();
     vi.stubEnv('DATABASE_URL', databaseUrl);
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
     const { getDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
 
-    expect(getDatabaseConfig().databaseUrl).toBe(databaseUrl);
+    expect(getDatabaseConfig()).toMatchObject({
+      databaseUrl,
+      tlsPolicy: 'off',
+    });
   });
 
-  it('exempts Neon drivers from the production database TLS requirement', async () => {
+  it('requires the adapter-owned verify policy for Neon in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const databaseUrl = makeTestDatabaseUrl({ host: 'db.example.com' });
     vi.stubEnv('DATABASE_URL', databaseUrl);
@@ -815,15 +869,21 @@ describe('server config accessors', () => {
     const { getDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
 
-    expect(getDatabaseConfig().databaseUrl).toBe(databaseUrl);
+    expect(getDatabaseConfig()).toMatchObject({
+      databaseUrl,
+      tlsPolicy: 'verify',
+    });
   });
 
-  it('rejects cleartext production migration database URLs', async () => {
+  it('rejects URL-owned TLS parameters for production migration URLs', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
     vi.stubEnv(
       'DATABASE_MIGRATION_URL',
-      makeTestDatabaseUrl({ host: 'db.example.com' })
+      makeTestDatabaseUrl({
+        host: 'db.example.com',
+        searchParams: { sslmode: 'verify-full' },
+      })
     );
     const { getMigrationDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');

@@ -28,6 +28,7 @@ describe('database client', () => {
   afterEach(async () => {
     await Promise.all(clients.map((client) => client.$close()));
     clients.length = 0;
+    vi.unstubAllEnvs();
   });
 
   it('defaults explicit URLs to the node-pg driver', () => {
@@ -36,6 +37,60 @@ describe('database client', () => {
 
     expect(db.$driver).toBe('node-pg');
     expect(db.$transactionCapable).toBe(true);
+  });
+
+  it('passes the explicit verification policy to node-postgres', () => {
+    const db = createDbClient({
+      tlsPolicy: 'verify',
+      url: databaseUrl,
+    });
+    clients.push(db);
+
+    const pool = (
+      db as unknown as {
+        $client: { options: { ssl: boolean | object } };
+      }
+    ).$client;
+    expect(pool.options.ssl).toBe(true);
+  });
+
+  it('defaults explicit production URLs to verification', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const db = createDbClient({
+      url: 'postgresql://user@db.example.com:5432/app',
+    });
+    clients.push(db);
+
+    const pool = (
+      db as unknown as {
+        $client: { options: { ssl: boolean | object } };
+      }
+    ).$client;
+    expect(pool.options.ssl).toBe(true);
+  });
+
+  it('rejects connection-string overrides before node-postgres parses them', () => {
+    expect(() =>
+      createDbClient({
+        tlsPolicy: 'verify',
+        url: `${databaseUrl}?host=attacker.example.com&sslmode=disable`,
+      })
+    ).toThrow(ConfigurationError);
+  });
+
+  it('rejects malformed explicit URLs before node-postgres applies ambient defaults', () => {
+    expect(() => createDbClient({ url: 'app' })).toThrow(ConfigurationError);
+  });
+
+  it('revalidates driver overrides against the resolved env policy', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', 'postgresql://user@db.example.com:5432/app');
+    vi.stubEnv('DATABASE_DRIVER', 'node-pg');
+    vi.stubEnv('DATABASE_TLS_POLICY', 'encrypt');
+
+    expect(() => createDbClient({ driver: 'neon-http' })).toThrow(
+      ConfigurationError
+    );
   });
 
   it('can create a Neon HTTP client without transaction capability', () => {

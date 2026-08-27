@@ -7,6 +7,8 @@ import {
   isLikelyTransactionPooledDatabaseUrl,
 } from '@/modules/kernel/infrastructure/config/database';
 
+import { nodePostgresSslForPolicy } from './node-postgres-tls';
+
 export interface PostgresAdvisoryLockLease {
   release: () => Promise<void>;
   onLost?: (handler: (error: unknown) => void) => () => void;
@@ -15,7 +17,10 @@ export interface PostgresAdvisoryLockLease {
 const LOCK_SESSION_IDLE_TIMEOUT = '30s';
 const LOCK_SESSION_HEARTBEAT_INTERVAL_MS = 10_000;
 
-function assertAdvisoryLockSupported(): { url: string } {
+function assertAdvisoryLockSupported(): {
+  tlsPolicy: ReturnType<typeof getDatabaseConfig>['tlsPolicy'];
+  url: string;
+} {
   const config = getDatabaseConfig();
   if (config.driver === 'neon-http') {
     throw new ConfigurationError(
@@ -29,7 +34,7 @@ function assertAdvisoryLockSupported(): { url: string } {
     );
   }
 
-  return { url: config.databaseUrl };
+  return { tlsPolicy: config.tlsPolicy, url: config.databaseUrl };
 }
 
 async function closeLockSession(params: {
@@ -128,8 +133,12 @@ export async function tryAcquirePostgresAdvisoryLock(params: {
   namespace: string;
   key: string;
 }): Promise<PostgresAdvisoryLockLease | undefined> {
-  const { url } = assertAdvisoryLockSupported();
-  const pool = new Pool({ connectionString: url, max: 1 });
+  const { tlsPolicy, url } = assertAdvisoryLockSupported();
+  const pool = new Pool({
+    connectionString: url,
+    max: 1,
+    ssl: nodePostgresSslForPolicy(tlsPolicy),
+  });
   let sessionClosed = false;
   let client: PoolClient | undefined;
 

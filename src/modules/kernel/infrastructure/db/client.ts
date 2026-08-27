@@ -10,9 +10,15 @@ import {
   type DatabaseDriver,
   getDatabaseConfig,
 } from '@/modules/kernel/infrastructure/config/database';
+import {
+  resolveDatabaseTlsPolicy,
+  type DatabaseTlsPolicy,
+} from '@/modules/kernel/infrastructure/config/database-tls';
 import { isDevRuntimeEnvironment } from '@/modules/kernel/infrastructure/config/env-schema';
+import { assertDatabaseUrlTls } from '@/modules/kernel/infrastructure/config/url-security';
 
 import * as schema from './schema';
+import { nodePostgresSslForPolicy } from './node-postgres-tls';
 import {
   type Database,
   type DbLike,
@@ -59,6 +65,7 @@ function createNeonWebsocketDb(url: string): Database {
 
 export function createDbClient(options?: {
   driver?: DatabaseDriver;
+  tlsPolicy?: DatabaseTlsPolicy;
   url?: string;
 }): Database {
   const config = options?.url === undefined ? getDatabaseConfig() : undefined;
@@ -70,6 +77,18 @@ export function createDbClient(options?: {
       'DATABASE_URL is required to create a database client.'
     );
   }
+
+  const tlsPolicy = resolveDatabaseTlsPolicy({
+    configuredPolicy: options?.tlsPolicy ?? config?.tlsPolicy,
+    url,
+  });
+
+  assertDatabaseUrlTls({
+    driver,
+    name: 'database client URL',
+    policy: tlsPolicy,
+    url,
+  });
 
   if (driver === 'neon-http') {
     const database = drizzleNeonHttp(url, { schema, casing: 'camelCase' });
@@ -106,6 +125,7 @@ export function createDbClient(options?: {
 
   const pool = new Pool({
     connectionString: url,
+    ssl: nodePostgresSslForPolicy(tlsPolicy),
   });
   const database = drizzleNodePg(pool, { schema, casing: 'camelCase' });
 
