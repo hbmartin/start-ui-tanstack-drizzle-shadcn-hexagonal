@@ -7,7 +7,7 @@ import type { HyperdriveBinding } from '@/modules/kernel/backend';
 import type { CloudflareAnalyticsEngine } from './telemetry-adapter';
 
 type CloudflareEnvironment = CloudflareSentryEnvironment & {
-  START_UI_DATABASE?: HyperdriveBinding;
+  START_UI_DATABASE: HyperdriveBinding;
   START_UI_TELEMETRY_METRICS?: CloudflareAnalyticsEngine;
 };
 
@@ -89,18 +89,18 @@ const entry = {
 
     const handleApplication = () =>
       application.fetch(request, { context: undefined as never });
-    const handle = () =>
-      fetchCloudflareApplication({
-        context,
+    const handleDatabase = () =>
+      runWithCloudflareDatabase({
+        binding: environment.START_UI_DATABASE,
         handle: handleApplication,
         request,
-        sentryOptions,
       });
     try {
-      return await runWithCloudflareDatabase({
-        binding: environment.START_UI_DATABASE,
-        handle,
+      return await fetchCloudflareApplication({
+        context,
+        handle: handleDatabase,
         request,
+        sentryOptions,
       });
     } finally {
       scheduleCloudflareRequestFlush(request, (completion) =>

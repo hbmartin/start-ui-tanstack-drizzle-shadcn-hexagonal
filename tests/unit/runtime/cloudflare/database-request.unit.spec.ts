@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Database } from '@/modules/kernel/infrastructure/db/types';
 
@@ -25,6 +25,7 @@ import {
   bindCloudflareDatabaseToResponse,
   runWithCloudflareDatabase,
 } from '@/runtime/cloudflare/database-request';
+import { telemetryProxy } from '@/platform/telemetry';
 import { takeRequestCompletions } from '@/runtime/request-completion';
 
 const createDatabase = (adapter = 'hyperdrive') =>
@@ -33,12 +34,16 @@ const createDatabase = (adapter = 'hyperdrive') =>
     $close: vi.fn(async () => undefined),
   }) as unknown as Database;
 
-const settleRequest = (request: Request) =>
-  Promise.allSettled(takeRequestCompletions(request));
+const expectDatabaseClosed = (database: Database) =>
+  vi.waitFor(() => expect(database.$close).toHaveBeenCalledOnce());
 
 describe('Cloudflare request database ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('validates the created adapter and scopes the whole handler', async () => {
@@ -64,8 +69,7 @@ describe('Cloudflare request database ownership', () => {
     expect(mocks.validateServerConfig).toHaveBeenCalledWith('cloudflare', {
       databaseAdapter: 'hyperdrive',
     });
-    await settleRequest(request);
-    expect(database.$close).toHaveBeenCalledOnce();
+    await expectDatabaseClosed(database);
   });
 
   it('keeps concurrent request adapters isolated across awaits', async () => {
@@ -108,9 +112,10 @@ describe('Cloudflare request database ownership', () => {
     releaseFirst();
 
     await Promise.all([first, second]);
-    await Promise.all([settleRequest(requestA), settleRequest(requestB)]);
-    expect(databaseA.$close).toHaveBeenCalledOnce();
-    expect(databaseB.$close).toHaveBeenCalledOnce();
+    await Promise.all([
+      expectDatabaseClosed(databaseA),
+      expectDatabaseClosed(databaseB),
+    ]);
   });
 
   it('preserves response semantics and closes only after stream EOF', async () => {
@@ -145,8 +150,7 @@ describe('Cloudflare request database ownership', () => {
     source.enqueue(new TextEncoder().encode('streamed'));
     source.close();
     await expect(returned.text()).resolves.toBe('streamed');
-    await settleRequest(request);
-    expect(database.$close).toHaveBeenCalledOnce();
+    await expectDatabaseClosed(database);
   });
 
   it('closes after consumer cancellation without draining the source', async () => {
@@ -174,11 +178,38 @@ describe('Cloudflare request database ownership', () => {
     const reader = response.body?.getReader();
     await reader?.read();
     await reader?.cancel();
-    await settleRequest(request);
+    await expectDatabaseClosed(database);
 
     expect(sourceCancelled).toBe(true);
-    expect(database.$close).toHaveBeenCalledOnce();
     expect(report).not.toHaveBeenCalled();
+  });
+
+  it('propagates request aborts through the response pump and closes once', async () => {
+    const database = createDatabase();
+    const abort = new AbortController();
+    const abortFailure = new Error('request aborted');
+    let sourceCancellation: unknown;
+    const request = new Request('https://app.example.test/abort', {
+      signal: abort.signal,
+    });
+    const response = bindCloudflareDatabaseToResponse({
+      database,
+      request,
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          cancel(reason) {
+            sourceCancellation = reason;
+          },
+        })
+      ),
+    });
+
+    const body = response.text();
+    abort.abort(abortFailure);
+
+    await expect(body).rejects.toBe(abortFailure);
+    await expectDatabaseClosed(database);
+    expect(sourceCancellation).toBe(abortFailure);
   });
 
   it('closes after a producer error while preserving the stream failure', async () => {
@@ -198,8 +229,29 @@ describe('Cloudflare request database ownership', () => {
     });
 
     await expect(response.text()).rejects.toBe(streamFailure);
-    await settleRequest(request);
-    expect(database.$close).toHaveBeenCalledOnce();
+    await expectDatabaseClosed(database);
+  });
+
+  it('does not make a slow response body block the telemetry pre-flush set', async () => {
+    const database = createDatabase();
+    const request = new Request('https://app.example.test/slow');
+    const response = bindCloudflareDatabaseToResponse({
+      database,
+      request,
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new Uint8Array([1]));
+          },
+        })
+      ),
+    });
+
+    expect(takeRequestCompletions(request)).toEqual([]);
+    const reader = response.body?.getReader();
+    await reader?.read();
+    await reader?.cancel();
+    await expectDatabaseClosed(database);
   });
 
   it('preserves the application failure when cleanup also fails', async () => {
@@ -276,6 +328,12 @@ describe('Cloudflare request database ownership', () => {
   it('does not run validation or the handler when binding creation fails', async () => {
     const connectionFailure = new Error('binding unavailable');
     const handle = vi.fn();
+    const emitLog = vi
+      .spyOn(telemetryProxy, 'emitLog')
+      .mockImplementation(() => undefined);
+    const captureException = vi
+      .spyOn(telemetryProxy, 'captureException')
+      .mockImplementation(() => undefined);
     mocks.createDatabase.mockRejectedValue(connectionFailure);
 
     await expect(
@@ -288,5 +346,17 @@ describe('Cloudflare request database ownership', () => {
 
     expect(mocks.validateServerConfig).not.toHaveBeenCalled();
     expect(handle).not.toHaveBeenCalled();
+    expect(emitLog).toHaveBeenCalledOnce();
+    expect(emitLog).toHaveBeenCalledWith({
+      direction: 'internal',
+      event: 'database.cloudflare.connect_failed',
+      exception: connectionFailure,
+      level: 'error',
+    });
+    expect(captureException).toHaveBeenCalledOnce();
+    expect(captureException).toHaveBeenCalledWith(connectionFailure, {
+      level: 'error',
+      tags: { event: 'database.cloudflare.connect_failed' },
+    });
   });
 });

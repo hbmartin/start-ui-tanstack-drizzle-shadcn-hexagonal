@@ -188,60 +188,459 @@ const directReturnStatements = (functionNode) => {
 
 const nodeRangeSignature = ({ start, end } = {}) => `${start}:${end}`;
 
+const directVariableInitializer = (functionNode, localName) => {
+  const declarations = functionNode.body.body.flatMap((statement) =>
+    statement.type === 'VariableDeclaration' ? statement.declarations : []
+  );
+  return declarations.find(
+    (declarator) => identifierName(declarator.id) === localName
+  )?.init;
+};
+
+const topLevelVariableInitializer = (program, localName) =>
+  program.body
+    .flatMap((statement) =>
+      statement.type === 'VariableDeclaration' ? statement.declarations : []
+    )
+    .find((declarator) => identifierName(declarator.id) === localName)?.init;
+
+const noBindingNames = () => [];
+const propertyBindingNames = (property) =>
+  bindingNames(property.value ?? property.argument);
+const bindingNameReaders = {
+  ArrayPattern: (pattern) => pattern.elements.flatMap(bindingNames),
+  AssignmentPattern: (pattern) => bindingNames(pattern.left),
+  Identifier: (pattern) => [pattern.name],
+  ObjectPattern: (pattern) => pattern.properties.flatMap(propertyBindingNames),
+  RestElement: (pattern) => bindingNames(pattern.argument),
+};
+const bindingNames = (pattern) =>
+  (bindingNameReaders[pattern?.type] ?? noBindingNames)(pattern);
+
+const isInsideContainingFunction = (node, ranges) =>
+  ranges.some(
+    ([start, end]) =>
+      start <= node.start &&
+      node.end <= end &&
+      (start !== node.start || end !== node.end)
+  );
+
+const directDeclaredNames = (functionNode) => {
+  const names = new Set();
+  const nestedRanges = nestedFunctionRanges(functionNode);
+  new Visitor({
+    ClassDeclaration(node) {
+      if (isInsideContainingFunction(node, nestedRanges)) return;
+      if (node.id) names.add(node.id.name);
+    },
+    FunctionDeclaration(node) {
+      if (isInsideContainingFunction(node, nestedRanges)) return;
+      if (node.id) names.add(node.id.name);
+    },
+    VariableDeclarator(node) {
+      if (isInsideNestedFunction(node, nestedRanges)) return;
+      for (const name of bindingNames(node.id)) names.add(name);
+    },
+  }).visit(functionNode);
+  return names;
+};
+
+const noMutationRoot = () => undefined;
+const mutationRootReaders = {
+  Identifier: (node) => node.name,
+  MemberExpression: (node) => mutationRootName(node.object),
+};
+const mutationRootName = (node) =>
+  (mutationRootReaders[node?.type] ?? noMutationRoot)(node);
+
+const mutationTargetNames = (node) => {
+  const root = mutationRootName(node);
+  return root ? [root] : bindingNames(node);
+};
+
+const addMutationTargetNames = (names, target) => {
+  for (const name of mutationTargetNames(target)) names.add(name);
+};
+
+const mutatedNames = (functionNode) => {
+  const names = new Set();
+  new Visitor({
+    AssignmentExpression(node) {
+      addMutationTargetNames(names, node.left);
+    },
+    ForInStatement(node) {
+      addMutationTargetNames(names, node.left);
+    },
+    ForOfStatement(node) {
+      addMutationTargetNames(names, node.left);
+    },
+    UpdateExpression(node) {
+      addMutationTargetNames(names, node.argument);
+    },
+  }).visit(functionNode);
+  return names;
+};
+
+const assertNoCloudflareOwnerOverrides = (fetchFunction, filePath) => {
+  const declared = directDeclaredNames(fetchFunction);
+  const mutated = mutatedNames(fetchFunction);
+  const trustedOwners = [
+    'application',
+    'fetchCloudflareApplication',
+    'runWithCloudflareDatabase',
+  ];
+  for (const owner of trustedOwners) {
+    assert(
+      !declared.has(owner) && !mutated.has(owner),
+      `${filePath} Worker fetch must not override trusted owner ${owner}`
+    );
+  }
+  const activeBindings = [
+    'context',
+    'environment',
+    'handleApplication',
+    'handleDatabase',
+    'request',
+    'sentryOptions',
+  ];
+  for (const binding of activeBindings) {
+    assert(
+      !mutated.has(binding),
+      `${filePath} Worker fetch must not mutate active binding ${binding}`
+    );
+  }
+};
+
+const identifierOccurrenceCount = (functionNode, localName) => {
+  let count = 0;
+  new Visitor({
+    Identifier(node) {
+      if (node.name === localName) count += 1;
+    },
+  }).visit(functionNode);
+  return count;
+};
+
+const assertExactCloudflareOwnerUsage = (fetchFunction, filePath) => {
+  const exactUsages = [
+    ['application', 1],
+    ['fetchCloudflareApplication', 1],
+    ['runWithCloudflareDatabase', 1],
+  ];
+  for (const [owner, expectedCount] of exactUsages) {
+    assert(
+      identifierOccurrenceCount(fetchFunction, owner) === expectedCount,
+      `${filePath} Worker fetch must use trusted owner ${owner} exactly once`
+    );
+  }
+};
+
+const topLevelBindingDeclarators = (program, localName) =>
+  program.body
+    .flatMap((statement) =>
+      statement.type === 'VariableDeclaration' ? statement.declarations : []
+    )
+    .filter((declarator) => bindingNames(declarator.id).includes(localName));
+
+const trustedOwnerBindingValidators = {
+  application: (declarator) => {
+    const initializer = unwrapAwaitExpression(declarator.init);
+    return (
+      initializer?.type === 'CallExpression' &&
+      identifierName(initializer.callee) ===
+        'initializeCloudflareSentryApplication'
+    );
+  },
+  fetchCloudflareApplication: (declarator) =>
+    declarator.init?.type === 'ArrowFunctionExpression',
+  runWithCloudflareDatabase: (declarator) =>
+    Boolean(dynamicImportSource(declarator)),
+};
+
+const hasIdentifierOutsideRanges = (program, localName, allowedRanges) => {
+  let unexpected = false;
+  new Visitor({
+    Identifier(node) {
+      if (node.name !== localName) return;
+      if (!isInsideNestedFunction(node, allowedRanges)) unexpected = true;
+    },
+  }).visit(program);
+  return unexpected;
+};
+
+const assertNoProgramCloudflareOwnerAliases = (
+  program,
+  fetchFunction,
+  filePath
+) => {
+  const trustedOwners = Object.keys(trustedOwnerBindingValidators);
+  for (const owner of trustedOwners) {
+    const declarators = topLevelBindingDeclarators(program, owner);
+    assert(
+      declarators.length <= 1,
+      `${filePath} must declare trusted owner ${owner} at most once`
+    );
+    const allowedRanges = [[fetchFunction.start, fetchFunction.end]];
+    const [declarator] = declarators;
+    if (declarator) {
+      assert(
+        trustedOwnerBindingValidators[owner](declarator),
+        `${filePath} must initialize trusted owner ${owner} from its runtime owner`
+      );
+      allowedRanges.push([declarator.id.start, declarator.id.end]);
+    }
+    assert(
+      !hasIdentifierOutsideRanges(program, owner, allowedRanges),
+      `${filePath} must not alias trusted owner ${owner}`
+    );
+  }
+};
+
+const ownerProperties = (node, filePath, label) => {
+  assert(
+    node?.type === 'ObjectExpression',
+    `${filePath} must configure ${label}`
+  );
+  assert(
+    node.properties.every((property) => property.type === 'Property'),
+    `${filePath} ${label} must not contain spread properties`
+  );
+  const entries = node.properties.map((property) => [
+    propertyKeyName(property),
+    property.value,
+  ]);
+  const names = entries.map(([name]) => name);
+  assert(
+    names.every((name) => typeof name === 'string'),
+    `${filePath} ${label} must use static property names`
+  );
+  assert(
+    new Set(names).size === names.length,
+    `${filePath} ${label} must not contain duplicate properties`
+  );
+  return new Map(entries);
+};
+
+const assertCloudflareSentryCallOptions = (options, filePath) => {
+  const properties = ownerProperties(
+    options,
+    filePath,
+    'the Cloudflare Sentry request owner'
+  );
+  assert(
+    identifierName(properties.get('api')) === 'Sentry',
+    `${filePath} Cloudflare Sentry owner must use the initialized Sentry API`
+  );
+  assert(
+    identifierName(properties.get('handle')) === 'handle',
+    `${filePath} Cloudflare Sentry owner must invoke its active handler`
+  );
+  assert(
+    identifierName(properties.get('request')) === 'request',
+    `${filePath} Cloudflare Sentry owner must receive the active request`
+  );
+  const requestOptions = ownerProperties(
+    properties.get('requestOptions'),
+    filePath,
+    'the Cloudflare Sentry request context'
+  );
+  assert(
+    requestOptions.get('captureErrors')?.value === false,
+    `${filePath} Cloudflare Sentry owner must leave error capture to the application boundary`
+  );
+  assert(
+    identifierName(requestOptions.get('context')) === 'context',
+    `${filePath} Cloudflare Sentry owner must preserve the execution context`
+  );
+  assert(
+    identifierName(requestOptions.get('options')) === 'sentryOptions',
+    `${filePath} Cloudflare Sentry owner must preserve validated Sentry options`
+  );
+  assert(
+    identifierName(requestOptions.get('request')) === 'request',
+    `${filePath} Cloudflare Sentry owner must preserve the active request context`
+  );
+};
+
+const assertCloudflareSentryOwner = (program, filePath) => {
+  const owner = topLevelVariableInitializer(
+    program,
+    'fetchCloudflareApplication'
+  );
+  assert(
+    owner?.type === 'ArrowFunctionExpression',
+    `${filePath} must define its active Cloudflare Sentry request owner`
+  );
+  const [parameters = {}] = owner.params;
+  assert(
+    parameters.type === 'ObjectPattern',
+    `${filePath} Cloudflare Sentry owner must destructure its request inputs`
+  );
+  assert(
+    parameters.properties
+      .map(
+        (property) =>
+          `${propertyKeyName(property)}:${identifierName(property.value)}:${property.shorthand}`
+      )
+      .join('|') ===
+      'context:context:true|handle:handle:true|request:request:true|sentryOptions:sentryOptions:true',
+    `${filePath} Cloudflare Sentry owner must accept the active request inputs`
+  );
+  const choice = owner.body;
+  assert(
+    choice.type === 'ConditionalExpression',
+    `${filePath} Cloudflare Sentry owner must select its request handler`
+  );
+  assert(
+    identifierName(choice.test) === 'sentryOptions',
+    `${filePath} Cloudflare Sentry owner must branch on validated Sentry options`
+  );
+  const sentryCall = unwrapAwaitExpression(choice.consequent);
+  assert(
+    sentryCall.type === 'CallExpression',
+    `${filePath} Cloudflare Sentry owner must call its request wrapper`
+  );
+  assert(
+    identifierName(sentryCall.callee) === 'runWithCloudflareSentry',
+    `${filePath} Cloudflare Sentry owner must invoke runWithCloudflareSentry`
+  );
+  const [options = {}] = sentryCall.arguments;
+  assertCloudflareSentryCallOptions(options, filePath);
+  const fallback = unwrapAwaitExpression(choice.alternate);
+  assert(
+    fallback.type === 'CallExpression',
+    `${filePath} Cloudflare Sentry owner must call its disabled fallback`
+  );
+  assert(
+    identifierName(fallback.callee) === 'handle' &&
+      fallback.arguments.length === 0,
+    `${filePath} Cloudflare Sentry owner must preserve its disabled fallback`
+  );
+};
+
+const assertCloudflareApplicationHandler = (fetchFunction, filePath) => {
+  const handleApplication = directVariableInitializer(
+    fetchFunction,
+    'handleApplication'
+  );
+  assert(
+    handleApplication?.type === 'ArrowFunctionExpression',
+    `${filePath} Worker fetch must define its active application handler`
+  );
+  const applicationCall = unwrapAwaitExpression(handleApplication.body);
+  assert(
+    applicationCall?.type === 'CallExpression',
+    `${filePath} active application handler must return its application response`
+  );
+  assert(
+    identifierMemberSignature(applicationCall.callee) ===
+      'MemberExpression:false:application:fetch',
+    `${filePath} active application handler must invoke application.fetch`
+  );
+  assert(
+    identifierName(applicationCall.arguments[0]) === 'request',
+    `${filePath} active application handler must invoke application.fetch with the active request`
+  );
+};
+
+const cloudflareDatabaseOwnerProperties = (fetchFunction, filePath) => {
+  const handleDatabase = directVariableInitializer(
+    fetchFunction,
+    'handleDatabase'
+  );
+  assert(
+    handleDatabase?.type === 'ArrowFunctionExpression',
+    `${filePath} Worker fetch must define its active database handler`
+  );
+  const calls = directNamedCalls(handleDatabase, 'runWithCloudflareDatabase');
+  assert(
+    calls.length === 1,
+    `${filePath} must contain exactly one Cloudflare database request owner`
+  );
+  const [call] = calls;
+  assert(
+    nodeRangeSignature(handleDatabase.body) === nodeRangeSignature(call),
+    `${filePath} active database handler must return its database-owned response`
+  );
+  const [options = {}] = call.arguments;
+  return ownerProperties(options, filePath, 'the Cloudflare database owner');
+};
+
+const cloudflareOuterOwnerProperties = (fetchFunction, filePath) => {
+  const returns = directReturnStatements(fetchFunction);
+  assert(
+    returns.length === 1,
+    `${filePath} Worker fetch must have exactly one Sentry-owned return path`
+  );
+  const [finalStatement = {}] = fetchFunction.body.body.slice(-1);
+  assert(
+    finalStatement.type === 'TryStatement',
+    `${filePath} Worker fetch must return through its top-level Sentry ownership scope`
+  );
+  assert(
+    finalStatement.block.body.length === 1,
+    `${filePath} Worker Sentry ownership scope must contain one return`
+  );
+  const [ownerReturn = {}] = finalStatement.block.body;
+  assert(
+    ownerReturn.type === 'ReturnStatement',
+    `${filePath} Worker Sentry ownership scope must return its response`
+  );
+  const sentryCall = unwrapAwaitExpression(ownerReturn.argument);
+  assert(
+    identifierName(sentryCall.callee) === 'fetchCloudflareApplication',
+    `${filePath} Worker fetch must return or await its Sentry-owned response`
+  );
+  const [sentryOptions = {}] = sentryCall.arguments;
+  return ownerProperties(
+    sentryOptions,
+    filePath,
+    'the active Cloudflare Sentry request owner'
+  );
+};
+
 const assertCloudflareDatabaseOwner = (filePath) => {
   const { program } = readParsedModule(filePath);
+  assertCloudflareSentryOwner(program, filePath);
   const fetchFunction = findDefaultWorkerFetch(program, filePath);
   assert(
     fetchFunction.params.map(identifierName).join(':') ===
       'request:environment:context',
     `${filePath} Worker fetch must expose the active request, environment, and context`
   );
-  const calls = directNamedCalls(fetchFunction, 'runWithCloudflareDatabase');
+  assertNoCloudflareOwnerOverrides(fetchFunction, filePath);
+  assertExactCloudflareOwnerUsage(fetchFunction, filePath);
+  assertNoProgramCloudflareOwnerAliases(program, fetchFunction, filePath);
+  assertCloudflareApplicationHandler(fetchFunction, filePath);
+  const options = cloudflareDatabaseOwnerProperties(fetchFunction, filePath);
+  const sentryOptions = cloudflareOuterOwnerProperties(fetchFunction, filePath);
   assert(
-    calls.length === 1,
-    `${filePath} must contain exactly one Cloudflare database request owner`
-  );
-  const [call] = calls;
-  const [options = {}] = call.arguments;
-  const returns = directReturnStatements(fetchFunction);
-  assert(
-    returns.length === 1,
-    `${filePath} Worker fetch must have exactly one database-owned return path`
-  );
-  const [finalStatement = {}] = fetchFunction.body.body.slice(-1);
-  assert(
-    finalStatement.type === 'TryStatement',
-    `${filePath} Worker fetch must return through its top-level database ownership scope`
+    identifierName(sentryOptions.get('handle')) === 'handleDatabase',
+    `${filePath} Sentry request owner must invoke the active database handler`
   );
   assert(
-    finalStatement.block.body.length === 1,
-    `${filePath} Worker database ownership scope must contain one return`
-  );
-  const [ownerReturn = {}] = finalStatement.block.body;
-  assert(
-    ownerReturn.type === 'ReturnStatement',
-    `${filePath} Worker database ownership scope must return its response`
+    identifierName(sentryOptions.get('request')) === 'request',
+    `${filePath} Sentry request owner must receive the active request`
   );
   assert(
-    nodeRangeSignature(unwrapAwaitExpression(ownerReturn.argument)) ===
-      nodeRangeSignature(call),
-    `${filePath} Worker fetch must return or await its database-owned response`
+    identifierName(sentryOptions.get('context')) === 'context',
+    `${filePath} Sentry request owner must receive the active execution context`
   );
   assert(
-    options.type === 'ObjectExpression',
-    `${filePath} must configure the Cloudflare database request owner`
+    identifierName(sentryOptions.get('sentryOptions')) === 'sentryOptions',
+    `${filePath} Sentry request owner must receive the validated Sentry options`
   );
   assert(
-    identifierMemberSignature(objectPropertyValue(options, 'binding')) ===
+    identifierMemberSignature(options.get('binding')) ===
       'MemberExpression:false:environment:START_UI_DATABASE',
     `${filePath} must bind the Cloudflare database owner to environment.START_UI_DATABASE`
   );
   assert(
-    identifierName(objectPropertyValue(options, 'handle')) === 'handle',
-    `${filePath} must bind the Cloudflare database owner to the active handle`
+    identifierName(options.get('handle')) === 'handleApplication',
+    `${filePath} must bind the Cloudflare database owner to the active application handler`
   );
   assert(
-    identifierName(objectPropertyValue(options, 'request')) === 'request',
+    identifierName(options.get('request')) === 'request',
     `${filePath} must bind the Cloudflare database owner to the active request`
   );
 };
@@ -559,6 +958,48 @@ const assertNoArtifactTokens = (directoryPath, tokens) => {
   }
 };
 
+const assertCloudflareHyperdriveBinding = (sourceConfig, generatedConfig) => {
+  assert(
+    Array.isArray(sourceConfig.hyperdrive),
+    'Cloudflare source Hyperdrive bindings'
+  );
+  assert(
+    sourceConfig.hyperdrive.length === 1,
+    'Cloudflare source must declare one Hyperdrive binding'
+  );
+  const [sourceBinding] = sourceConfig.hyperdrive;
+  assert(
+    sourceBinding.binding === 'START_UI_DATABASE',
+    'Cloudflare source START_UI_DATABASE Hyperdrive binding'
+  );
+  assert(
+    typeof sourceBinding.id === 'string',
+    'Cloudflare source Hyperdrive configuration ID'
+  );
+  assert(
+    sourceBinding.id.length > 0,
+    'Cloudflare source Hyperdrive configuration ID'
+  );
+
+  assert(
+    Array.isArray(generatedConfig.hyperdrive),
+    'Cloudflare generated Hyperdrive bindings'
+  );
+  assert(
+    generatedConfig.hyperdrive.length === 1,
+    'Cloudflare generated Hyperdrive binding count'
+  );
+  const [generatedBinding] = generatedConfig.hyperdrive;
+  assert(
+    generatedBinding.binding === sourceBinding.binding,
+    'Cloudflare generated Hyperdrive binding name'
+  );
+  assert(
+    generatedBinding.id === sourceBinding.id,
+    'Cloudflare generated Hyperdrive configuration ID'
+  );
+};
+
 const runtimeArtifactOutput = (profile, root) => {
   if (profile === 'node') return path.join(root, '.output/node');
   if (profile === 'vercel') return path.join(root, '.vercel/output');
@@ -653,6 +1094,7 @@ const verifyCloudflare = (root, expectedAppSlug) => {
     generatedConfig.assets?.directory === '../client',
     'Cloudflare client asset binding'
   );
+  assertCloudflareHyperdriveBinding(sourceConfig, generatedConfig);
   assert(
     findFilesNamedLike(
       output,

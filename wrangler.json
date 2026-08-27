@@ -4,6 +4,12 @@
   "compatibility_date": "2026-08-24",
   "compatibility_flags": ["nodejs_compat"],
   "main": "src/server.ts",
+  "hyperdrive": [
+    {
+      "binding": "START_UI_DATABASE",
+      "id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
   "analytics_engine_datasets": [
     {
       "binding": "START_UI_TELEMETRY_METRICS"

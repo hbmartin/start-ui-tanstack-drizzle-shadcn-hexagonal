@@ -3,9 +3,7 @@ import {
   runWithRuntimeDatabaseClient,
   validateServerConfig,
 } from '@/modules/kernel/backend';
-import { reportTelemetryFailure } from '@/platform/telemetry';
-
-import { registerRequestCompletion } from '../request-completion';
+import { reportTelemetryFailure, telemetryProxy } from '@/platform/telemetry';
 
 type CloudflareRequestDatabase = Awaited<
   ReturnType<typeof createHyperdriveDbClient>
@@ -17,6 +15,19 @@ const closeDatabase = async (database: CloudflareRequestDatabase) => {
   } catch (failure) {
     reportTelemetryFailure('database.cloudflare.close', failure);
   }
+};
+
+const captureDatabaseConnectionFailure = (failure: unknown) => {
+  telemetryProxy.emitLog({
+    direction: 'internal',
+    event: 'database.cloudflare.connect_failed',
+    exception: failure,
+    level: 'error',
+  });
+  telemetryProxy.captureException(failure, {
+    level: 'error',
+    tags: { event: 'database.cloudflare.connect_failed' },
+  });
 };
 
 /**
@@ -35,7 +46,7 @@ export const bindCloudflareDatabaseToResponse = ({
   response: Response;
 }): Response => {
   if (!response.body) {
-    registerRequestCompletion(request, closeDatabase(database));
+    void closeDatabase(database);
     return response;
   }
   if (response.bodyUsed || response.body.locked) {
@@ -46,18 +57,22 @@ export const bindCloudflareDatabaseToResponse = ({
 
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const completion = response.body
-    .pipeTo(writable)
+    .pipeTo(writable, { signal: request.signal })
     .catch(() => undefined)
     .then(() => closeDatabase(database));
-  registerRequestCompletion(request, completion);
+  // Response production owns this completion. It must not enter the telemetry
+  // pre-flush set: a slow client may hold the body open longer than the bounded
+  // exporter deadline, but logs and metrics still need to flush promptly.
+  void completion;
 
   return new Response(readable, response);
 };
 
 /**
- * Owns one Hyperdrive client for one Cloudflare request. Adapter validation,
- * Sentry request isolation, the application handler, and deferred stream
- * production all execute inside the strict database AsyncLocalStorage scope.
+ * Owns one Hyperdrive client for one Cloudflare request. The outer entrypoint
+ * establishes Sentry isolation first; adapter validation, application work,
+ * and deferred stream production then execute inside the strict database
+ * AsyncLocalStorage scope.
  */
 export const runWithCloudflareDatabase = async ({
   binding,
@@ -68,7 +83,13 @@ export const runWithCloudflareDatabase = async ({
   handle: () => Promise<Response> | Response;
   request: Request;
 }): Promise<Response> => {
-  const database = await createHyperdriveDbClient(binding);
+  let database: CloudflareRequestDatabase;
+  try {
+    database = await createHyperdriveDbClient(binding);
+  } catch (failure) {
+    captureDatabaseConnectionFailure(failure);
+    throw failure;
+  }
 
   return runWithRuntimeDatabaseClient(database, async () => {
     try {

@@ -89,10 +89,12 @@ Database transport is controlled by `DATABASE_TLS_POLICY`, not URL parameters. L
 The trusted runtime entrypoint also fixes the request-path database adapter:
 Node requires `DATABASE_DRIVER=node-pg`, while Vercel requires
 `DATABASE_DRIVER=neon-http`. Maintenance migrations may independently use
-`node-pg` or `neon-websocket`. The Cloudflare request path will use a separately
-injected Hyperdrive binding rather than one of these process-owned drivers.
-Live Worker startup fails explicitly until that binding contract is installed
-and verified; artifact-only build validation remains available.
+`node-pg` or `neon-websocket`. The Cloudflare request path uses the
+source-declared `START_UI_DATABASE` Hyperdrive binding rather than one of these
+process-owned drivers. The checked-in all-zero configuration ID is
+intentionally non-deployable: replace it with the ID returned by
+`wrangler hyperdrive create` before a preview or deployment. Artifact-only
+build validation remains credential-free.
 
 ## Run
 
@@ -305,7 +307,10 @@ pnpm build:cloudflare
 `wrangler.json` is the source configuration. The Cloudflare Vite plugin emits
 the deployment snapshot at `dist/server/wrangler.json`; Wrangler automatically
 uses that generated output after a build. `pnpm setup` keeps the Worker name in
-sync with `APP_SLUG`. `.wrangler` and `.dev.vars*` are local-only and ignored.
+sync with `APP_SLUG`. Before any preview or deployment, replace the all-zero
+`START_UI_DATABASE` Hyperdrive configuration ID with the ID of a provisioned
+Hyperdrive configuration. The artifact verifier rejects a missing, renamed, or
+drifted binding. `.wrangler` and `.dev.vars*` are local-only and ignored.
 
 The artifact build alone is not a deployment approval, so the v5 branch does
 not yet expose a Cloudflare preview or deploy script. The production Worker

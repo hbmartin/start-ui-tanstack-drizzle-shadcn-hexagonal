@@ -22,6 +22,9 @@ const write = (root, relativePath, contents = '') => {
 const writeJson = (root, relativePath, value) =>
   write(root, relativePath, `${JSON.stringify(value)}\n`);
 
+const cloudflareSentryOwner =
+  'const fetchCloudflareApplication=({context,handle,request,sentryOptions})=>sentryOptions?runWithCloudflareSentry({api:Sentry,handle,request,requestOptions:{captureErrors:false,context,options:sentryOptions,request}}):handle();';
+
 const createNodeArtifact = (root) => {
   writeJson(root, '.output/node/nitro.json', {
     preset: 'node-server',
@@ -71,6 +74,12 @@ const createCloudflareArtifact = (root) => {
   writeJson(root, 'wrangler.json', {
     compatibility_date: '2026-08-24',
     compatibility_flags: ['nodejs_compat'],
+    hyperdrive: [
+      {
+        binding: 'START_UI_DATABASE',
+        id: '00000000-0000-0000-0000-000000000000',
+      },
+    ],
     main: 'src/server.ts',
     name: 'acme-app',
   });
@@ -78,13 +87,19 @@ const createCloudflareArtifact = (root) => {
     assets: { directory: '../client' },
     compatibility_date: '2026-08-24',
     compatibility_flags: ['nodejs_compat'],
+    hyperdrive: [
+      {
+        binding: 'START_UI_DATABASE',
+        id: '00000000-0000-0000-0000-000000000000',
+      },
+    ],
     main: 'index.js',
     name: 'acme-app',
   });
   write(
     root,
     'dist/server/index.js',
-    'createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const handle=()=>{};try{return await runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS'
+    `${cloudflareSentryOwner}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const sentryOptions=configure();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
   );
   fs.mkdirSync(path.join(root, 'dist/client'));
 };
@@ -162,7 +177,7 @@ describe('runtime artifact verifier', () => {
     write(
       root,
       'dist/server/index.js',
-      'createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const handle=()=>{};try{return await runWithCloudflareDatabase({binding:environment.MISSING_DATABASE,handle,request})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";"START_UI_DATABASE";START_UI_TELEMETRY_METRICS'
+      `${cloudflareSentryOwner}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const sentryOptions=configure();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.MISSING_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";"START_UI_DATABASE";START_UI_TELEMETRY_METRICS`
     );
 
     expect(() =>
@@ -174,20 +189,52 @@ describe('runtime artifact verifier', () => {
     );
   });
 
+  it('rejects a Cloudflare artifact without its source Hyperdrive binding', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const sourceConfig = JSON.parse(
+      fs.readFileSync(path.join(root, 'wrangler.json'), 'utf8')
+    );
+    delete sourceConfig.hyperdrive;
+    writeJson(root, 'wrangler.json', sourceConfig);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Cloudflare source Hyperdrive bindings');
+  });
+
+  it('rejects generated Hyperdrive binding drift', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const generatedConfig = JSON.parse(
+      fs.readFileSync(path.join(root, 'dist/server/wrangler.json'), 'utf8')
+    );
+    generatedConfig.hyperdrive[0].binding = 'DETACHED_DATABASE';
+    writeJson(root, 'dist/server/wrangler.json', generatedConfig);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Cloudflare generated Hyperdrive binding name');
+  });
+
   it('rejects a Cloudflare database owner hidden in an unreachable helper', () => {
     const root = fixture();
     createCloudflareArtifact(root);
     write(
       root,
       'dist/server/index.js',
-      'createApplicationServerEntry("cloudflare");function neverCalled(environment,handle,request){return runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}const worker_entry_default={async fetch(request,environment,context){return new Response()}};export{worker_entry_default as default};"cloudflare:workers";START_UI_DATABASE;START_UI_TELEMETRY_METRICS'
+      `${cloudflareSentryOwner}createApplicationServerEntry("cloudflare");function neverCalled(environment,handle,request){return runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}const worker_entry_default={async fetch(request,environment,context){return new Response()}};export{worker_entry_default as default};"cloudflare:workers";START_UI_DATABASE;START_UI_TELEMETRY_METRICS`
     );
 
     expect(() =>
       verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'acme-app',
       })
-    ).toThrow('must contain exactly one Cloudflare database request owner');
+    ).toThrow('Worker fetch must use trusted owner application exactly once');
   });
 
   it('rejects a Cloudflare database owner after an unwrapped response path', () => {
@@ -196,14 +243,215 @@ describe('runtime artifact verifier', () => {
     write(
       root,
       'dist/server/index.js',
-      'createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const handle=()=>{};if(true)return new Response();return await runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS'
+      `${cloudflareSentryOwner}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const sentryOptions=configure();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});if(true)return new Response();try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
     );
 
     expect(() =>
       verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'acme-app',
       })
-    ).toThrow('must have exactly one database-owned return path');
+    ).toThrow('must have exactly one Sentry-owned return path');
+  });
+
+  it('rejects a Cloudflare artifact with a bypassed Sentry owner', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          cloudflareSentryOwner,
+          'const fetchCloudflareApplication=({handle})=>handle();'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Cloudflare Sentry owner must accept the active request inputs');
+  });
+
+  it('rejects a Cloudflare artifact with a bypassed application handler', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleApplication=()=>application.fetch(request)',
+          'const handleApplication=()=>new Response("bypassed")'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must use trusted owner application exactly once');
+  });
+
+  it('rejects duplicate runtime-effective Cloudflare owner properties', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'binding:environment.START_UI_DATABASE,handle:handleApplication,request',
+          'binding:environment.START_UI_DATABASE,handle:handleApplication,request,binding:environment.MISSING_DATABASE'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'Cloudflare database owner must not contain duplicate properties'
+    );
+  });
+
+  it('rejects fetch-local substitutions for trusted Cloudflare owners', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const sentryOptions=configure();',
+          'const fetchCloudflareApplication=({handle})=>handle();const application={fetch:()=>new Response("bypassed")};const runWithCloudflareDatabase=({handle})=>handle();const sentryOptions=configure();'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must not override trusted owner application');
+  });
+
+  it('rejects reassigned Cloudflare request-owner callbacks', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try',
+          'let handleApplication=()=>application.fetch(request);let handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});handleApplication=()=>new Response("application bypassed");handleDatabase=()=>new Response("database bypassed");try'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must not mutate active binding handleApplication');
+  });
+
+  it('rejects destructuring reassignment of Cloudflare request-owner callbacks', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try',
+          'let handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});[handleDatabase]=[()=>new Response("database bypassed")];try'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must not mutate active binding handleDatabase');
+  });
+
+  it('rejects nested callback substitution of Cloudflare request owners', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try',
+          'let handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});const substitute=()=>{handleDatabase=()=>new Response("database bypassed")};substitute();try'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must not mutate active binding handleDatabase');
+  });
+
+  it('rejects call-based mutation of a trusted Cloudflare owner', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const sentryOptions=configure();',
+          'Object.assign(application,{fetch:()=>new Response("bypassed")});const sentryOptions=configure();'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must use trusted owner application exactly once');
+  });
+
+  it('rejects top-level aliases used to mutate a trusted Cloudflare owner', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    const source = fs
+      .readFileSync(entryPath, 'utf8')
+      .replace(
+        `${cloudflareSentryOwner}createApplicationServerEntry`,
+        `${cloudflareSentryOwner}const appAlias=application;createApplicationServerEntry`
+      )
+      .replace(
+        'const sentryOptions=configure();',
+        'Object.assign(appAlias,{fetch:()=>new Response("bypassed")});const sentryOptions=configure();'
+      );
+    write(root, 'dist/server/index.js', source);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not alias trusted owner application');
   });
 
   it.each([

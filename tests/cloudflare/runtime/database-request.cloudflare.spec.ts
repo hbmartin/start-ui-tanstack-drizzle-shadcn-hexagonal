@@ -7,7 +7,6 @@ import {
   runWithRuntimeDatabaseClient,
 } from '@/modules/kernel/backend';
 import { bindCloudflareDatabaseToResponse } from '@/runtime/cloudflare/database-request';
-import { takeRequestCompletions } from '@/runtime/request-completion';
 
 type TestCloudflareEnvironment = {
   START_UI_DATABASE?: { connectionString: string };
@@ -80,10 +79,9 @@ describe('Cloudflare Hyperdrive request lifecycle', () => {
       '1'
     );
     await within(
-      Promise.allSettled(takeRequestCompletions(request)),
-      'Hyperdrive close'
+      vi.waitFor(() => expect(close).toHaveBeenCalledOnce()),
+      'Hyperdrive release'
     );
-    expect(close).toHaveBeenCalledOnce();
     expect(() => cachedDatabase.$adapter).toThrow(
       /request-scoped runtime database is unavailable/u
     );
