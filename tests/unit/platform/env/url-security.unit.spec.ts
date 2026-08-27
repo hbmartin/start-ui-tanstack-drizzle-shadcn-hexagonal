@@ -8,6 +8,7 @@ import {
 describe('platform url-security', () => {
   it('detects loopback hosts', () => {
     expect(isLocalhostUrl('http://localhost:3000')).toBe(true);
+    expect(isLocalhostUrl('postgres://user@LOCALHOST:5432/app')).toBe(true);
     expect(isLocalhostUrl('http://127.0.0.1:9000/default')).toBe(true);
     expect(isLocalhostUrl('http://[::1]:9000')).toBe(true);
     expect(isLocalhostUrl('https://example.com')).toBe(false);

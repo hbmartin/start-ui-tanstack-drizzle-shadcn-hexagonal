@@ -34,6 +34,15 @@ describe('resolveDatabaseTlsPolicy', () => {
     ).toBe('encrypt');
   });
 
+  it('rejects an unknown programmatic TLS policy', () => {
+    expect(() =>
+      resolveDatabaseTlsPolicy({
+        configuredPolicy: 'OFF' as never,
+        url: remote,
+      })
+    ).toThrow("Database TLS policy must be 'off', 'encrypt', or 'verify'.");
+  });
+
   it('rejects off for remote endpoints in every environment', () => {
     expect(() =>
       resolveDatabaseTlsPolicy({

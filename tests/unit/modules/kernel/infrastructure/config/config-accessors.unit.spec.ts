@@ -397,6 +397,24 @@ describe('server config accessors', () => {
         })
       )
     ).toBe(true);
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(
+        makeTestDatabaseUrl({
+          databaseName: 'db',
+          host: 'aws-0-us-east-1.pooler.supabase.com',
+          port: 5432,
+        })
+      )
+    ).toBe(false);
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(
+        makeTestDatabaseUrl({
+          databaseName: 'db',
+          host: 'aws-0-us-east-1.pooler.supabase.com',
+          port: 6543,
+        })
+      )
+    ).toBe(true);
     const transactionPoolerSearchParams: ReadonlyArray<Record<string, string>> =
       [
         { pgbouncer: 'true' },

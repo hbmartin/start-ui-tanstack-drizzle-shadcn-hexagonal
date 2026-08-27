@@ -16,6 +16,7 @@ describe('isLocalhostUrl', () => {
     expect(isLocalhostUrl('http://127.0.0.1:9000/default')).toBe(true);
     expect(isLocalhostUrl('http://[::1]:4318/v1')).toBe(true);
     expect(isLocalhostUrl('postgres://user@localhost:5432/app')).toBe(true);
+    expect(isLocalhostUrl('postgres://user@LOCALHOST:5432/app')).toBe(true);
   });
 
   it('returns false for remote hosts and malformed URLs', () => {
@@ -158,6 +159,13 @@ describe('assertDatabaseUrlTls', () => {
         env: PROD,
         policy: 'verify',
         policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+        urlPolicyOwners: [
+          { policyName: 'DATABASE_TLS_POLICY', role: 'runtime' },
+          {
+            policyName: 'DATABASE_MIGRATION_TLS_POLICY',
+            role: 'migration',
+          },
+        ],
         urlOwnerPolicyName: 'DATABASE_TLS_POLICY',
       })
     ).toThrow(

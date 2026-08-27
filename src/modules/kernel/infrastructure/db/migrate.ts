@@ -14,10 +14,12 @@ import {
   assertMigrationDriver,
   assertMigrationUrlSupportsMigrations,
   getMigrationDatabaseConfig,
+  MIGRATION_DATABASE_CLIENT_DRIVER_NAME,
   MIGRATION_DATABASE_CLIENT_URL_NAME,
   type MigrationDatabaseConfig,
   type MigrationDatabaseDriver,
 } from '@/modules/kernel/infrastructure/config/database';
+import { assertDatabaseTlsPolicy } from '@/modules/kernel/infrastructure/config/database-tls';
 import { assertDatabaseUrlTls } from '@/modules/kernel/infrastructure/config/url-security';
 
 import * as schema from './schema';
@@ -101,7 +103,8 @@ function createNeonWebsocketMigrationDb(url: string): MigrationDatabase {
 export async function createMigrationDbClient(
   config: MigrationDatabaseConfig = getMigrationDatabaseConfig()
 ): Promise<MigrationDatabase> {
-  assertMigrationDriver(config.driver);
+  assertMigrationDriver(config.driver, MIGRATION_DATABASE_CLIENT_DRIVER_NAME);
+  assertDatabaseTlsPolicy(config.tlsPolicy);
   assertDatabaseUrlTls({
     driver: config.driver,
     name: MIGRATION_DATABASE_CLIENT_URL_NAME,

@@ -77,6 +77,7 @@ const dbWithDriver = (driver: MigrationDatabase['$migrationDriver']) =>
 describe('migrateDatabase', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.webSocketConstructor = undefined;
     mocks.migrationClient.query.mockResolvedValue({ rows: [] });
     mocks.migrationClient.query.mockResolvedValueOnce({
       rows: [{ acquired: true }],
@@ -155,6 +156,7 @@ describe('createMigrationDbClient', () => {
     vi.clearAllMocks();
     mocks.neonClientConfig = undefined;
     mocks.nodePgClientConfig = undefined;
+    mocks.webSocketConstructor = undefined;
     mocks.migrationClient.connect.mockResolvedValue(undefined);
     mocks.migrationClient.end.mockResolvedValue(undefined);
     mocks.drizzleNodePg.mockImplementation((client) => ({ $client: client }));
@@ -221,7 +223,7 @@ describe('createMigrationDbClient', () => {
         tlsPolicy: 'verify',
       })
     ).rejects.toThrow(
-      'migration database client URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with the caller-provided policy.'
+      'Migration database client URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with the caller-provided policy.'
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });
@@ -237,7 +239,7 @@ describe('createMigrationDbClient', () => {
         tlsPolicy: 'verify',
       } as unknown as MigrationDatabaseConfig)
     ).rejects.toThrow(
-      'DATABASE_MIGRATION_DRIVER=neon-http is not supported because Neon HTTP migrations are not transactional.'
+      "Migration database client driver 'neon-http' is not supported because Neon HTTP migrations are not transactional."
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
     expect(mocks.neonClientConfig).toBeUndefined();
@@ -254,7 +256,7 @@ describe('createMigrationDbClient', () => {
         tlsPolicy: 'verify',
       } as unknown as MigrationDatabaseConfig)
     ).rejects.toThrow(
-      'DATABASE_MIGRATION_DRIVER must be node-pg or neon-websocket.'
+      'Migration database client driver must be node-pg or neon-websocket.'
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
     expect(mocks.neonClientConfig).toBeUndefined();
@@ -273,9 +275,26 @@ describe('createMigrationDbClient', () => {
         tlsPolicy: 'verify',
       })
     ).rejects.toThrow(
-      'migration database client URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+      'Migration database client URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
+  });
+
+  it('rejects unknown programmatic TLS policies before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl(),
+        driver: 'node-pg',
+        tlsPolicy: 'OFF',
+      } as unknown as MigrationDatabaseConfig)
+    ).rejects.toThrow(
+      "Database TLS policy must be 'off', 'encrypt', or 'verify'."
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+    expect(mocks.neonClientConfig).toBeUndefined();
   });
 
   it('uses natural policy remediation for programmatic migration config', async () => {
@@ -289,7 +308,7 @@ describe('createMigrationDbClient', () => {
         tlsPolicy: 'off',
       })
     ).rejects.toThrow(
-      "migration database client URL must not use TLS policy 'off' for a remote database; select a 'verify' policy or target a loopback endpoint."
+      "Migration database client URL must not use TLS policy 'off' for a remote database; select a 'verify' policy or target a loopback endpoint."
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });

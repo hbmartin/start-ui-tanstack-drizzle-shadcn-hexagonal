@@ -4,6 +4,11 @@ import { ConfigurationError } from '../../domain/errors/configuration-error';
 
 type RuntimeEnv = Record<string, unknown>;
 
+type DatabaseTlsPolicyOwner = Readonly<{
+  policyName: string;
+  role: 'migration' | 'runtime';
+}>;
+
 const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
 const DATABASE_URL_SCHEMES = new Set(['postgres:', 'postgresql:']);
@@ -30,17 +35,19 @@ const stripIpv6Brackets = (value: string) =>
   value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
 
 function describeDatabaseUrlTlsRemedy({
-  policyOverrideName,
+  policyOwners,
   urlOwnerPolicyName,
 }: {
-  policyOverrideName: string | undefined;
+  policyOwners: readonly DatabaseTlsPolicyOwner[] | undefined;
   urlOwnerPolicyName: string | undefined;
 }): string {
+  if (policyOwners && policyOwners.length > 0) {
+    return `configure ${policyOwners
+      .map(({ policyName, role }) => `${role} TLS with ${policyName}`)
+      .join(' and ')}`;
+  }
   if (!urlOwnerPolicyName) {
     return 'configure TLS with the caller-provided policy';
-  }
-  if (policyOverrideName && urlOwnerPolicyName !== policyOverrideName) {
-    return `configure runtime TLS with ${urlOwnerPolicyName} and migration TLS with ${policyOverrideName}`;
   }
   return `configure TLS with ${urlOwnerPolicyName}`;
 }
@@ -52,7 +59,9 @@ function describeDatabaseUrlTlsRemedy({
  */
 export const isLocalhostUrl = (value: string): boolean => {
   try {
-    return LOCALHOST_HOSTNAMES.has(stripIpv6Brackets(new URL(value).hostname));
+    return LOCALHOST_HOSTNAMES.has(
+      stripIpv6Brackets(new URL(value).hostname).toLowerCase()
+    );
   } catch {
     return false;
   }
@@ -122,6 +131,7 @@ export const assertDatabaseUrlTls = ({
   env,
   policy,
   policyOverrideName,
+  urlPolicyOwners,
   urlOwnerPolicyName = policyOverrideName,
 }: {
   name: string;
@@ -130,6 +140,7 @@ export const assertDatabaseUrlTls = ({
   env?: RuntimeEnv;
   policy: DatabaseTlsPolicy;
   policyOverrideName?: string;
+  urlPolicyOwners?: readonly DatabaseTlsPolicyOwner[];
   urlOwnerPolicyName?: string;
 }): void => {
   let parsed: URL;
@@ -160,7 +171,7 @@ export const assertDatabaseUrlTls = ({
   ];
   if (forbiddenParameters.length > 0) {
     const tlsPolicyRemedy = describeDatabaseUrlTlsRemedy({
-      policyOverrideName,
+      policyOwners: urlPolicyOwners,
       urlOwnerPolicyName,
     });
     throw new ConfigurationError(

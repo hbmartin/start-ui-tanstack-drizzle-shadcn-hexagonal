@@ -5,6 +5,20 @@ export const DATABASE_TLS_POLICIES = ['off', 'encrypt', 'verify'] as const;
 
 export type DatabaseTlsPolicy = (typeof DATABASE_TLS_POLICIES)[number];
 
+export function assertDatabaseTlsPolicy(
+  policy: unknown
+): asserts policy is DatabaseTlsPolicy {
+  if (
+    typeof policy === 'string' &&
+    DATABASE_TLS_POLICIES.some((candidate) => candidate === policy)
+  ) {
+    return;
+  }
+  throw new ConfigurationError(
+    "Database TLS policy must be 'off', 'encrypt', or 'verify'."
+  );
+}
+
 /**
  * Resolve the application-owned database transport policy.
  *
@@ -27,6 +41,9 @@ export const resolveDatabaseTlsPolicy = ({
   urlName?: string;
   url: string;
 }): DatabaseTlsPolicy => {
+  if (configuredPolicy !== undefined) {
+    assertDatabaseTlsPolicy(configuredPolicy);
+  }
   const policy = configuredPolicy ?? (isLocalhostUrl(url) ? 'off' : 'verify');
 
   if (policy === 'off' && !isLocalhostUrl(url)) {

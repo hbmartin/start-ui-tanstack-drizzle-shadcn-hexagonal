@@ -55,11 +55,17 @@ const DATABASE_URL_POLICY_NAMES = {
 } as const;
 
 export const MIGRATION_DATABASE_CLIENT_URL_NAME =
-  'migration database client URL' as const;
+  'Migration database client URL' as const;
+export const MIGRATION_DATABASE_CLIENT_DRIVER_NAME =
+  'Migration database client driver' as const;
 
 type MigrationDatabaseUrlSubject =
   | keyof typeof DATABASE_URL_POLICY_NAMES
   | typeof MIGRATION_DATABASE_CLIENT_URL_NAME;
+
+type MigrationDatabaseDriverSubject =
+  | 'DATABASE_MIGRATION_DRIVER'
+  | typeof MIGRATION_DATABASE_CLIENT_DRIVER_NAME;
 
 export function assertDatabaseDriverForRuntimeProfile(
   runtimeProfile: Exclude<RuntimeProfile, 'cloudflare'>,
@@ -85,19 +91,22 @@ function getDefaultMigrationDriver(
 }
 
 export function assertMigrationDriver(
-  driver: unknown
+  driver: unknown,
+  subject: MigrationDatabaseDriverSubject = 'DATABASE_MIGRATION_DRIVER'
 ): asserts driver is MigrationDatabaseDriver {
   if (driver === 'node-pg' || driver === 'neon-websocket') return;
 
   if (driver === 'neon-http') {
+    const selectedDriver =
+      subject === 'DATABASE_MIGRATION_DRIVER'
+        ? 'DATABASE_MIGRATION_DRIVER=neon-http'
+        : `${subject} 'neon-http'`;
     throw new ConfigurationError(
-      'DATABASE_MIGRATION_DRIVER=neon-http is not supported because Neon HTTP migrations are not transactional. Use node-pg or neon-websocket.'
+      `${selectedDriver} is not supported because Neon HTTP migrations are not transactional. Use node-pg or neon-websocket.`
     );
   }
 
-  throw new ConfigurationError(
-    'DATABASE_MIGRATION_DRIVER must be node-pg or neon-websocket.'
-  );
+  throw new ConfigurationError(`${subject} must be node-pg or neon-websocket.`);
 }
 
 export function getDatabaseConfig(): DatabaseConfig {
@@ -133,10 +142,16 @@ export function isLikelyTransactionPooledDatabaseUrl(url: string): boolean {
     const hasTransactionPoolerParameter = [...parsed.searchParams].some(
       isTransactionPoolerParameter
     );
-    return (
-      parsed.hostname.toLowerCase().includes('pooler') ||
-      hasTransactionPoolerParameter
-    );
+    if (hasTransactionPoolerParameter) return true;
+
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname.endsWith('.pooler.supabase.com')) {
+      return parsed.port !== '5432';
+    }
+    if (hostname.endsWith('.supabase.co') && parsed.port === '6543') {
+      return true;
+    }
+    return hostname.includes('pooler');
   } catch {
     return false;
   }
@@ -202,6 +217,13 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
       ? 'DATABASE_MIGRATION_TLS_POLICY'
       : 'DATABASE_TLS_POLICY';
   const urlOwnerPolicyName = DATABASE_URL_POLICY_NAMES[databaseUrlName];
+  const urlPolicyOwners =
+    urlOwnerPolicyName === tlsPolicyOverrideName
+      ? undefined
+      : ([
+          { policyName: urlOwnerPolicyName, role: 'runtime' },
+          { policyName: tlsPolicyOverrideName, role: 'migration' },
+        ] as const);
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy:
       env.DATABASE_MIGRATION_TLS_POLICY ?? env.DATABASE_TLS_POLICY,
@@ -217,6 +239,7 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
     env,
     policy: tlsPolicy,
     policyOverrideName: tlsPolicyOverrideName,
+    urlPolicyOwners,
     urlOwnerPolicyName,
   });
   assertMigrationUrlSupportsMigrations(databaseUrl, databaseUrlName);

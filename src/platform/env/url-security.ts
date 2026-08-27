@@ -10,7 +10,9 @@ const stripIpv6Brackets = (value: string) =>
  */
 export const isLocalhostUrl = (value: string): boolean => {
   try {
-    return LOCALHOST_HOSTNAMES.has(stripIpv6Brackets(new URL(value).hostname));
+    return LOCALHOST_HOSTNAMES.has(
+      stripIpv6Brackets(new URL(value).hostname).toLowerCase()
+    );
   } catch {
     return false;
   }
