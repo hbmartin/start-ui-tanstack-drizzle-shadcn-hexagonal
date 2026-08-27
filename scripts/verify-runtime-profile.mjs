@@ -542,6 +542,10 @@ const assertCloudflareApplicationHandler = (fetchFunction, filePath) => {
     handleApplication?.type === 'ArrowFunctionExpression',
     `${filePath} Worker fetch must define its active application handler`
   );
+  assert(
+    handleApplication.params.length === 0,
+    `${filePath} active application handler must accept no substitutable inputs`
+  );
   const applicationCall = unwrapAwaitExpression(handleApplication.body);
   assert(
     applicationCall?.type === 'CallExpression',
@@ -570,6 +574,10 @@ const cloudflareDatabaseOwnerProperties = (fetchFunction, filePath) => {
   assert(
     handleDatabase?.type === 'ArrowFunctionExpression',
     `${filePath} Worker fetch must define its active database handler`
+  );
+  assert(
+    handleDatabase.params.length === 0,
+    `${filePath} active database handler must accept no substitutable inputs`
   );
   const calls = directNamedCalls(handleDatabase, 'runWithCloudflareDatabase');
   assert(

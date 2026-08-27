@@ -388,6 +388,50 @@ describe('runtime artifact verifier', () => {
     ).toThrow('Worker fetch must declare its application handler exactly once');
   });
 
+  it('rejects a default parameter that substitutes the application request', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleApplication=()=>application.fetch(request);',
+          'const handleApplication=(request=new Request("https://bypassed.test"))=>application.fetch(request);'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('active application handler must accept no substitutable inputs');
+  });
+
+  it('rejects a default parameter that substitutes the database callback', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleDatabase=()=>runWithCloudflareDatabase',
+          'const handleDatabase=(handleApplication=()=>new Response("bypassed"))=>runWithCloudflareDatabase'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('active database handler must accept no substitutable inputs');
+  });
+
   it('rejects fetch-local substitutions for trusted Cloudflare owners', () => {
     const root = fixture();
     createCloudflareArtifact(root);
