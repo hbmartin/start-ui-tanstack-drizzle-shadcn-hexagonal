@@ -247,7 +247,10 @@ default follows the request driver: `node-pg` for a Node request runtime and
 `neon-websocket` for Vercel's `neon-http` runtime. Set
 `DATABASE_MIGRATION_DRIVER=node-pg` explicitly when the maintenance URL is a
 conventional direct PostgreSQL endpoint, and set
-`DATABASE_MIGRATION_TLS_POLICY=off` when that endpoint is loopback.
+`DATABASE_MIGRATION_TLS_POLICY=off` when that endpoint is loopback and would
+otherwise inherit a non-`off` request policy. When neither policy is configured,
+the migration URL independently defaults to `off` for loopback and `verify` for
+remote endpoints.
 
 The v5 runtime work is intentionally incremental. The artifact commands prove
 isolated output shapes and trusted profile injection. `pnpm verify:node` also
