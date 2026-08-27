@@ -161,7 +161,7 @@ describe('assertDatabaseUrlTls', () => {
         urlOwnerPolicyName: 'DATABASE_TLS_POLICY',
       })
     ).toThrow(
-      'remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_TLS_POLICY.'
+      'remove those parameters, keep the endpoint in the URL authority, and configure runtime TLS with DATABASE_TLS_POLICY and migration TLS with DATABASE_MIGRATION_TLS_POLICY.'
     );
   });
 

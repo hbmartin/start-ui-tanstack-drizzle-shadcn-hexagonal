@@ -11,8 +11,10 @@ import { Client as PgClient } from 'pg';
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
 import { getApplicationIdentity } from '@/modules/kernel/infrastructure/config/application';
 import {
+  assertMigrationDriver,
   assertMigrationUrlSupportsMigrations,
   getMigrationDatabaseConfig,
+  MIGRATION_DATABASE_CLIENT_URL_NAME,
   type MigrationDatabaseConfig,
   type MigrationDatabaseDriver,
 } from '@/modules/kernel/infrastructure/config/database';
@@ -99,15 +101,16 @@ function createNeonWebsocketMigrationDb(url: string): MigrationDatabase {
 export async function createMigrationDbClient(
   config: MigrationDatabaseConfig = getMigrationDatabaseConfig()
 ): Promise<MigrationDatabase> {
+  assertMigrationDriver(config.driver);
   assertDatabaseUrlTls({
     driver: config.driver,
-    name: 'migration database client URL',
+    name: MIGRATION_DATABASE_CLIENT_URL_NAME,
     policy: config.tlsPolicy,
     url: config.databaseUrl,
   });
   assertMigrationUrlSupportsMigrations(
     config.databaseUrl,
-    'migration database client URL'
+    MIGRATION_DATABASE_CLIENT_URL_NAME
   );
   const db =
     config.driver === 'node-pg'

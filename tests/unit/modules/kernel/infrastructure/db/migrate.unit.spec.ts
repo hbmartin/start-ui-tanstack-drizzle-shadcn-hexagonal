@@ -2,6 +2,7 @@ import { makeTestDatabaseUrl } from '@tests/server/test-database-url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
+import type { MigrationDatabaseConfig } from '@/modules/kernel/infrastructure/config/database';
 import type {
   MigrationDatabase,
   MigrationDatabaseClient,
@@ -152,6 +153,7 @@ describe('migrateDatabase', () => {
 describe('createMigrationDbClient', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.neonClientConfig = undefined;
     mocks.nodePgClientConfig = undefined;
     mocks.migrationClient.connect.mockResolvedValue(undefined);
     mocks.migrationClient.end.mockResolvedValue(undefined);
@@ -222,6 +224,40 @@ describe('createMigrationDbClient', () => {
       'migration database client URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with the caller-provided policy.'
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
+  });
+
+  it('rejects unsupported programmatic migration drivers before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl(),
+        driver: 'neon-http',
+        tlsPolicy: 'verify',
+      } as unknown as MigrationDatabaseConfig)
+    ).rejects.toThrow(
+      'DATABASE_MIGRATION_DRIVER=neon-http is not supported because Neon HTTP migrations are not transactional.'
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+    expect(mocks.neonClientConfig).toBeUndefined();
+  });
+
+  it('rejects arbitrary programmatic migration drivers before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl(),
+        driver: 'mysql',
+        tlsPolicy: 'verify',
+      } as unknown as MigrationDatabaseConfig)
+    ).rejects.toThrow(
+      'DATABASE_MIGRATION_DRIVER must be node-pg or neon-websocket.'
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+    expect(mocks.neonClientConfig).toBeUndefined();
   });
 
   it('rejects transaction-pooled programmatic config before constructing a client', async () => {

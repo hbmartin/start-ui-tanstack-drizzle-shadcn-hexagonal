@@ -54,6 +54,13 @@ const DATABASE_URL_POLICY_NAMES = {
   DATABASE_URL: 'DATABASE_TLS_POLICY',
 } as const;
 
+export const MIGRATION_DATABASE_CLIENT_URL_NAME =
+  'migration database client URL' as const;
+
+type MigrationDatabaseUrlSubject =
+  | keyof typeof DATABASE_URL_POLICY_NAMES
+  | typeof MIGRATION_DATABASE_CLIENT_URL_NAME;
+
 export function assertDatabaseDriverForRuntimeProfile(
   runtimeProfile: Exclude<RuntimeProfile, 'cloudflare'>,
   config: Pick<DatabaseConfig, 'driver'>
@@ -77,14 +84,20 @@ function getDefaultMigrationDriver(
   return runtimeDriver === 'node-pg' ? 'node-pg' : 'neon-websocket';
 }
 
-function assertMigrationDriver(
-  driver: DatabaseDriver
+export function assertMigrationDriver(
+  driver: unknown
 ): asserts driver is MigrationDatabaseDriver {
+  if (driver === 'node-pg' || driver === 'neon-websocket') return;
+
   if (driver === 'neon-http') {
     throw new ConfigurationError(
       'DATABASE_MIGRATION_DRIVER=neon-http is not supported because Neon HTTP migrations are not transactional. Use node-pg or neon-websocket.'
     );
   }
+
+  throw new ConfigurationError(
+    'DATABASE_MIGRATION_DRIVER must be node-pg or neon-websocket.'
+  );
 }
 
 export function getDatabaseConfig(): DatabaseConfig {
@@ -118,14 +131,7 @@ export function isLikelyTransactionPooledDatabaseUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     const hasTransactionPoolerParameter = [...parsed.searchParams].some(
-      ([parameterName, parameterValue]) => {
-        const normalizedName = parameterName.toLowerCase();
-        const normalizedValue = parameterValue.toLowerCase();
-        return (
-          (normalizedName === 'pgbouncer' && normalizedValue === 'true') ||
-          (normalizedName === 'pool_mode' && normalizedValue === 'transaction')
-        );
-      }
+      isTransactionPoolerParameter
     );
     return (
       parsed.hostname.toLowerCase().includes('pooler') ||
@@ -136,9 +142,21 @@ export function isLikelyTransactionPooledDatabaseUrl(url: string): boolean {
   }
 }
 
+function isTransactionPoolerParameter([parameterName, parameterValue]: [
+  string,
+  string,
+]): boolean {
+  const normalizedName = parameterName.trim().toLowerCase();
+  const normalizedValue = parameterValue.trim().toLowerCase();
+  return (
+    (normalizedName === 'pgbouncer' && normalizedValue === 'true') ||
+    (normalizedName === 'pool_mode' && normalizedValue === 'transaction')
+  );
+}
+
 export function assertMigrationUrlSupportsMigrations(
   databaseUrl: string,
-  databaseUrlName = 'migration database client URL'
+  databaseUrlName: MigrationDatabaseUrlSubject = MIGRATION_DATABASE_CLIENT_URL_NAME
 ): void {
   if (!isLikelyTransactionPooledDatabaseUrl(databaseUrl)) return;
 

@@ -29,6 +29,22 @@ const FORBIDDEN_DATABASE_URL_PARAMETERS = new Set([
 const stripIpv6Brackets = (value: string) =>
   value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
 
+function describeDatabaseUrlTlsRemedy({
+  policyOverrideName,
+  urlOwnerPolicyName,
+}: {
+  policyOverrideName: string | undefined;
+  urlOwnerPolicyName: string | undefined;
+}): string {
+  if (!urlOwnerPolicyName) {
+    return 'configure TLS with the caller-provided policy';
+  }
+  if (policyOverrideName && urlOwnerPolicyName !== policyOverrideName) {
+    return `configure runtime TLS with ${urlOwnerPolicyName} and migration TLS with ${policyOverrideName}`;
+  }
+  return `configure TLS with ${urlOwnerPolicyName}`;
+}
+
 /**
  * True when the URL points at the loopback host. Mirrors the localhost
  * allowance used by the telemetry and storage guards so local development and
@@ -143,9 +159,10 @@ export const assertDatabaseUrlTls = ({
     ),
   ];
   if (forbiddenParameters.length > 0) {
-    const tlsPolicyRemedy = urlOwnerPolicyName
-      ? `configure TLS with ${urlOwnerPolicyName}`
-      : 'configure TLS with the caller-provided policy';
+    const tlsPolicyRemedy = describeDatabaseUrlTlsRemedy({
+      policyOverrideName,
+      urlOwnerPolicyName,
+    });
     throw new ConfigurationError(
       `${name} must not configure endpoint or TLS parameters in the URL (${forbiddenParameters.join(
         ', '

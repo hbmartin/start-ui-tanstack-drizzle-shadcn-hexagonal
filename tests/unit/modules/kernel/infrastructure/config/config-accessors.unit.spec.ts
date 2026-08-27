@@ -392,7 +392,7 @@ describe('server config accessors', () => {
       isLikelyTransactionPooledDatabaseUrl(
         makeTestDatabaseUrl({
           databaseName: 'db',
-          host: 'ep-example-pooler.us-east-1.aws.neon.tech',
+          host: 'ep-example-POOLER.us-east-1.aws.neon.tech',
           port: null,
         })
       )
@@ -401,8 +401,10 @@ describe('server config accessors', () => {
       [
         { pgbouncer: 'true' },
         { PGBOUNCER: 'TRUE' },
+        { ' PGBOUNCER ': ' TRUE ' },
         { pool_mode: 'transaction' },
         { POOL_MODE: 'TRANSACTION' },
+        { ' POOL_MODE ': ' TRANSACTION ' },
       ];
     for (const searchParams of transactionPoolerSearchParams) {
       expect(
@@ -411,10 +413,22 @@ describe('server config accessors', () => {
         )
       ).toBe(true);
     }
+    const duplicateParameterUrl = new URL(
+      makeTestDatabaseUrl({ databaseName: 'db' })
+    );
+    duplicateParameterUrl.searchParams.append('pgbouncer', 'false');
+    duplicateParameterUrl.searchParams.append('pgbouncer', 'true');
     expect(
-      isLikelyTransactionPooledDatabaseUrl(
-        `${makeTestDatabaseUrl({ databaseName: 'db' })}?pgbouncer=false&PGBOUNCER=true`
-      )
+      isLikelyTransactionPooledDatabaseUrl(duplicateParameterUrl.toString())
+    ).toBe(true);
+
+    const duplicatePoolModeUrl = new URL(
+      makeTestDatabaseUrl({ databaseName: 'db' })
+    );
+    duplicatePoolModeUrl.searchParams.append('pool_mode', 'session');
+    duplicatePoolModeUrl.searchParams.append('pool_mode', 'transaction');
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(duplicatePoolModeUrl.toString())
     ).toBe(true);
     expect(
       isLikelyTransactionPooledDatabaseUrl(
@@ -1114,7 +1128,7 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/infrastructure/config/database');
 
     expect(() => getMigrationDatabaseConfig()).toThrow(
-      'DATABASE_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_TLS_POLICY.'
+      'DATABASE_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure runtime TLS with DATABASE_TLS_POLICY and migration TLS with DATABASE_MIGRATION_TLS_POLICY.'
     );
   });
 
