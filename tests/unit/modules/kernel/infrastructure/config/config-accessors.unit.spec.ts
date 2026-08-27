@@ -216,6 +216,9 @@ describe('server config accessors', () => {
     expect(() => getMigrationDatabaseConfig()).toThrow(
       'DATABASE_TLS_POLICY=off'
     );
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'set DATABASE_MIGRATION_TLS_POLICY=verify'
+    );
 
     vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'verify');
     expect(getMigrationDatabaseConfig()).toEqual({
@@ -938,7 +941,7 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/domain/errors/configuration-error');
 
     expect(() => getDatabaseConfig()).toThrow(ConfigurationError);
-    expect(() => getDatabaseConfig()).toThrow('DATABASE_TLS_POLICY');
+    expect(() => getDatabaseConfig()).toThrow('remove those parameters');
   });
 
   it('allows an explicit loopback-only off policy for production verification', async () => {

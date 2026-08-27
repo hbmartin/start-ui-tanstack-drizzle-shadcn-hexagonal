@@ -146,7 +146,7 @@ export const assertDatabaseUrlTls = ({
     throw new ConfigurationError(
       `${name} must not configure endpoint or TLS parameters in the URL (${forbiddenParameters.join(
         ', '
-      )}); use ${policyOverrideName} and the URL authority instead.`
+      )}); remove those parameters and configure the endpoint through the URL authority and TLS through the scoped database policy.`
     );
   }
 

@@ -49,13 +49,24 @@ describe('resolveDatabaseTlsPolicy', () => {
     ).toBe('off');
   });
 
-  it('attributes a rejected policy to its configured source', () => {
+  it('uses neutral names for a programmatic remote opt-out', () => {
     expect(() =>
       resolveDatabaseTlsPolicy({
         configuredPolicy: 'off',
-        policySourceName: 'DATABASE_MIGRATION_TLS_POLICY',
         url: remote,
       })
-    ).toThrow('DATABASE_MIGRATION_TLS_POLICY=off');
+    ).toThrow('database URL uses database TLS policy=off');
+  });
+
+  it('attributes an inherited policy and recommends its scoped override', () => {
+    expect(() =>
+      resolveDatabaseTlsPolicy({
+        configuredPolicy: 'off',
+        policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+        policySourceName: 'DATABASE_TLS_POLICY',
+        urlName: 'DATABASE_MIGRATION_URL',
+        url: remote,
+      })
+    ).toThrow('set DATABASE_MIGRATION_TLS_POLICY=verify');
   });
 });
