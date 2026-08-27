@@ -77,7 +77,24 @@ describe('Cloudflare Hyperdrive database client', () => {
 
     await database.$close();
     await database.$close();
-    expect(mocks.clientEnd).toHaveBeenCalledOnce();
+    expect(mocks.clientEnd).not.toHaveBeenCalled();
+  });
+
+  it('accepts the Hyperdrive-owned Worker transport mode', async () => {
+    const { createHyperdriveDbClient } =
+      await import('@/modules/kernel/infrastructure/db/client');
+    const hyperdriveUrl = new URL(connectionString);
+    hyperdriveUrl.searchParams.set('sslmode', 'disable');
+
+    const database = await createHyperdriveDbClient({
+      connectionString: hyperdriveUrl.toString(),
+    });
+
+    expect(mocks.clientOptions).toEqual([
+      { connectionString: hyperdriveUrl.toString() },
+    ]);
+    await database.$close();
+    expect(mocks.clientEnd).not.toHaveBeenCalled();
   });
 
   it('isolates client error diagnostics from EventEmitter failure handling', async () => {
@@ -164,7 +181,25 @@ describe('Cloudflare Hyperdrive database client', () => {
     }
   );
 
-  it('closes a client whose connection attempt fails', async () => {
+  it.each(['prefer', 'require', 'verify-ca', 'verify-full'])(
+    'rejects the %s TLS mode from a Hyperdrive binding',
+    async (transportMode) => {
+      const { createHyperdriveDbClient } =
+        await import('@/modules/kernel/infrastructure/db/client');
+      const overriddenUrl = new URL(connectionString);
+      overriddenUrl.searchParams.set('sslmode', transportMode);
+
+      await expect(
+        createHyperdriveDbClient(
+          { connectionString: overriddenUrl.toString() },
+          { onError: vi.fn() }
+        )
+      ).rejects.toThrow(/valid PostgreSQL connection string/u);
+      expect(mocks.clientOptions).toEqual([]);
+    }
+  );
+
+  it('leaves failed edge connections to the invocation lifecycle', async () => {
     const connectionFailure = new Error('connect failed');
     mocks.clientConnect.mockRejectedValueOnce(connectionFailure);
     const { createHyperdriveDbClient } =
@@ -173,14 +208,10 @@ describe('Cloudflare Hyperdrive database client', () => {
     await expect(
       createHyperdriveDbClient({ connectionString }, { onError: vi.fn() })
     ).rejects.toBe(connectionFailure);
-    expect(mocks.clientEnd).toHaveBeenCalledOnce();
+    expect(mocks.clientEnd).not.toHaveBeenCalled();
   });
 
-  it('deduplicates concurrent close and permits a retry after failure', async () => {
-    const closeFailure = new Error('close failed');
-    mocks.clientEnd
-      .mockRejectedValueOnce(closeFailure)
-      .mockResolvedValueOnce(undefined);
+  it('releases request ownership without ending the Hyperdrive edge socket', async () => {
     const { createHyperdriveDbClient } =
       await import('@/modules/kernel/infrastructure/db/client');
     const database = await createHyperdriveDbClient(
@@ -190,11 +221,10 @@ describe('Cloudflare Hyperdrive database client', () => {
 
     const firstClose = database.$close();
     const concurrentClose = database.$close();
-    expect(firstClose).toBe(concurrentClose);
-    await expect(firstClose).rejects.toBe(closeFailure);
+    await expect(firstClose).resolves.toBeUndefined();
+    await expect(concurrentClose).resolves.toBeUndefined();
     await expect(database.$close()).resolves.toBeUndefined();
-    await expect(database.$close()).resolves.toBeUndefined();
-    expect(mocks.clientEnd).toHaveBeenCalledTimes(2);
+    expect(mocks.clientEnd).not.toHaveBeenCalled();
   });
 
   it('keeps cached default-client proxies isolated across concurrent requests', async () => {

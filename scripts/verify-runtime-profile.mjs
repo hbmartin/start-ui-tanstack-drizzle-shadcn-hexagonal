@@ -34,7 +34,11 @@ const forbiddenRuntimeTokens = {
   ],
 };
 const requiredRuntimeTokens = {
-  cloudflare: ['cloudflare:workers', 'START_UI_TELEMETRY_METRICS'],
+  cloudflare: [
+    'cloudflare:workers',
+    'START_UI_DATABASE',
+    'START_UI_TELEMETRY_METRICS',
+  ],
   node: ['NodeTracerProvider'],
   vercel: ['@vercel/functions', '@vercel/otel'],
 };
@@ -119,6 +123,126 @@ const assertServerEntryOwners = (filePath, profile) => {
   assert(
     actualOwner === expectedOwner,
     `${filePath} must contain ${profile} server entry owner ${expectedOwner}`
+  );
+};
+
+const propertyKeyName = (property) =>
+  property?.type === 'Property'
+    ? (identifierName(property.key) ?? literalString(property.key))
+    : undefined;
+
+const objectPropertyValue = (objectExpression, key) =>
+  objectExpression.properties.find(
+    (property) => propertyKeyName(property) === key
+  )?.value;
+
+const identifierMemberSignature = ({ type, computed, object, property } = {}) =>
+  [type, computed, identifierName(object), identifierName(property)].join(':');
+
+const findDefaultWorkerFetch = (program, filePath) => {
+  const exports = new Map(program.body.flatMap(namedExportEntries));
+  const defaultLocalName = exports.get('default');
+  const declarations = program.body.flatMap((statement) =>
+    statement.type === 'VariableDeclaration' ? statement.declarations : []
+  );
+  const worker = declarations.find(
+    (declarator) => identifierName(declarator.id) === defaultLocalName
+  )?.init;
+  assert(
+    worker?.type === 'ObjectExpression',
+    `${filePath} must export one default Worker object`
+  );
+  const fetchFunction = objectPropertyValue(worker, 'fetch');
+  assert(
+    fetchFunction?.type === 'FunctionExpression',
+    `${filePath} default Worker must own its fetch method`
+  );
+  return fetchFunction;
+};
+
+const directNamedCalls = (functionNode, localName) => {
+  const allCalls = [];
+  new Visitor({
+    CallExpression(node) {
+      allCalls.push(node);
+    },
+  }).visit(functionNode);
+  const nestedRanges = nestedFunctionRanges(functionNode);
+  return allCalls
+    .filter((node) => identifierName(node.callee) === localName)
+    .filter((node) => !isInsideNestedFunction(node, nestedRanges));
+};
+
+const directReturnStatements = (functionNode) => {
+  const allReturns = [];
+  new Visitor({
+    ReturnStatement(node) {
+      allReturns.push(node);
+    },
+  }).visit(functionNode);
+  const nestedRanges = nestedFunctionRanges(functionNode);
+  return allReturns.filter(
+    (node) => !isInsideNestedFunction(node, nestedRanges)
+  );
+};
+
+const nodeRangeSignature = ({ start, end } = {}) => `${start}:${end}`;
+
+const assertCloudflareDatabaseOwner = (filePath) => {
+  const { program } = readParsedModule(filePath);
+  const fetchFunction = findDefaultWorkerFetch(program, filePath);
+  assert(
+    fetchFunction.params.map(identifierName).join(':') ===
+      'request:environment:context',
+    `${filePath} Worker fetch must expose the active request, environment, and context`
+  );
+  const calls = directNamedCalls(fetchFunction, 'runWithCloudflareDatabase');
+  assert(
+    calls.length === 1,
+    `${filePath} must contain exactly one Cloudflare database request owner`
+  );
+  const [call] = calls;
+  const [options = {}] = call.arguments;
+  const returns = directReturnStatements(fetchFunction);
+  assert(
+    returns.length === 1,
+    `${filePath} Worker fetch must have exactly one database-owned return path`
+  );
+  const [finalStatement = {}] = fetchFunction.body.body.slice(-1);
+  assert(
+    finalStatement.type === 'TryStatement',
+    `${filePath} Worker fetch must return through its top-level database ownership scope`
+  );
+  assert(
+    finalStatement.block.body.length === 1,
+    `${filePath} Worker database ownership scope must contain one return`
+  );
+  const [ownerReturn = {}] = finalStatement.block.body;
+  assert(
+    ownerReturn.type === 'ReturnStatement',
+    `${filePath} Worker database ownership scope must return its response`
+  );
+  assert(
+    nodeRangeSignature(unwrapAwaitExpression(ownerReturn.argument)) ===
+      nodeRangeSignature(call),
+    `${filePath} Worker fetch must return or await its database-owned response`
+  );
+  assert(
+    options.type === 'ObjectExpression',
+    `${filePath} must configure the Cloudflare database request owner`
+  );
+  assert(
+    identifierMemberSignature(objectPropertyValue(options, 'binding')) ===
+      'MemberExpression:false:environment:START_UI_DATABASE',
+    `${filePath} must bind the Cloudflare database owner to environment.START_UI_DATABASE`
+  );
+  assert(
+    identifierName(objectPropertyValue(options, 'handle')) === 'handle',
+    `${filePath} must bind the Cloudflare database owner to the active handle`
+  );
+  assert(
+    identifierName(objectPropertyValue(options, 'request')) === 'request',
+    `${filePath} must bind the Cloudflare database owner to the active request`
   );
 };
 
@@ -537,7 +661,9 @@ const verifyCloudflare = (root, expectedAppSlug) => {
     'Cloudflare production output must not contain .dev.vars files'
   );
   assertDirectory(path.join(output, 'client'));
-  assertOnlyProfileMarker(path.join(output, 'server/index.js'), 'cloudflare');
+  const serverEntry = path.join(output, 'server/index.js');
+  assertOnlyProfileMarker(serverEntry, 'cloudflare');
+  assertCloudflareDatabaseOwner(serverEntry);
   assertRequiredRuntimeTokens(path.join(output, 'server'), 'cloudflare');
   assertNoForbiddenRuntimeTokens(path.join(output, 'server'), 'cloudflare');
 };

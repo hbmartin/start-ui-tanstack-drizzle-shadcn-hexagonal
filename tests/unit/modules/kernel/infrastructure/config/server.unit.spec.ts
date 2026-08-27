@@ -5,6 +5,7 @@ const configMock = vi.hoisted(() => ({
   getEnvClient: vi.fn(),
   getDatabaseConfig: vi.fn(() => ({ driver: 'node-pg' })),
   production: true,
+  skipEnvValidation: false,
   trustedProxyDepth: undefined as number | undefined,
 }));
 
@@ -28,7 +29,7 @@ vi.mock('@/modules/kernel/infrastructure/config/email', () => ({
 }));
 vi.mock('@/modules/kernel/infrastructure/config/env-schema', () => ({
   isProdRuntimeEnvironment: () => configMock.production,
-  shouldSkipEnvValidation: () => false,
+  shouldSkipEnvValidation: () => configMock.skipEnvValidation,
 }));
 vi.mock('@/modules/kernel/infrastructure/config/http', () => ({
   getHttpConfig: () => ({
@@ -54,6 +55,7 @@ describe('runtime-profile server configuration', () => {
     configMock.assertDatabaseDriverForRuntimeProfile.mockClear();
     configMock.getDatabaseConfig.mockClear();
     configMock.production = true;
+    configMock.skipEnvValidation = false;
     configMock.trustedProxyDepth = undefined;
   });
 
@@ -82,13 +84,40 @@ describe('runtime-profile server configuration', () => {
     expect(configMock.getDatabaseConfig).not.toHaveBeenCalled();
   });
 
-  it('rejects Cloudflare live startup until Hyperdrive is injected', async () => {
+  it('requires the exact Cloudflare live database adapter', async () => {
     const { validateServerConfig } =
       await import('@/modules/kernel/infrastructure/config/server');
 
     expect(() => validateServerConfig('cloudflare')).toThrow(
-      'Hyperdrive database adapter'
+      'hyperdrive database adapter'
     );
+    expect(() =>
+      validateServerConfig('cloudflare', {
+        databaseAdapter: 'postgres-node',
+      })
+    ).toThrow('hyperdrive database adapter');
+    expect(() =>
+      validateServerConfig('cloudflare', {
+        databaseAdapter: 'hyperdrive',
+      })
+    ).not.toThrow();
+    expect(
+      configMock.assertDatabaseDriverForRuntimeProfile
+    ).not.toHaveBeenCalled();
+    expect(configMock.getDatabaseConfig).not.toHaveBeenCalled();
+  });
+
+  it('does not let skipped environment parsing bypass the Cloudflare adapter', async () => {
+    configMock.skipEnvValidation = true;
+    const { validateServerConfig } =
+      await import('@/modules/kernel/infrastructure/config/server');
+
+    expect(() => validateServerConfig('cloudflare')).toThrow(
+      'hyperdrive database adapter'
+    );
+    expect(() =>
+      validateServerConfig('cloudflare', { databaseAdapter: 'hyperdrive' })
+    ).not.toThrow();
     expect(
       configMock.assertDatabaseDriverForRuntimeProfile
     ).not.toHaveBeenCalled();

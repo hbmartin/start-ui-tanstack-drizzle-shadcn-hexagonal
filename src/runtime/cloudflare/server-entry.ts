@@ -2,10 +2,12 @@ import type { ServerEntry } from '@tanstack/react-start/server-entry';
 import type { CloudflareOptions } from '@sentry/cloudflare';
 
 import type { CloudflareSentryEnvironment } from '@/composition/telemetry/sentry-cloudflare-options';
+import type { HyperdriveBinding } from '@/modules/kernel/backend';
 
 import type { CloudflareAnalyticsEngine } from './telemetry-adapter';
 
 type CloudflareEnvironment = CloudflareSentryEnvironment & {
+  START_UI_DATABASE?: HyperdriveBinding;
   START_UI_TELEMETRY_METRICS?: CloudflareAnalyticsEngine;
 };
 
@@ -19,7 +21,8 @@ const { initializeCloudflareSentryApplication, runWithCloudflareSentry } =
 const { application, sentryRequestIsolationReady } =
   await initializeCloudflareSentryApplication(Sentry, async () => {
     const kernel = await import('@/modules/kernel/backend');
-    kernel.validateServerConfig('cloudflare');
+    kernel.requireRuntimeDatabaseClient();
+    kernel.validateServerBuildConfig('cloudflare');
     const { createApplicationServerEntry } =
       await import('../create-application-server-entry');
     return createApplicationServerEntry('cloudflare');
@@ -29,6 +32,7 @@ const { createNoOpTelemetry, reportTelemetryFailure } =
   await import('@/platform/telemetry');
 const { createCloudflareTelemetryAdapter } =
   await import('./telemetry-adapter');
+const { runWithCloudflareDatabase } = await import('./database-request');
 const { configureCloudflareRequestTelemetry } =
   await import('./request-telemetry');
 const { scheduleCloudflareRequestFlush } = await import('./request-lifecycle');
@@ -83,14 +87,20 @@ const entry = {
       sentryRequestIsolationReady,
     });
 
-    const handle = () =>
+    const handleApplication = () =>
       application.fetch(request, { context: undefined as never });
-    try {
-      return await fetchCloudflareApplication({
+    const handle = () =>
+      fetchCloudflareApplication({
         context,
-        handle,
+        handle: handleApplication,
         request,
         sentryOptions,
+      });
+    try {
+      return await runWithCloudflareDatabase({
+        binding: environment.START_UI_DATABASE,
+        handle,
+        request,
       });
     } finally {
       scheduleCloudflareRequestFlush(request, (completion) =>

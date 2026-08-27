@@ -24,6 +24,7 @@ export {
   validateServerBuildConfig,
   validateServerConfig,
 } from './infrastructure/config/server';
+export type { RuntimeServerAdapters } from './infrastructure/config/server';
 export type { DatabaseTlsPolicy } from './infrastructure/config/database-tls';
 export {
   createHyperdriveDbClient,

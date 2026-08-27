@@ -1,4 +1,8 @@
-import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
+import {
+  type DatabaseAdapterKind,
+  type RuntimeProfile,
+  runtimeCapabilityRequirements,
+} from '@/platform/runtime/runtime-profile';
 import { getEnvClient } from '@/platform/env/client';
 
 import { ConfigurationError } from '../../domain/errors/configuration-error';
@@ -36,12 +40,17 @@ const validateTrustedClientIpConfiguration = (
 
 const validateRuntimeDatabaseConfiguration = (
   runtimeProfile: RuntimeProfile,
-  requiredRuntimeServices: boolean
+  requiredRuntimeServices: boolean,
+  runtimeAdapters?: RuntimeServerAdapters
 ) => {
   if (runtimeProfile === 'cloudflare') {
-    if (requiredRuntimeServices) {
+    const requiredAdapter = runtimeCapabilityRequirements.cloudflare.database;
+    if (
+      requiredRuntimeServices &&
+      runtimeAdapters?.databaseAdapter !== requiredAdapter
+    ) {
       throw new ConfigurationError(
-        'Cloudflare live startup is unavailable until the Worker entrypoint injects and verifies its Hyperdrive database adapter. Artifact build validation remains available.'
+        `Cloudflare live startup requires the Worker entrypoint to inject and verify the ${requiredAdapter} database adapter.`
       );
     }
     return;
@@ -53,8 +62,18 @@ const validateRuntimeDatabaseConfiguration = (
 
 const validateServerConfiguration = (
   requiredRuntimeServices: boolean,
-  runtimeProfile?: RuntimeProfile
+  runtimeProfile?: RuntimeProfile,
+  runtimeAdapters?: RuntimeServerAdapters
 ) => {
+  if (runtimeProfile === 'cloudflare') {
+    // SKIP_ENV_VALIDATION may relax process-owned environment parsing in
+    // controlled tests, but it must never bypass the request adapter boundary.
+    validateRuntimeDatabaseConfiguration(
+      runtimeProfile,
+      requiredRuntimeServices,
+      runtimeAdapters
+    );
+  }
   if (shouldSkipEnvValidation()) return;
 
   if (runtimeProfile) getEnvClient(runtimeProfile);
@@ -67,13 +86,14 @@ const validateServerConfiguration = (
     );
   }
   getAuthConfig();
-  if (runtimeProfile) {
+  if (runtimeProfile && runtimeProfile !== 'cloudflare') {
     validateRuntimeDatabaseConfiguration(
       runtimeProfile,
-      requiredRuntimeServices
+      requiredRuntimeServices,
+      runtimeAdapters
     );
   } else {
-    getDatabaseConfig();
+    if (!runtimeProfile) getDatabaseConfig();
   }
   getEmailConfig();
   getLoggerConfig();
@@ -85,5 +105,11 @@ const validateServerConfiguration = (
 export const validateServerBuildConfig = (runtimeProfile: RuntimeProfile) =>
   validateServerConfiguration(false, runtimeProfile);
 
-export const validateServerConfig = (runtimeProfile: RuntimeProfile) =>
-  validateServerConfiguration(true, runtimeProfile);
+export type RuntimeServerAdapters = Readonly<{
+  databaseAdapter?: DatabaseAdapterKind;
+}>;
+
+export const validateServerConfig = (
+  runtimeProfile: RuntimeProfile,
+  runtimeAdapters?: RuntimeServerAdapters
+) => validateServerConfiguration(true, runtimeProfile, runtimeAdapters);

@@ -205,7 +205,22 @@ const validateHyperdriveConnectionString = (connectionString: string): void => {
   if (!isPostgreSql || parsed.hostname.length === 0) {
     throw hyperdriveBindingError('a valid ');
   }
-  if (findForbiddenDatabaseUrlParameters(parsed).length > 0) {
+  const unsupportedParameters = findForbiddenDatabaseUrlParameters(
+    parsed
+  ).filter((parameterName) => {
+    if (parameterName !== 'sslmode') return true;
+    const transportModes = [...parsed.searchParams.entries()]
+      .filter(([name]) => name.toLowerCase() === parameterName)
+      .map(([, value]) => value.toLowerCase());
+    // Cloudflare's generated binding uses sslmode=disable for the trusted
+    // Worker-to-Hyperdrive hop. Hyperdrive, not node-postgres, owns the origin
+    // TLS connection; no other URL-owned transport policy is accepted.
+    return (
+      transportModes.length === 0 ||
+      transportModes.some((transportMode) => transportMode !== 'disable')
+    );
+  });
+  if (unsupportedParameters.length > 0) {
     throw hyperdriveBindingError('a valid ');
   }
 };
@@ -235,16 +250,9 @@ export async function createHyperdriveDbClient(
     )
   );
 
-  try {
-    await client.connect();
-  } catch (error) {
-    await client.end().catch(() => undefined);
-    throw error;
-  }
+  await client.connect();
 
   const database = drizzleNodePg(client, { schema, casing: 'camelCase' });
-  let closed = false;
-  let closing: Promise<void> | undefined;
 
   return withDatabaseMetadata(database, {
     adapter: 'hyperdrive',
@@ -252,19 +260,10 @@ export async function createHyperdriveDbClient(
     transactionCapable: true,
     runInTransaction: (work, options) =>
       database.transaction((tx) => work(tx), options),
-    close: () => {
-      if (closed) return Promise.resolve();
-      closing ??= client
-        .end()
-        .then(() => {
-          closed = true;
-          return undefined;
-        })
-        .finally(() => {
-          closing = undefined;
-        });
-      return closing;
-    },
+    // Cloudflare cleans up the Worker-to-Hyperdrive edge connection when the
+    // invocation ends. Its current lifecycle contract explicitly says not to
+    // call client.end(); Hyperdrive keeps the origin-side pool independently.
+    close: () => Promise.resolve(),
   });
 }
 

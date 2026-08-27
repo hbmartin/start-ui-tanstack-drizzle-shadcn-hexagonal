@@ -84,7 +84,7 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/index.js',
-    'createApplicationServerEntry("cloudflare");"cloudflare:workers";START_UI_TELEMETRY_METRICS'
+    'createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const handle=()=>{};try{return await runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS'
   );
   fs.mkdirSync(path.join(root, 'dist/client'));
 };
@@ -154,6 +154,56 @@ describe('runtime artifact verifier', () => {
     expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
       'Vercel Node 24 runtime'
     );
+  });
+
+  it('rejects a Cloudflare artifact with a detached database binding token', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(
+      root,
+      'dist/server/index.js',
+      'createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const handle=()=>{};try{return await runWithCloudflareDatabase({binding:environment.MISSING_DATABASE,handle,request})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";"START_UI_DATABASE";START_UI_TELEMETRY_METRICS'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must bind the Cloudflare database owner to environment.START_UI_DATABASE'
+    );
+  });
+
+  it('rejects a Cloudflare database owner hidden in an unreachable helper', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(
+      root,
+      'dist/server/index.js',
+      'createApplicationServerEntry("cloudflare");function neverCalled(environment,handle,request){return runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}const worker_entry_default={async fetch(request,environment,context){return new Response()}};export{worker_entry_default as default};"cloudflare:workers";START_UI_DATABASE;START_UI_TELEMETRY_METRICS'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must contain exactly one Cloudflare database request owner');
+  });
+
+  it('rejects a Cloudflare database owner after an unwrapped response path', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(
+      root,
+      'dist/server/index.js',
+      'createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const handle=()=>{};if(true)return new Response();return await runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must have exactly one database-owned return path');
   });
 
   it.each([
