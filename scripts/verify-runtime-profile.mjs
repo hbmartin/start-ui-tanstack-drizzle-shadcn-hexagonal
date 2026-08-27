@@ -58,7 +58,7 @@ const assert = (condition, message) => {
 const assertConditions = (conditions, message) =>
   assert(conditions.every(Boolean), message);
 
-const nodeType = ({ type } = {}) => type;
+const nodeType = (node) => node?.type;
 
 const assertFile = (filePath) =>
   assert(fs.statSync(filePath, { throwIfNoEntry: false })?.isFile(), filePath);
@@ -1106,6 +1106,60 @@ const assertCloudflareRequestTelemetryOwner = (
   );
 };
 
+const assertCloudflareLoaderKernelGuard = (loader, filePath) => {
+  const message = `${filePath} application loader must run exact Cloudflare kernel guards`;
+  assert(nodeType(loader.body) === 'BlockStatement', message);
+  assert(loader.body.body.length === 5, message);
+  const kernelOwners = directBodyVariableDeclarators(loader, 'kernel');
+  assert(kernelOwners.length === 1 && kernelOwners[0].index === 0, message);
+  assertExactDirectVariableOwner(kernelOwners[0], 'const', message);
+  const kernelOwner = kernelOwners[0].declarator;
+  assert(identifierName(kernelOwner.id) === 'kernel', message);
+  assert(nodeType(kernelOwner.init) === 'AwaitExpression', message);
+  assert(
+    /^\.\/assets\/backend(?:-[\w-]+)?\.js$/.test(
+      dynamicImportSource(kernelOwner) ?? ''
+    ),
+    message
+  );
+  const [requireStatement, validateStatement] = loader.body.body.slice(1, 3);
+  assertCloudflareLoaderKernelCall(
+    requireStatement,
+    'requireRuntimeDatabaseClient',
+    [],
+    filePath
+  );
+  assertCloudflareLoaderKernelCall(
+    validateStatement,
+    'validateServerBuildConfig',
+    ['cloudflare'],
+    filePath
+  );
+  assert(!mutatedNames(loader).has('kernel'), message);
+};
+
+const assertCloudflareLoaderKernelCall = (
+  statement,
+  method,
+  literalArguments,
+  filePath
+) => {
+  const message = `${filePath} application loader must run exact Cloudflare kernel guards`;
+  assert(nodeType(statement) === 'ExpressionStatement', message);
+  const call = statement.expression;
+  assert(nodeType(call) === 'CallExpression', message);
+  assertConditions(
+    [
+      identifierMemberSignature(call.callee) ===
+        `MemberExpression:false:kernel:${method}`,
+      call.arguments.length === literalArguments.length,
+      call.arguments.map(literalString).join(':') ===
+        literalArguments.join(':'),
+    ],
+    message
+  );
+};
+
 const assertCloudflareApplicationLoader = (loader, filePath) => {
   assert(
     loader?.type === 'ArrowFunctionExpression',
@@ -1119,6 +1173,7 @@ const assertCloudflareApplicationLoader = (loader, filePath) => {
     loader.params.length === 0,
     `${filePath} must load the application through one async isolation callback`
   );
+  assertCloudflareLoaderKernelGuard(loader, filePath);
   const importedOwners = directBodyVariableDeclarators(
     loader,
     'createApplicationServerEntry'
@@ -1126,6 +1181,15 @@ const assertCloudflareApplicationLoader = (loader, filePath) => {
   assert(
     importedOwners.length === 1,
     `${filePath} must import one trusted application server-entry owner`
+  );
+  assert(
+    importedOwners[0].index === 3,
+    `${filePath} must import its application owner after Cloudflare kernel guards`
+  );
+  assertExactDirectVariableOwner(
+    importedOwners[0],
+    'const',
+    `${filePath} must isolate its application server-entry owner`
   );
   const importedOwner = importedOwners[0].declarator;
   assert(
@@ -1165,6 +1229,13 @@ const assertCloudflareApplicationLoader = (loader, filePath) => {
     calls.length === 1,
     `${filePath} must create the Cloudflare application inside request isolation`
   );
+  assertConditions(
+    [
+      calls[0].arguments.length === 1,
+      literalString(calls[0].arguments[0]) === 'cloudflare',
+    ],
+    `${filePath} must create the Cloudflare application inside request isolation`
+  );
   assert(
     importedOwner.end < calls[0].start,
     `${filePath} must import createApplicationServerEntry before using it`
@@ -1173,6 +1244,10 @@ const assertCloudflareApplicationLoader = (loader, filePath) => {
   assert(
     returns.length === 1,
     `${filePath} must return its isolated Cloudflare application`
+  );
+  assert(
+    loader.body.body[4] === returns[0],
+    `${filePath} must return its isolated Cloudflare application after kernel guards`
   );
   assert(
     nodeRangeSignature(unwrapAwaitExpression(returns[0].argument)) ===
@@ -1207,10 +1282,66 @@ const assertUniversalApplicationFrameworkFailure = (
     [captureGuard.alternate === null, captureGuard.test.operator === '&&'],
     message
   );
+  const unexpectedFailure = captureGuard.test.left;
+  const captureClaim = captureGuard.test.right;
+  assert(nodeType(unexpectedFailure) === 'CallExpression', message);
+  assert(nodeType(captureClaim) === 'CallExpression', message);
+  assertConditions(
+    [
+      identifierName(unexpectedFailure.callee) === 'isUnexpectedRequestFailure',
+      unexpectedFailure.arguments.map(identifierName).join(':') === 'error',
+      identifierName(captureClaim.callee) === 'claimRequestException',
+      captureClaim.arguments.map(identifierName).join(':') ===
+        'telemetryCaptureState:error',
+    ],
+    message
+  );
+  assertUniversalApplicationExceptionCapture(
+    captureGuard.consequent.expression,
+    applicationChunk
+  );
   assertConditions(
     [
       nodeType(catchTail) === 'ThrowStatement',
       identifierName(catchTail.argument) === 'error',
+    ],
+    message
+  );
+};
+
+const assertUniversalApplicationExceptionCapture = (
+  captureCall,
+  applicationChunk
+) => {
+  const message = `${applicationChunk} universal request owner must capture unexpected framework failures`;
+  assert(nodeType(captureCall) === 'CallExpression', message);
+  assertConditions(
+    [
+      identifierMemberSignature(captureCall.callee) ===
+        'MemberExpression:false:telemetryProxy:captureException',
+      captureCall.arguments.length === 2,
+      identifierName(captureCall.arguments[0]) === 'error',
+    ],
+    message
+  );
+  const options = ownerProperties(
+    captureCall.arguments[1],
+    applicationChunk,
+    'the universal framework exception capture'
+  );
+  const tags = ownerProperties(
+    options.get('tags'),
+    applicationChunk,
+    'the universal framework exception tags'
+  );
+  assertConditions(
+    [
+      options.size === 2,
+      literalString(options.get('level')) === 'error',
+      tags.size === 2,
+      literalString(tags.get('event')) === 'framework.request.failed',
+      identifierMemberSignature(tags.get('requestId')) ===
+        'MemberExpression:false:context:requestId',
     ],
     message
   );
@@ -1257,11 +1388,11 @@ const assertUniversalApplicationLifecycle = (scope, applicationChunk) => {
   assert(scope.finalizer.body.length === 1, message);
   const [lifecycleScope] = scope.finalizer.body;
   assert(nodeType(lifecycleScope) === 'TryStatement', message);
+  assert(nodeType(lifecycleScope.handler) === 'CatchClause', message);
   assertConditions(
     [
       lifecycleScope.block.body.length === 1,
       lifecycleScope.finalizer === null,
-      nodeType(lifecycleScope.handler) === 'CatchClause',
       lifecycleScope.handler.body.body.length === 0,
     ],
     message
@@ -1376,13 +1507,13 @@ const assertUniversalApplicationRequestHandler = (
   applicationChunk
 ) => {
   const message = `${applicationChunk} universal application server entry must own one live request handler`;
+  assert(nodeType(fetchOwner) === 'FunctionExpression', message);
+  assert(nodeType(fetchOwner.body) === 'BlockStatement', message);
   assertConditions(
     [
-      nodeType(fetchOwner) === 'FunctionExpression',
       fetchOwner.async,
       fetchOwner.generator === false,
       fetchOwner.params.map(identifierName).join(':') === 'request',
-      nodeType(fetchOwner.body) === 'BlockStatement',
       fetchOwner.body.body.length === 5,
     ],
     message
@@ -1420,16 +1551,17 @@ const assertUniversalApplicationScope = (statements, applicationChunk) => {
     statements;
   assert(nodeType(requestOwner) === 'VariableDeclaration', message);
   assert(nodeType(disabledScope) === 'IfStatement', message);
+  assert(nodeType(disabledScope.test) === 'UnaryExpression', message);
+  assert(nodeType(disabledScope.consequent) === 'ReturnStatement', message);
+  const disabledCall = disabledScope.consequent.argument;
+  assert(nodeType(disabledCall) === 'CallExpression', message);
   assertConditions(
     [
       disabledScope.alternate === null,
-      nodeType(disabledScope.test) === 'UnaryExpression',
       disabledScope.test.operator === '!',
       identifierName(disabledScope.test.argument) === 'requestScope',
-      nodeType(disabledScope.consequent) === 'ReturnStatement',
-      identifierName(disabledScope.consequent.argument?.callee) ===
-        'handleRequest',
-      disabledScope.consequent.argument?.arguments.length === 0,
+      identifierName(disabledCall.callee) === 'handleRequest',
+      disabledCall.arguments.length === 0,
     ],
     message
   );
@@ -1469,12 +1601,13 @@ const assertUniversalApplicationRunner = (statement, applicationChunk) => {
   const memoize = memoizeStatement?.expression;
   assert(nodeType(memoizeStatement) === 'ExpressionStatement', message);
   assert(nodeType(memoize) === 'AssignmentExpression', message);
+  assert(nodeType(memoize.right) === 'CallExpression', message);
   assertConditions(
     [
       memoize.operator === '??=',
       identifierName(memoize.left) === 'applicationResult',
-      identifierName(memoize.right?.callee) === 'handleRequest',
-      memoize.right?.arguments.length === 0,
+      identifierName(memoize.right.callee) === 'handleRequest',
+      memoize.right.arguments.length === 0,
       nodeType(runnerReturn) === 'ReturnStatement',
       identifierName(runnerReturn.argument) === 'applicationResult',
     ],
@@ -1496,33 +1629,35 @@ const assertUniversalApplicationScopeFallback = (scope, applicationChunk) => {
     message
   );
   const scopedReturn = scope.block.body[0];
+  assert(nodeType(scopedReturn) === 'ReturnStatement', message);
+  const scopedCall = scopedReturn.argument;
+  assert(nodeType(scopedCall) === 'CallExpression', message);
   assertConditions(
     [
-      nodeType(scopedReturn) === 'ReturnStatement',
-      identifierName(scopedReturn.argument?.callee) === 'requestScope',
-      scopedReturn.argument?.arguments.length === 1,
-      identifierName(scopedReturn.argument?.arguments[0]) ===
-        'runApplicationOnce',
+      identifierName(scopedCall.callee) === 'requestScope',
+      scopedCall.arguments.length === 1,
+      identifierName(scopedCall.arguments[0]) === 'runApplicationOnce',
     ],
     message
   );
   const [reportStatement, fallbackReturn] = scope.handler.body.body;
   const reportCall = reportStatement?.expression;
+  assert(nodeType(reportStatement) === 'ExpressionStatement', message);
+  assert(nodeType(reportCall) === 'CallExpression', message);
+  assert(nodeType(fallbackReturn) === 'ReturnStatement', message);
+  assert(nodeType(fallbackReturn.argument) === 'LogicalExpression', message);
+  const fallbackCall = fallbackReturn.argument.right;
+  assert(nodeType(fallbackCall) === 'CallExpression', message);
   assertConditions(
     [
-      nodeType(reportStatement) === 'ExpressionStatement',
-      nodeType(reportCall) === 'CallExpression',
       identifierName(reportCall.callee) === 'reportTelemetryFailure',
       reportCall.arguments.length === 2,
       literalString(reportCall.arguments[0]) === 'sentry.request_scope',
       identifierName(reportCall.arguments[1]) === 'failure',
-      nodeType(fallbackReturn) === 'ReturnStatement',
-      nodeType(fallbackReturn.argument) === 'LogicalExpression',
       fallbackReturn.argument.operator === '??',
       identifierName(fallbackReturn.argument.left) === 'applicationResult',
-      identifierName(fallbackReturn.argument.right?.callee) ===
-        'runApplicationOnce',
-      fallbackReturn.argument.right?.arguments.length === 0,
+      identifierName(fallbackCall.callee) === 'runApplicationOnce',
+      fallbackCall.arguments.length === 0,
     ],
     message
   );
@@ -1558,6 +1693,33 @@ const assertCloudflareApplicationChunkImports = (owner, applicationChunk) => {
   }
 };
 
+const assertUniversalApplicationHelperProvenance = (
+  program,
+  applicationChunk
+) => {
+  const helperOwners = [
+    ['reportTelemetryFailure', /^\.\/telemetry(?:-[\w-]+)?\.js$/],
+    ['claimRequestException', /^\.\/request-exception-state(?:-[\w-]+)?\.js$/],
+    [
+      'createRequestExceptionCaptureState',
+      /^\.\/request-exception-state(?:-[\w-]+)?\.js$/,
+    ],
+    [
+      'bindRequestExceptionState',
+      /^\.\/request-exception-state(?:-[\w-]+)?\.js$/,
+    ],
+    ['isUnexpectedRequestFailure', /^\.\/request-failure(?:-[\w-]+)?\.js$/],
+  ];
+  for (const [helper, sourcePattern] of helperOwners) {
+    assertExactStaticChunkHelper(
+      program,
+      applicationChunk,
+      helper,
+      sourcePattern
+    );
+  }
+};
+
 const assertCloudflareApplicationChunkBehavior = (
   program,
   applicationChunk
@@ -1584,6 +1746,7 @@ const assertCloudflareApplicationChunkBehavior = (
     nodeType(owner.body) === 'BlockStatement' && owner.body.body.length === 3,
     `${applicationChunk} must import owners before returning one TanStack server entry`
   );
+  assertUniversalApplicationHelperProvenance(program, applicationChunk);
   assertCloudflareApplicationChunkImports(owner, applicationChunk);
   const applicationReturn = owner.body.body[2];
   assert(
@@ -1613,6 +1776,7 @@ const assertCloudflareApplicationChunkBehavior = (
     entryOptions.get('fetch'),
     applicationChunk
   );
+  assertTrustedChunkBuiltIns(program, applicationChunk, { crypto: 1 });
 };
 
 const assertCloudflareApplicationChunkProvenance = (
@@ -1623,7 +1787,10 @@ const assertCloudflareApplicationChunkProvenance = (
   const manifestFile = path.join(artifactRoot, '.vite', 'manifest.json');
   assertFile(manifestFile);
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
-  const assetFile = path.relative(artifactRoot, applicationChunk);
+  const assetFile = path
+    .relative(artifactRoot, applicationChunk)
+    .split(path.sep)
+    .join('/');
   const sources = viteManifestEntries(manifest, manifestFile).filter(
     (entry) => entry.file === assetFile
   );
@@ -4800,6 +4967,14 @@ const assertCloudflareFetchStatementSequence = (fetchFunction, filePath) => {
   );
 };
 
+const assertCloudflareEntryModuleBoundary = (program, filePath) => {
+  assertTrustedChunkBuiltIns(program, filePath, { Response: 0 });
+  assert(
+    program.body.length === 13,
+    `${filePath} must contain only its bounded Cloudflare module ownership sequence`
+  );
+};
+
 const assertCloudflareDatabaseOwner = (filePath) => {
   const { program } = readParsedModule(filePath);
   assertCloudflareSentryOwner(program, filePath);
@@ -4846,6 +5021,7 @@ const assertCloudflareDatabaseOwner = (filePath) => {
     identifierName(options.get('request')) === 'request',
     `${filePath} must bind the Cloudflare database owner to the active request`
   );
+  assertCloudflareEntryModuleBoundary(program, filePath);
 };
 
 const propertyLocalName = (property) => identifierName(property?.value);
