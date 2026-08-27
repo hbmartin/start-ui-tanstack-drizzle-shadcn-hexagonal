@@ -243,9 +243,8 @@ const directCatchBindingNames = (functionNode, nestedRanges) => {
   return names;
 };
 
-const directDeclaredNames = (functionNode) => {
-  const nestedRanges = nestedFunctionRanges(functionNode);
-  const names = directCatchBindingNames(functionNode, nestedRanges);
+const directDeclaredNames = (functionNode, nestedRanges, catchBindings) => {
+  const names = new Set(catchBindings);
   new Visitor({
     ClassDeclaration(node) {
       if (isInsideContainingFunction(node, nestedRanges)) return;
@@ -302,6 +301,7 @@ const mutatedNames = (functionNode) => {
 const assertNoTrustedCloudflareOverrides = (declared, mutated, filePath) => {
   const trustedOwners = [
     'application',
+    'configureCloudflareRequestTelemetry',
     'fetchCloudflareApplication',
     'runWithCloudflareDatabase',
   ];
@@ -341,14 +341,59 @@ const assertNoActiveBindingOverrides = (catchBindings, mutated, filePath) => {
   }
 };
 
+const assertCloudflareSentryOptionsBinding = (fetchFunction, filePath) => {
+  const declarators = directVariableDeclarators(fetchFunction, 'sentryOptions');
+  assert(
+    declarators.length === 1,
+    `${filePath} Worker fetch must declare validated Sentry options exactly once`
+  );
+  const [declarator] = declarators;
+  assert(
+    declarator.id.type === 'ObjectPattern',
+    `${filePath} Worker fetch must destructure validated Sentry options`
+  );
+  assert(
+    declarator.id.properties.length === 1,
+    `${filePath} Worker fetch must bind only validated Sentry options`
+  );
+  const [property] = declarator.id.properties;
+  assert(
+    propertyKeyName(property) === 'sentryOptions',
+    `${filePath} Worker fetch must bind the validated Sentry options property`
+  );
+  assert(
+    identifierName(property.value) === 'sentryOptions',
+    `${filePath} Worker fetch must preserve the validated Sentry options name`
+  );
+  assert(
+    property.shorthand,
+    `${filePath} Worker fetch must bind validated Sentry options by shorthand`
+  );
+  const initializer = unwrapAwaitExpression(declarator.init);
+  assert(
+    initializer?.type === 'CallExpression',
+    `${filePath} Worker fetch must call request telemetry configuration`
+  );
+  assert(
+    identifierName(initializer.callee) ===
+      'configureCloudflareRequestTelemetry',
+    `${filePath} Worker fetch must initialize validated Sentry options from request telemetry`
+  );
+};
+
 const assertNoCloudflareOwnerOverrides = (fetchFunction, filePath) => {
   const nestedRanges = nestedFunctionRanges(fetchFunction);
   const catchBindings = directCatchBindingNames(fetchFunction, nestedRanges);
-  const declared = directDeclaredNames(fetchFunction);
+  const declared = directDeclaredNames(
+    fetchFunction,
+    nestedRanges,
+    catchBindings
+  );
   const mutated = mutatedNames(fetchFunction);
   assertNoTrustedCloudflareOverrides(declared, mutated, filePath);
   assertNoActiveParameterOverrides(declared, mutated, filePath);
   assertNoActiveBindingOverrides(catchBindings, mutated, filePath);
+  assertCloudflareSentryOptionsBinding(fetchFunction, filePath);
 };
 
 const identifierOccurrenceCount = (functionNode, localName) => {
@@ -364,6 +409,7 @@ const identifierOccurrenceCount = (functionNode, localName) => {
 const assertExactCloudflareOwnerUsage = (fetchFunction, filePath) => {
   const exactUsages = [
     ['application', 1],
+    ['configureCloudflareRequestTelemetry', 1],
     ['fetchCloudflareApplication', 1],
     ['runWithCloudflareDatabase', 1],
   ];
@@ -408,6 +454,105 @@ const hasIdentifierOutsideRanges = (program, localName, allowedRanges) => {
   return unexpected;
 };
 
+const shorthandPropertySignature = (property = {}) =>
+  [
+    property.type,
+    property.computed,
+    property.shorthand,
+    propertyKeyName(property),
+    identifierName(property.value),
+  ].join(':');
+
+const shorthandBindingSignature = ({ id = {} } = {}) => {
+  const properties = id.properties ?? [];
+  const [property] = properties;
+  return [
+    id.type,
+    properties.length,
+    shorthandPropertySignature(property),
+  ].join(':');
+};
+
+const assertCloudflareRequestTelemetryChunk = (
+  entryFile,
+  importSource,
+  exportedName
+) => {
+  const artifactRoot = path.dirname(entryFile);
+  const chunkFile = path.resolve(artifactRoot, importSource);
+  assert(
+    isWithinDirectory(chunkFile, artifactRoot),
+    `${entryFile} must keep trusted owner ${exportedName} inside its artifact`
+  );
+  assertFile(chunkFile);
+  const { program } = readParsedModule(chunkFile);
+  const exports = program.body
+    .filter(
+      (statement) =>
+        statement.type === 'ExportNamedDeclaration' && !statement.source
+    )
+    .flatMap(namedExportEntries)
+    .filter(([name]) => name === exportedName);
+  assert(
+    exports.length === 1 && exports[0][1] === exportedName,
+    `${chunkFile} must export trusted owner ${exportedName} from one local binding`
+  );
+  const topLevelDeclarators = topLevelBindingDeclarators(program, exportedName);
+  const declarators = directVariableDeclarators(program, exportedName);
+  assert(
+    topLevelDeclarators.length === 1,
+    `${chunkFile} must define trusted owner ${exportedName} as one local function`
+  );
+  assert(
+    declarators.length === 1,
+    `${chunkFile} must define trusted owner ${exportedName} as one local function`
+  );
+  assert(
+    topLevelDeclarators[0] === declarators[0],
+    `${chunkFile} must define trusted owner ${exportedName} as one local function`
+  );
+  assert(
+    isFunctionExpression(declarators[0].init),
+    `${chunkFile} must define trusted owner ${exportedName} as one local function`
+  );
+  assert(
+    !mutatedNames(program).has(exportedName),
+    `${chunkFile} must not mutate trusted owner ${exportedName}`
+  );
+};
+
+const assertCloudflareRequestTelemetryOwner = (
+  program,
+  fetchFunction,
+  filePath
+) => {
+  const owner = 'configureCloudflareRequestTelemetry';
+  const declarators = topLevelBindingDeclarators(program, owner);
+  assert(
+    declarators.length === 1,
+    `${filePath} must declare trusted owner ${owner} exactly once`
+  );
+  const [declarator] = declarators;
+  assert(
+    shorthandBindingSignature(declarator) ===
+      `ObjectPattern:1:Property:false:true:${owner}:${owner}`,
+    `${filePath} must import trusted owner ${owner} by exact shorthand`
+  );
+  const importSource = dynamicImportSource(declarator);
+  assert(
+    /^\.\/assets\/request-telemetry(?:-[\w-]+)?\.js$/.test(importSource ?? ''),
+    `${filePath} must initialize trusted owner ${owner} from its runtime owner`
+  );
+  assertCloudflareRequestTelemetryChunk(filePath, importSource, owner);
+  assert(
+    !hasIdentifierOutsideRanges(program, owner, [
+      [fetchFunction.start, fetchFunction.end],
+      [declarator.id.start, declarator.id.end],
+    ]),
+    `${filePath} must not alias trusted owner ${owner}`
+  );
+};
+
 const assertNoProgramCloudflareOwnerAliases = (
   program,
   fetchFunction,
@@ -434,6 +579,7 @@ const assertNoProgramCloudflareOwnerAliases = (
       `${filePath} must not alias trusted owner ${owner}`
     );
   }
+  assertCloudflareRequestTelemetryOwner(program, fetchFunction, filePath);
 };
 
 const ownerProperties = (node, filePath, label) => {

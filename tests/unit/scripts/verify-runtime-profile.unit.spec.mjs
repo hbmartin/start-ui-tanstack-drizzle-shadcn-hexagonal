@@ -24,6 +24,9 @@ const writeJson = (root, relativePath, value) =>
 
 const cloudflareSentryOwner =
   'const fetchCloudflareApplication=({context,handle,request,sentryOptions})=>sentryOptions?runWithCloudflareSentry({api:Sentry,handle,request,requestOptions:{captureErrors:false,context,options:sentryOptions,request}}):handle();';
+const cloudflareRuntimeOwners =
+  'const {configureCloudflareRequestTelemetry}=await import("./assets/request-telemetry-fixture.js");' +
+  cloudflareSentryOwner;
 
 const createNodeArtifact = (root) => {
   writeJson(root, '.output/node/nitro.json', {
@@ -99,7 +102,12 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/index.js',
-    `${cloudflareSentryOwner}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const sentryOptions=configure();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
+    `${cloudflareRuntimeOwners}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const {sentryOptions}=configureCloudflareRequestTelemetry();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
+  );
+  write(
+    root,
+    'dist/server/assets/request-telemetry-fixture.js',
+    'const configureCloudflareRequestTelemetry=()=>({});export{configureCloudflareRequestTelemetry};'
   );
   fs.mkdirSync(path.join(root, 'dist/client'));
 };
@@ -177,7 +185,7 @@ describe('runtime artifact verifier', () => {
     write(
       root,
       'dist/server/index.js',
-      `${cloudflareSentryOwner}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const sentryOptions=configure();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.MISSING_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";"START_UI_DATABASE";START_UI_TELEMETRY_METRICS`
+      `${cloudflareRuntimeOwners}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const {sentryOptions}=configureCloudflareRequestTelemetry();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.MISSING_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";"START_UI_DATABASE";START_UI_TELEMETRY_METRICS`
     );
 
     expect(() =>
@@ -227,7 +235,7 @@ describe('runtime artifact verifier', () => {
     write(
       root,
       'dist/server/index.js',
-      `${cloudflareSentryOwner}createApplicationServerEntry("cloudflare");function neverCalled(environment,handle,request){return runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}const worker_entry_default={async fetch(request,environment,context){return new Response()}};export{worker_entry_default as default};"cloudflare:workers";START_UI_DATABASE;START_UI_TELEMETRY_METRICS`
+      `${cloudflareRuntimeOwners}createApplicationServerEntry("cloudflare");function neverCalled(environment,handle,request){return runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle,request})}const worker_entry_default={async fetch(request,environment,context){const {sentryOptions}=configureCloudflareRequestTelemetry();return new Response()}};export{worker_entry_default as default};"cloudflare:workers";START_UI_DATABASE;START_UI_TELEMETRY_METRICS`
     );
 
     expect(() =>
@@ -243,7 +251,7 @@ describe('runtime artifact verifier', () => {
     write(
       root,
       'dist/server/index.js',
-      `${cloudflareSentryOwner}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const sentryOptions=configure();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});if(true)return new Response();try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
+      `${cloudflareRuntimeOwners}createApplicationServerEntry("cloudflare");const worker_entry_default={async fetch(request,environment,context){const {sentryOptions}=configureCloudflareRequestTelemetry();const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});if(true)return new Response();try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
     );
 
     expect(() =>
@@ -450,8 +458,8 @@ describe('runtime artifact verifier', () => {
         fs
           .readFileSync(entryPath, 'utf8')
           .replace(
-            'const sentryOptions=configure();',
-            `${redeclaration}const sentryOptions=configure();`
+            'const {sentryOptions}=configureCloudflareRequestTelemetry();',
+            `${redeclaration}const {sentryOptions}=configureCloudflareRequestTelemetry();`
           )
       );
 
@@ -561,8 +569,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const sentryOptions=configure();',
-          'const unrelated=()=>{try{throw 1}catch(request){return request}};const sentryOptions=configure();'
+          'const {sentryOptions}=configureCloudflareRequestTelemetry();',
+          'const unrelated=()=>{try{throw 1}catch(request){return request}};const {sentryOptions}=configureCloudflareRequestTelemetry();'
         )
     );
 
@@ -571,6 +579,219 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toBe('cloudflare');
+  });
+
+  it('rejects redeclared validated Sentry options', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const {sentryOptions}=configureCloudflareRequestTelemetry();',
+          'var {sentryOptions}=configureCloudflareRequestTelemetry();var {sentryOptions}={sentryOptions:void 0};'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'Worker fetch must declare validated Sentry options exactly once'
+    );
+  });
+
+  it('rejects Sentry options not initialized by request telemetry', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const {sentryOptions}=configureCloudflareRequestTelemetry();',
+          'const {sentryOptions}=bypassTelemetry();'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'Worker fetch must initialize validated Sentry options from request telemetry'
+    );
+  });
+
+  it('rejects a fetch-local request telemetry configurator', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const {sentryOptions}=configureCloudflareRequestTelemetry();',
+          'const configureCloudflareRequestTelemetry=()=>({sentryOptions:void 0});const {sentryOptions}=configureCloudflareRequestTelemetry();'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'Worker fetch must not override trusted owner configureCloudflareRequestTelemetry'
+    );
+  });
+
+  it('rejects a request telemetry configurator from an untrusted chunk', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace('request-telemetry-fixture.js', 'telemetry-bypass.js')
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must initialize trusted owner configureCloudflareRequestTelemetry from its runtime owner'
+    );
+  });
+
+  it('rejects a missing request telemetry owner chunk', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace('request-telemetry-fixture.js', 'request-telemetry-missing.js')
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('request-telemetry-missing.js');
+  });
+
+  it('rejects an aliased request telemetry configurator import', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          '{configureCloudflareRequestTelemetry}=await import',
+          '{bypass:configureCloudflareRequestTelemetry}=await import'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must import trusted owner configureCloudflareRequestTelemetry by exact shorthand'
+    );
+  });
+
+  it('rejects a request telemetry configurator re-export', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(
+      root,
+      'dist/server/assets/request-telemetry-fixture.js',
+      'export{configureCloudflareRequestTelemetry}from"./bypass.js";'
+    );
+    write(
+      root,
+      'dist/server/assets/bypass.js',
+      'const configureCloudflareRequestTelemetry=()=>({sentryOptions:void 0});export{configureCloudflareRequestTelemetry};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must export trusted owner configureCloudflareRequestTelemetry from one local binding'
+    );
+  });
+
+  it('rejects a reassigned request telemetry configurator export', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(
+      root,
+      'dist/server/assets/request-telemetry-fixture.js',
+      'let configureCloudflareRequestTelemetry=()=>({sentryOptions:{}});configureCloudflareRequestTelemetry=()=>({sentryOptions:void 0});export{configureCloudflareRequestTelemetry};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must not mutate trusted owner configureCloudflareRequestTelemetry'
+    );
+  });
+
+  it('rejects a block-level request telemetry configurator reinitialization', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(
+      root,
+      'dist/server/assets/request-telemetry-fixture.js',
+      'var configureCloudflareRequestTelemetry=()=>({sentryOptions:{}});{var configureCloudflareRequestTelemetry=()=>({sentryOptions:void 0})}export{configureCloudflareRequestTelemetry};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must define trusted owner configureCloudflareRequestTelemetry as one local function'
+    );
+  });
+
+  it('rejects an unreachable request telemetry configurator declaration', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(
+      root,
+      'dist/server/assets/request-telemetry-fixture.js',
+      'if(false){var configureCloudflareRequestTelemetry=()=>({})}export{configureCloudflareRequestTelemetry};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'must define trusted owner configureCloudflareRequestTelemetry as one local function'
+    );
   });
 
   it('rejects fetch-local substitutions for trusted Cloudflare owners', () => {
@@ -583,8 +804,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const sentryOptions=configure();',
-          'const fetchCloudflareApplication=({handle})=>handle();const application={fetch:()=>new Response("bypassed")};const runWithCloudflareDatabase=({handle})=>handle();const sentryOptions=configure();'
+          'const {sentryOptions}=configureCloudflareRequestTelemetry();',
+          'const fetchCloudflareApplication=({handle})=>handle();const application={fetch:()=>new Response("bypassed")};const runWithCloudflareDatabase=({handle})=>handle();const {sentryOptions}=configureCloudflareRequestTelemetry();'
         )
     );
 
@@ -671,8 +892,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const sentryOptions=configure();',
-          'Object.assign(application,{fetch:()=>new Response("bypassed")});const sentryOptions=configure();'
+          'const {sentryOptions}=configureCloudflareRequestTelemetry();',
+          'Object.assign(application,{fetch:()=>new Response("bypassed")});const {sentryOptions}=configureCloudflareRequestTelemetry();'
         )
     );
 
@@ -694,8 +915,8 @@ describe('runtime artifact verifier', () => {
         `${cloudflareSentryOwner}const appAlias=application;createApplicationServerEntry`
       )
       .replace(
-        'const sentryOptions=configure();',
-        'Object.assign(appAlias,{fetch:()=>new Response("bypassed")});const sentryOptions=configure();'
+        'const {sentryOptions}=configureCloudflareRequestTelemetry();',
+        'Object.assign(appAlias,{fetch:()=>new Response("bypassed")});const {sentryOptions}=configureCloudflareRequestTelemetry();'
       );
     write(root, 'dist/server/index.js', source);
 
