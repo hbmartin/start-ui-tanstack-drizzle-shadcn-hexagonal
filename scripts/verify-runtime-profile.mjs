@@ -288,9 +288,7 @@ const mutatedNames = (functionNode) => {
   return names;
 };
 
-const assertNoCloudflareOwnerOverrides = (fetchFunction, filePath) => {
-  const declared = directDeclaredNames(fetchFunction);
-  const mutated = mutatedNames(fetchFunction);
+const assertNoTrustedCloudflareOverrides = (declared, mutated, filePath) => {
   const trustedOwners = [
     'application',
     'fetchCloudflareApplication',
@@ -302,12 +300,22 @@ const assertNoCloudflareOwnerOverrides = (fetchFunction, filePath) => {
       `${filePath} Worker fetch must not override trusted owner ${owner}`
     );
   }
+};
+
+const assertNoActiveParameterOverrides = (declared, mutated, filePath) => {
+  const activeParameters = ['context', 'environment', 'request'];
+  for (const parameter of activeParameters) {
+    assert(
+      !declared.has(parameter) && !mutated.has(parameter),
+      `${filePath} Worker fetch must not override active parameter ${parameter}`
+    );
+  }
+};
+
+const assertNoActiveBindingMutations = (mutated, filePath) => {
   const activeBindings = [
-    'context',
-    'environment',
     'handleApplication',
     'handleDatabase',
-    'request',
     'sentryOptions',
   ];
   for (const binding of activeBindings) {
@@ -316,6 +324,14 @@ const assertNoCloudflareOwnerOverrides = (fetchFunction, filePath) => {
       `${filePath} Worker fetch must not mutate active binding ${binding}`
     );
   }
+};
+
+const assertNoCloudflareOwnerOverrides = (fetchFunction, filePath) => {
+  const declared = directDeclaredNames(fetchFunction);
+  const mutated = mutatedNames(fetchFunction);
+  assertNoTrustedCloudflareOverrides(declared, mutated, filePath);
+  assertNoActiveParameterOverrides(declared, mutated, filePath);
+  assertNoActiveBindingMutations(mutated, filePath);
 };
 
 const identifierOccurrenceCount = (functionNode, localName) => {
@@ -481,6 +497,10 @@ const assertCloudflareSentryOwner = (program, filePath) => {
   assert(
     owner?.type === 'ArrowFunctionExpression',
     `${filePath} must define its active Cloudflare Sentry request owner`
+  );
+  assert(
+    owner.params.length === 1,
+    `${filePath} Cloudflare Sentry owner must accept exactly one request input`
   );
   const [parameters = {}] = owner.params;
   assert(

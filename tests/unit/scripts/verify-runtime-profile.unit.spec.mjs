@@ -432,6 +432,59 @@ describe('runtime artifact verifier', () => {
     ).toThrow('active database handler must accept no substitutable inputs');
   });
 
+  it.each([
+    ['request', 'var request=new Request("https://bypassed.test");'],
+    [
+      'environment',
+      'var environment={START_UI_DATABASE:{connectionString:"postgresql://bypassed.test/app"}};',
+    ],
+  ])(
+    'rejects var redeclaration of the active fetch %s parameter',
+    (parameter, redeclaration) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const entryPath = path.join(root, 'dist/server/index.js');
+      write(
+        root,
+        'dist/server/index.js',
+        fs
+          .readFileSync(entryPath, 'utf8')
+          .replace(
+            'const sentryOptions=configure();',
+            `${redeclaration}const sentryOptions=configure();`
+          )
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(`Worker fetch must not override active parameter ${parameter}`);
+    }
+  );
+
+  it('rejects an extra parameter that shadows the Sentry wrapper', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          '({context,handle,request,sentryOptions})=>',
+          '({context,handle,request,sentryOptions},runWithCloudflareSentry=({handle})=>handle())=>'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Cloudflare Sentry owner must accept exactly one request input');
+  });
+
   it('rejects fetch-local substitutions for trusted Cloudflare owners', () => {
     const root = fixture();
     createCloudflareArtifact(root);
