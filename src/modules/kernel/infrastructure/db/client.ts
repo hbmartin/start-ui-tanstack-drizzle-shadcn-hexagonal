@@ -22,6 +22,7 @@ import {
 
 import * as schema from './schema';
 import {
+  attachDatabasePoolErrorHandlers,
   createDatabaseClientErrorHandler,
   type DatabaseClientErrorHandler,
 } from './client-error-handler';
@@ -69,9 +70,10 @@ function createNeonWebsocketDb(
     schema,
     casing: 'camelCase',
   });
-  database.$client.on(
-    'error',
-    createDatabaseClientErrorHandler('database.neon_websocket.pool', onError)
+  attachDatabasePoolErrorHandlers(
+    database.$client,
+    'database.neon_websocket.client',
+    onError
   );
 
   return withDatabaseMetadata(database, {
@@ -149,12 +151,10 @@ export function createDbClient(options?: {
     connectionString: url,
     ssl: nodePostgresSslForPolicy(tlsPolicy),
   });
-  pool.on(
-    'error',
-    createDatabaseClientErrorHandler(
-      'database.node_postgres.pool',
-      options?.onError
-    )
+  attachDatabasePoolErrorHandlers(
+    pool,
+    'database.node_postgres.client',
+    options?.onError
   );
   const database = drizzleNodePg(pool, { schema, casing: 'camelCase' });
 

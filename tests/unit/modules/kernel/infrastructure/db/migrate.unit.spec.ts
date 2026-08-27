@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   migrationClient: {
     connect: vi.fn(),
     end: vi.fn(),
+    on: vi.fn(),
     query: vi.fn(),
   },
   neonClientConfig: undefined as string | undefined,
@@ -185,6 +186,10 @@ describe('createMigrationDbClient', () => {
       casing: 'camelCase',
     });
     expect(mocks.migrationClient.connect).toHaveBeenCalledOnce();
+    expect(mocks.migrationClient.on).toHaveBeenCalledWith(
+      'error',
+      expect.any(Function)
+    );
     expect(db.$migrationDriver).toBe('node-pg');
   });
 
@@ -208,6 +213,10 @@ describe('createMigrationDbClient', () => {
       casing: 'camelCase',
     });
     expect(mocks.migrationClient.connect).toHaveBeenCalledOnce();
+    expect(mocks.migrationClient.on).toHaveBeenCalledWith(
+      'error',
+      expect.any(Function)
+    );
     expect(db.$migrationDriver).toBe('neon-websocket');
   });
 

@@ -22,6 +22,7 @@ import {
 import { assertDatabaseTlsPolicy } from '@/modules/kernel/infrastructure/config/database-tls';
 import { assertDatabaseUrlTls } from '@/modules/kernel/infrastructure/config/url-security';
 
+import { createDatabaseClientErrorHandler } from './client-error-handler';
 import * as schema from './schema';
 import { nodePostgresSslForPolicy } from './node-postgres-tls';
 
@@ -73,6 +74,10 @@ function createNodePgMigrationDb(
     connectionString: url,
     ssl: nodePostgresSslForPolicy(tlsPolicy),
   });
+  client.on(
+    'error',
+    createDatabaseClientErrorHandler('database.migration.node_postgres.client')
+  );
   const db = drizzleNodePg(client, { schema, casing: 'camelCase' });
 
   return withMigrationMetadata(db, {
@@ -87,6 +92,10 @@ function createNeonWebsocketMigrationDb(url: string): MigrationDatabase {
     WebSocket as typeof neonConfig.webSocketConstructor;
 
   const client = new NeonClient(url);
+  client.on(
+    'error',
+    createDatabaseClientErrorHandler('database.migration.neon.client')
+  );
   const db = drizzleNeonWebsocket({
     client,
     ws: WebSocket,

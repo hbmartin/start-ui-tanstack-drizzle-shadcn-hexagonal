@@ -61,12 +61,19 @@ describe('database client', () => {
     const db = createDbClient({ onError, url: databaseUrl });
     clients.push(db);
     const pool = db.$client as unknown as {
-      emit(eventName: string, error: Error): boolean;
+      emit(eventName: string, value: unknown): boolean;
     };
+    const physicalClient = { on: vi.fn() };
     const poolFailure = new Error('idle connection failed');
 
-    expect(() => pool.emit('error', poolFailure)).not.toThrow();
+    pool.emit('connect', physicalClient);
+    const errorListener = physicalClient.on.mock.calls.find(
+      ([eventName]) => eventName === 'error'
+    )?.[1] as ((error: unknown) => void) | undefined;
+    expect(() => errorListener?.(poolFailure)).not.toThrow();
     expect(onError).toHaveBeenCalledWith(poolFailure);
+    expect(() => pool.emit('error', poolFailure)).not.toThrow();
+    expect(onError).toHaveBeenCalledOnce();
   });
 
   it('captures idle pool errors through actionable telemetry by default', () => {
@@ -76,15 +83,20 @@ describe('database client', () => {
     const db = createDbClient({ url: databaseUrl });
     clients.push(db);
     const pool = db.$client as unknown as {
-      emit(eventName: string, error: Error): boolean;
+      emit(eventName: string, value: unknown): boolean;
     };
+    const physicalClient = { on: vi.fn() };
     const poolFailure = new Error('idle connection failed');
 
-    pool.emit('error', poolFailure);
+    pool.emit('connect', physicalClient);
+    const errorListener = physicalClient.on.mock.calls.find(
+      ([eventName]) => eventName === 'error'
+    )?.[1] as ((error: unknown) => void) | undefined;
+    errorListener?.(poolFailure);
 
     expect(captureException).toHaveBeenCalledWith(poolFailure, {
       level: 'error',
-      tags: { event: 'database.node_postgres.pool' },
+      tags: { event: 'database.node_postgres.client' },
     });
     captureException.mockRestore();
   });

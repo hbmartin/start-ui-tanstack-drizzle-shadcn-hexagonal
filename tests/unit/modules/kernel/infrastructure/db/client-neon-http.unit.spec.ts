@@ -108,12 +108,25 @@ describe('Neon HTTP database client transaction lifecycle', () => {
 
     await db.$runInTransaction?.(async () => undefined);
     const transactionPool = mocks.websocketDatabases[0]?.$client;
-    const errorListener = transactionPool?.on.mock.calls.find(
+    const connectListener = transactionPool?.on.mock.calls.find(
+      ([eventName]) => eventName === 'connect'
+    )?.[1] as ((client: { on: ReturnType<typeof vi.fn> }) => void) | undefined;
+    const physicalClient = { on: vi.fn() };
+    connectListener?.(physicalClient);
+    const errorListener = physicalClient.on.mock.calls.find(
       ([eventName]) => eventName === 'error'
     )?.[1] as ((error: unknown) => void) | undefined;
     const poolFailure = new Error('websocket pool failed');
 
     expect(transactionPool?.on).toHaveBeenCalledWith(
+      'connect',
+      expect.any(Function)
+    );
+    expect(transactionPool?.on).toHaveBeenCalledWith(
+      'error',
+      expect.any(Function)
+    );
+    expect(physicalClient.on).toHaveBeenCalledWith(
       'error',
       expect.any(Function)
     );

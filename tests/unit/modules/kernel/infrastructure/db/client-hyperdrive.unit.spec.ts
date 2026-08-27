@@ -81,6 +81,10 @@ describe('Cloudflare Hyperdrive database client', () => {
   });
 
   it('isolates client error diagnostics from EventEmitter failure handling', async () => {
+    const { telemetryProxy } = await import('@/platform/telemetry');
+    const captureException = vi
+      .spyOn(telemetryProxy, 'captureException')
+      .mockImplementation(() => undefined);
     const onError = vi.fn(() => {
       throw new Error('diagnostic failed');
     });
@@ -94,6 +98,11 @@ describe('Cloudflare Hyperdrive database client', () => {
 
     expect(() => errorListener?.(clientFailure)).not.toThrow();
     expect(onError).toHaveBeenCalledWith(clientFailure);
+    expect(captureException).toHaveBeenCalledWith(clientFailure, {
+      level: 'error',
+      tags: { event: 'database.cloudflare.hyperdrive.client' },
+    });
+    captureException.mockRestore();
   });
 
   it('captures default client errors through the actionable telemetry channel', async () => {
