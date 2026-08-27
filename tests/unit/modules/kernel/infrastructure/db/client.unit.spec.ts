@@ -6,6 +6,7 @@ import type {
   Database,
   DbTransaction,
 } from '@/modules/kernel/infrastructure/db/client';
+import { telemetryProxy } from '@/platform/telemetry';
 
 vi.unmock('@/modules/kernel/infrastructure/db/client');
 
@@ -14,6 +15,7 @@ const databaseUrl = makeTestDatabaseUrl({ protocol: 'postgresql' });
 describe('database client', () => {
   let createDbClient: typeof import('@/modules/kernel/infrastructure/db/client').createDbClient;
   let createTransactionRunner: typeof import('@/modules/kernel/infrastructure/db/client').createTransactionRunner;
+  let getDefaultDbClient: typeof import('@/modules/kernel/infrastructure/db/client').getDefaultDbClient;
   const clients: Array<
     ReturnType<
       typeof import('@/modules/kernel/infrastructure/db/client').createDbClient
@@ -21,7 +23,7 @@ describe('database client', () => {
   > = [];
 
   beforeAll(async () => {
-    ({ createDbClient, createTransactionRunner } =
+    ({ createDbClient, createTransactionRunner, getDefaultDbClient } =
       await import('@/modules/kernel/infrastructure/db/client'));
   });
 
@@ -65,6 +67,26 @@ describe('database client', () => {
 
     expect(() => pool.emit('error', poolFailure)).not.toThrow();
     expect(onError).toHaveBeenCalledWith(poolFailure);
+  });
+
+  it('captures idle pool errors through actionable telemetry by default', () => {
+    const captureException = vi
+      .spyOn(telemetryProxy, 'captureException')
+      .mockImplementation(() => undefined);
+    const db = createDbClient({ url: databaseUrl });
+    clients.push(db);
+    const pool = db.$client as unknown as {
+      emit(eventName: string, error: Error): boolean;
+    };
+    const poolFailure = new Error('idle connection failed');
+
+    pool.emit('error', poolFailure);
+
+    expect(captureException).toHaveBeenCalledWith(poolFailure, {
+      level: 'error',
+      tags: { event: 'database.node_postgres.pool' },
+    });
+    captureException.mockRestore();
   });
 
   it('defaults explicit production URLs to verification', () => {
@@ -158,5 +180,17 @@ describe('database client', () => {
     });
     expect(runInTransaction).toHaveBeenCalledWith(work, transactionOptions);
     expect(work).toHaveBeenCalledWith(tx);
+  });
+
+  it('keeps the process database fallback when no runtime owner is installed', () => {
+    vi.stubEnv('DATABASE_DRIVER', 'node-pg');
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    vi.stubEnv('DATABASE_URL', databaseUrl);
+
+    const defaultClient = getDefaultDbClient();
+    clients.push(defaultClient);
+
+    expect(defaultClient.$adapter).toBe('postgres-node');
+    expect(defaultClient.$driver).toBe('node-pg');
   });
 });

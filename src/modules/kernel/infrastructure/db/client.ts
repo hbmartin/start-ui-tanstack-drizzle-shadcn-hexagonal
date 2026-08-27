@@ -19,9 +19,12 @@ import {
   assertDatabaseUrlTls,
   findForbiddenDatabaseUrlParameters,
 } from '@/modules/kernel/infrastructure/config/url-security';
-import { reportTelemetryFailure } from '@/platform/telemetry';
 
 import * as schema from './schema';
+import {
+  createDatabaseClientErrorHandler,
+  type DatabaseClientErrorHandler,
+} from './client-error-handler';
 import { nodePostgresSslForPolicy } from './node-postgres-tls';
 import {
   getRuntimeDatabaseClient,
@@ -35,18 +38,6 @@ import {
 } from './types';
 
 const require = createRequire(import.meta.url);
-
-const reportDatabaseClientError = (
-  onError: (error: unknown) => void,
-  error: unknown
-): void => {
-  try {
-    onError(error);
-  } catch {
-    // A diagnostic callback must not turn one database failure into an
-    // uncaught EventEmitter exception that aborts sibling requests.
-  }
-};
 
 function withDatabaseMetadata<TDb extends object>(
   db: TDb,
@@ -67,7 +58,10 @@ function withDatabaseMetadata<TDb extends object>(
   }) as unknown as Database;
 }
 
-function createNeonWebsocketDb(url: string): Database {
+function createNeonWebsocketDb(
+  url: string,
+  onError?: DatabaseClientErrorHandler
+): Database {
   const WebSocket = require('ws') as unknown;
   const database = drizzleNeonWebsocket({
     connection: url,
@@ -75,6 +69,10 @@ function createNeonWebsocketDb(url: string): Database {
     schema,
     casing: 'camelCase',
   });
+  database.$client.on(
+    'error',
+    createDatabaseClientErrorHandler('database.neon_websocket.pool', onError)
+  );
 
   return withDatabaseMetadata(database, {
     driver: 'neon-websocket',
@@ -87,7 +85,7 @@ function createNeonWebsocketDb(url: string): Database {
 
 export function createDbClient(options?: {
   driver?: DatabaseDriver;
-  onError?: (error: unknown) => void;
+  onError?: DatabaseClientErrorHandler;
   tlsPolicy?: DatabaseTlsPolicy;
   url?: string;
 }): Database {
@@ -118,7 +116,7 @@ export function createDbClient(options?: {
     let transactionDb: Database | undefined;
 
     const getTransactionDb = () => {
-      transactionDb ??= createNeonWebsocketDb(url);
+      transactionDb ??= createNeonWebsocketDb(url, options?.onError);
       return transactionDb;
     };
 
@@ -144,18 +142,18 @@ export function createDbClient(options?: {
   }
 
   if (driver === 'neon-websocket') {
-    return createNeonWebsocketDb(url);
+    return createNeonWebsocketDb(url, options?.onError);
   }
 
   const pool = new Pool({
     connectionString: url,
     ssl: nodePostgresSslForPolicy(tlsPolicy),
   });
-  pool.on('error', (error) =>
-    reportDatabaseClientError(
-      options?.onError ??
-        ((failure) => reportTelemetryFailure('database.pool.client', failure)),
-      error
+  pool.on(
+    'error',
+    createDatabaseClientErrorHandler(
+      'database.node_postgres.pool',
+      options?.onError
     )
   );
   const database = drizzleNodePg(pool, { schema, casing: 'camelCase' });
@@ -174,7 +172,12 @@ export type HyperdriveBinding = Readonly<{
   connectionString: string;
 }>;
 
-const parseHyperdriveBinding = (binding: unknown): HyperdriveBinding => {
+const hyperdriveBindingError = (qualifier = '') =>
+  new ConfigurationError(
+    `The START_UI_DATABASE Hyperdrive binding must provide ${qualifier}PostgreSQL connection string.`
+  );
+
+const readHyperdriveConnectionString = (binding: unknown): string => {
   if (typeof binding !== 'object' || binding === null) {
     throw new ConfigurationError(
       'The Cloudflare runtime requires a START_UI_DATABASE Hyperdrive binding.'
@@ -183,28 +186,33 @@ const parseHyperdriveBinding = (binding: unknown): HyperdriveBinding => {
 
   const { connectionString } = binding as { connectionString?: unknown };
   if (typeof connectionString !== 'string' || connectionString.length === 0) {
-    throw new ConfigurationError(
-      'The START_UI_DATABASE Hyperdrive binding must provide a PostgreSQL connection string.'
-    );
+    throw hyperdriveBindingError('a ');
   }
 
+  return connectionString;
+};
+
+const validateHyperdriveConnectionString = (connectionString: string): void => {
+  let parsed: URL;
   try {
-    const parsed = new URL(connectionString);
-    if (
-      (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') ||
-      parsed.hostname.length === 0
-    ) {
-      throw new Error('not a PostgreSQL URL');
-    }
-    if (findForbiddenDatabaseUrlParameters(parsed).length > 0) {
-      throw new Error('contains an endpoint or TLS override');
-    }
+    parsed = new URL(connectionString);
   } catch {
-    throw new ConfigurationError(
-      'The START_UI_DATABASE Hyperdrive binding must provide a valid PostgreSQL connection string.'
-    );
+    throw hyperdriveBindingError('a valid ');
   }
 
+  const isPostgreSql =
+    parsed.protocol === 'postgres:' || parsed.protocol === 'postgresql:';
+  if (!isPostgreSql || parsed.hostname.length === 0) {
+    throw hyperdriveBindingError('a valid ');
+  }
+  if (findForbiddenDatabaseUrlParameters(parsed).length > 0) {
+    throw hyperdriveBindingError('a valid ');
+  }
+};
+
+const parseHyperdriveBinding = (binding: unknown): HyperdriveBinding => {
+  const connectionString = readHyperdriveConnectionString(binding);
+  validateHyperdriveConnectionString(connectionString);
   return { connectionString };
 };
 
@@ -215,12 +223,16 @@ const parseHyperdriveBinding = (binding: unknown): HyperdriveBinding => {
  */
 export async function createHyperdriveDbClient(
   binding: unknown,
-  options: { onError: (error: unknown) => void }
+  options: { onError?: DatabaseClientErrorHandler } = {}
 ): Promise<Database> {
   const { connectionString } = parseHyperdriveBinding(binding);
   const client = new Client({ connectionString });
-  client.on('error', (error) =>
-    reportDatabaseClientError(options.onError, error)
+  client.on(
+    'error',
+    createDatabaseClientErrorHandler(
+      'database.cloudflare.hyperdrive.client',
+      options.onError
+    )
   );
 
   try {

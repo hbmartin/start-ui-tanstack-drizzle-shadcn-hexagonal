@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
       }
     | undefined,
   poolEnd: vi.fn(async () => undefined),
+  poolOn: vi.fn(),
+  clientOn: vi.fn(),
   query: vi.fn(),
   release: vi.fn(),
 }));
@@ -34,11 +36,13 @@ vi.mock('pg', () => ({
     }
 
     connect = vi.fn(async () => ({
+      on: mocks.clientOn,
       query: mocks.query,
       release: mocks.release,
     }));
 
     end = mocks.poolEnd;
+    on = mocks.poolOn;
   },
 }));
 
@@ -68,6 +72,11 @@ describe('PostgreSQL advisory lock TLS policy', () => {
         max: 1,
         ssl,
       });
+      expect(mocks.poolOn).toHaveBeenCalledWith('error', expect.any(Function));
+      expect(mocks.clientOn).toHaveBeenCalledWith(
+        'error',
+        expect.any(Function)
+      );
     }
   );
 });

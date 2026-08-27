@@ -7,6 +7,7 @@ import {
   isLikelyTransactionPooledDatabaseUrl,
 } from '@/modules/kernel/infrastructure/config/database';
 
+import { createDatabaseClientErrorHandler } from './client-error-handler';
 import { nodePostgresSslForPolicy } from './node-postgres-tls';
 
 export interface PostgresAdvisoryLockLease {
@@ -139,6 +140,10 @@ export async function tryAcquirePostgresAdvisoryLock(params: {
     max: 1,
     ssl: nodePostgresSslForPolicy(tlsPolicy),
   });
+  pool.on(
+    'error',
+    createDatabaseClientErrorHandler('database.advisory_lock.pool')
+  );
   let sessionClosed = false;
   let client: PoolClient | undefined;
 
@@ -155,6 +160,10 @@ export async function tryAcquirePostgresAdvisoryLock(params: {
 
   try {
     client = await pool.connect();
+    client.on(
+      'error',
+      createDatabaseClientErrorHandler('database.advisory_lock.client')
+    );
     await client.query("SELECT set_config('idle_session_timeout', $1, false)", [
       LOCK_SESSION_IDLE_TIMEOUT,
     ]);

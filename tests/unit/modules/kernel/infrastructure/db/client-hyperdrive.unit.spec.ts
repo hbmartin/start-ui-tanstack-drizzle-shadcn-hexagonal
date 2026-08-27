@@ -96,6 +96,28 @@ describe('Cloudflare Hyperdrive database client', () => {
     expect(onError).toHaveBeenCalledWith(clientFailure);
   });
 
+  it('captures default client errors through the actionable telemetry channel', async () => {
+    const { telemetryProxy } = await import('@/platform/telemetry');
+    const captureException = vi
+      .spyOn(telemetryProxy, 'captureException')
+      .mockImplementation(() => undefined);
+    const { createHyperdriveDbClient } =
+      await import('@/modules/kernel/infrastructure/db/client');
+    await createHyperdriveDbClient({ connectionString });
+    const errorListener = mocks.clientOn.mock.calls.find(
+      ([eventName]) => eventName === 'error'
+    )?.[1] as ((error: unknown) => void) | undefined;
+    const clientFailure = new Error('socket failed');
+
+    errorListener?.(clientFailure);
+
+    expect(captureException).toHaveBeenCalledWith(clientFailure, {
+      level: 'error',
+      tags: { event: 'database.cloudflare.hyperdrive.client' },
+    });
+    captureException.mockRestore();
+  });
+
   it.each([
     undefined,
     {},
