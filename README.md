@@ -232,13 +232,22 @@ provider variables.
 
 The Vercel build and preview commands validate
 `DATABASE_DRIVER=neon-http` and an effective `verify` TLS policy. Remote URLs
-default to `verify`; an artifact-only build that retains a loopback placeholder
-must select it explicitly. These checks do not connect to the database or prove
-endpoint compatibility. Before exercising a DB-backed Vercel request, supply a
-remote Neon-compatible `DATABASE_URL`; the Neon HTTP driver cannot serve
-requests against the local Docker PostgreSQL endpoint. Use the Node
-build/preview commands for that local driver. Maintenance migrations may still
-use a separate direct `node-pg` or `neon-websocket` connection.
+default to `verify`. For artifact-only validation with a loopback placeholder,
+use `pnpm verify:artifact:vercel`; its isolated environment selects `verify`
+while keeping the loopback migration policy `off`. Do not persist that verify
+override in the shared local `.env`, because it would also apply to Node dev and
+migration connections unless separately overridden. These checks do not
+connect to the database or prove endpoint compatibility. Before exercising a
+DB-backed Vercel request, supply a remote Neon-compatible `DATABASE_URL`; the
+Neon HTTP driver cannot serve requests against the local Docker PostgreSQL
+endpoint. Use the Node build/preview commands for that local driver.
+
+Migrations may use `node-pg` or `neon-websocket`; `neon-http` is rejected. The
+default follows the request driver: `node-pg` for a Node request runtime and
+`neon-websocket` for Vercel's `neon-http` runtime. Set
+`DATABASE_MIGRATION_DRIVER=node-pg` explicitly when the maintenance URL is a
+conventional direct PostgreSQL endpoint, and set
+`DATABASE_MIGRATION_TLS_POLICY=off` when that endpoint is loopback.
 
 The v5 runtime work is intentionally incremental. The artifact commands prove
 isolated output shapes and trusted profile injection. `pnpm verify:node` also
@@ -314,8 +323,9 @@ Deploy from Git:
 6. Add the production environment variables from `.env.example`.
    Set a remote Neon-compatible `DATABASE_URL`,
    `DATABASE_DRIVER=neon-http`, and `DATABASE_TLS_POLICY=verify` for the Vercel
-   request runtime; use a separate direct `node-pg` or `neon-websocket`
-   maintenance connection for migrations.
+   request runtime. For a conventional direct PostgreSQL maintenance endpoint,
+   also set its separate URL and `DATABASE_MIGRATION_DRIVER=node-pg`; otherwise
+   the Vercel request driver makes migrations default to `neon-websocket`.
 7. Deploy.
 
 Deploy from the CLI:
