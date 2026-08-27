@@ -106,6 +106,7 @@ export const assertDatabaseUrlTls = ({
   env,
   policy,
   policyOverrideName,
+  urlOwnerPolicyName,
 }: {
   name: string;
   url: string;
@@ -113,6 +114,7 @@ export const assertDatabaseUrlTls = ({
   env?: RuntimeEnv;
   policy: DatabaseTlsPolicy;
   policyOverrideName?: string;
+  urlOwnerPolicyName?: string;
 }): void => {
   let parsed: URL;
   try {
@@ -141,8 +143,8 @@ export const assertDatabaseUrlTls = ({
     ),
   ];
   if (forbiddenParameters.length > 0) {
-    const tlsPolicyRemedy = policyOverrideName
-      ? `configure TLS with ${policyOverrideName}`
+    const tlsPolicyRemedy = urlOwnerPolicyName
+      ? `configure TLS with ${urlOwnerPolicyName}`
       : 'configure TLS with the caller-provided policy';
     throw new ConfigurationError(
       `${name} must not configure endpoint or TLS parameters in the URL (${forbiddenParameters.join(
@@ -152,8 +154,11 @@ export const assertDatabaseUrlTls = ({
   }
 
   if (policy === 'off' && !isLocalhostUrl(url)) {
+    const policyRemedy = policyOverrideName
+      ? `set ${policyOverrideName}=verify`
+      : "use a 'verify' policy";
     throw new ConfigurationError(
-      `${name} must not use TLS policy 'off' for a remote database; pass a 'verify' policy or use a loopback endpoint.`
+      `${name} must not use TLS policy 'off' for a remote database; ${policyRemedy} or use a loopback endpoint.`
     );
   }
 

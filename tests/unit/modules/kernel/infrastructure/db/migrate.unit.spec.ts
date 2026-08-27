@@ -235,7 +235,7 @@ describe('createMigrationDbClient', () => {
         tlsPolicy: 'off',
       })
     ).rejects.toThrow(
-      "migration database client URL must not use TLS policy 'off' for a remote database; pass a 'verify' policy or use a loopback endpoint."
+      "migration database client URL must not use TLS policy 'off' for a remote database; use a 'verify' policy or use a loopback endpoint."
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });

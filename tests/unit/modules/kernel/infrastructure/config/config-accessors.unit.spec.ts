@@ -186,6 +186,23 @@ describe('server config accessors', () => {
     });
   });
 
+  it('derives verify from a remote migration URL when neither policy is configured', async () => {
+    const migrationDatabaseUrl = makeTestDatabaseUrl({
+      host: 'db.example.com',
+    });
+
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_MIGRATION_URL', migrationDatabaseUrl);
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(getMigrationDatabaseConfig()).toEqual({
+      databaseUrl: migrationDatabaseUrl,
+      driver: 'node-pg',
+      tlsPolicy: 'verify',
+    });
+  });
+
   it('allows migrations to use a stricter TLS policy than runtime queries', async () => {
     const databaseUrl = makeTestDatabaseUrl();
 
@@ -1069,6 +1086,24 @@ describe('server config accessors', () => {
     expect(() => getMigrationDatabaseConfig()).toThrow(ConfigurationError);
     expect(() => getMigrationDatabaseConfig()).toThrow(
       'DATABASE_MIGRATION_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_MIGRATION_TLS_POLICY.'
+    );
+  });
+
+  it('uses runtime URL ownership for shared migration URL parameters', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv(
+      'DATABASE_URL',
+      makeTestDatabaseUrl({
+        host: 'db.example.com',
+        searchParams: { sslmode: 'verify-full' },
+      })
+    );
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'verify');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_TLS_POLICY.'
     );
   });
 

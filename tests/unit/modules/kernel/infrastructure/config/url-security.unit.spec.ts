@@ -144,7 +144,7 @@ describe('assertDatabaseUrlTls', () => {
         policy: 'off',
       })
     ).toThrow(
-      "DATABASE_MIGRATION_URL must not use TLS policy 'off' for a remote database; pass a 'verify' policy or use a loopback endpoint."
+      "DATABASE_MIGRATION_URL must not use TLS policy 'off' for a remote database; use a 'verify' policy or use a loopback endpoint."
     );
   });
 
@@ -157,9 +157,25 @@ describe('assertDatabaseUrlTls', () => {
         env: PROD,
         policy: 'verify',
         policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+        urlOwnerPolicyName: 'DATABASE_MIGRATION_TLS_POLICY',
       })
     ).toThrow(
       'remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_MIGRATION_TLS_POLICY.'
+    );
+  });
+
+  it('names the scoped override in the defensive off-policy branch', () => {
+    expect(() =>
+      assertDatabaseUrlTls({
+        name: 'DATABASE_MIGRATION_URL',
+        url: remote(),
+        driver: 'node-pg',
+        env: PROD,
+        policy: 'off',
+        policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+      })
+    ).toThrow(
+      "DATABASE_MIGRATION_URL must not use TLS policy 'off' for a remote database; set DATABASE_MIGRATION_TLS_POLICY=verify or use a loopback endpoint."
     );
   });
 

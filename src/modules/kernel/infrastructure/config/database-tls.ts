@@ -32,7 +32,7 @@ export const resolveDatabaseTlsPolicy = ({
   if (policy === 'off' && !isLocalhostUrl(url)) {
     if (!policyOverrideName || !policySourceName || !urlName) {
       throw new ConfigurationError(
-        "TLS policy 'off' is allowed only for a loopback endpoint; pass tlsPolicy: 'verify' for this remote database."
+        "TLS policy 'off' is allowed only for a loopback endpoint; use a 'verify' policy for this remote database."
       );
     }
 
