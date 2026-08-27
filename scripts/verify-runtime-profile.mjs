@@ -188,14 +188,21 @@ const directReturnStatements = (functionNode) => {
 
 const nodeRangeSignature = ({ start, end } = {}) => `${start}:${end}`;
 
-const directVariableInitializer = (functionNode, localName) => {
-  const declarations = functionNode.body.body.flatMap((statement) =>
-    statement.type === 'VariableDeclaration' ? statement.declarations : []
+const directVariableDeclarators = (functionNode, localName) => {
+  const declarations = [];
+  new Visitor({
+    VariableDeclarator(node) {
+      if (bindingNames(node.id).includes(localName)) declarations.push(node);
+    },
+  }).visit(functionNode);
+  const nestedRanges = nestedFunctionRanges(functionNode);
+  return declarations.filter(
+    (declarator) => !isInsideNestedFunction(declarator, nestedRanges)
   );
-  return declarations.find(
-    (declarator) => identifierName(declarator.id) === localName
-  )?.init;
 };
+
+const directVariableInitializer = (functionNode, localName) =>
+  directVariableDeclarators(functionNode, localName)[0]?.init;
 
 const topLevelVariableInitializer = (program, localName) =>
   program.body
@@ -405,6 +412,10 @@ const ownerProperties = (node, filePath, label) => {
     node.properties.every((property) => property.type === 'Property'),
     `${filePath} ${label} must not contain spread properties`
   );
+  assert(
+    node.properties.every((property) => !property.computed),
+    `${filePath} ${label} must use static property keys`
+  );
   const entries = node.properties.map((property) => [
     propertyKeyName(property),
     property.value,
@@ -519,6 +530,10 @@ const assertCloudflareSentryOwner = (program, filePath) => {
 };
 
 const assertCloudflareApplicationHandler = (fetchFunction, filePath) => {
+  assert(
+    directVariableDeclarators(fetchFunction, 'handleApplication').length === 1,
+    `${filePath} Worker fetch must declare its application handler exactly once`
+  );
   const handleApplication = directVariableInitializer(
     fetchFunction,
     'handleApplication'
@@ -544,6 +559,10 @@ const assertCloudflareApplicationHandler = (fetchFunction, filePath) => {
 };
 
 const cloudflareDatabaseOwnerProperties = (fetchFunction, filePath) => {
+  assert(
+    directVariableDeclarators(fetchFunction, 'handleDatabase').length === 1,
+    `${filePath} Worker fetch must declare its database handler exactly once`
+  );
   const handleDatabase = directVariableInitializer(
     fetchFunction,
     'handleDatabase'

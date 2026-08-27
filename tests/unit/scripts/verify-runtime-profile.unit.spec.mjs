@@ -321,6 +321,73 @@ describe('runtime artifact verifier', () => {
     );
   });
 
+  it('rejects computed runtime-effective Cloudflare owner properties', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    const source = fs
+      .readFileSync(entryPath, 'utf8')
+      .replace(
+        `${cloudflareSentryOwner}createApplicationServerEntry`,
+        `${cloudflareSentryOwner}const bindingKey="binding";createApplicationServerEntry`
+      )
+      .replace(
+        'binding:environment.START_UI_DATABASE,handle:handleApplication,request',
+        'binding:environment.START_UI_DATABASE,handle:handleApplication,request,[bindingKey]:environment.MISSING_DATABASE'
+      );
+    write(root, 'dist/server/index.js', source);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Cloudflare database owner must use static property keys');
+  });
+
+  it('rejects legal var redeclaration of a Cloudflare owner callback', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleApplication=()=>application.fetch(request);const handleDatabase=',
+          'var handleApplication=()=>application.fetch(request);var handleApplication=()=>new Response("bypassed");const handleDatabase='
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must declare its application handler exactly once');
+  });
+
+  it('rejects destructuring var redeclaration of a Cloudflare owner callback', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleApplication=()=>application.fetch(request);const handleDatabase=',
+          'var handleApplication=()=>application.fetch(request);var {replacement:handleApplication}={replacement:()=>new Response("bypassed")};const handleDatabase='
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must declare its application handler exactly once');
+  });
+
   it('rejects fetch-local substitutions for trusted Cloudflare owners', () => {
     const root = fixture();
     createCloudflareArtifact(root);
