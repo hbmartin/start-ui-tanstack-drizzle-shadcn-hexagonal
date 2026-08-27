@@ -1,4 +1,5 @@
 import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
+import { getEnvClient } from '@/platform/env/client';
 
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 import { getApplicationConfig } from './application';
@@ -36,6 +37,7 @@ const validateServerConfiguration = (
 ) => {
   if (shouldSkipEnvValidation()) return;
 
+  if (runtimeProfile) getEnvClient(runtimeProfile);
   const application = getApplicationConfig();
   const http = getHttpConfig();
   if (runtimeProfile) {
@@ -53,8 +55,8 @@ const validateServerConfiguration = (
   getTelemetryConfig();
 };
 
-export const validateServerBuildConfig = () =>
-  validateServerConfiguration(false);
+export const validateServerBuildConfig = (runtimeProfile: RuntimeProfile) =>
+  validateServerConfiguration(false, runtimeProfile);
 
 export const validateServerConfig = (runtimeProfile: RuntimeProfile) =>
   validateServerConfiguration(true, runtimeProfile);

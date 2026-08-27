@@ -11,6 +11,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 
 import {
   cloudflareVitePluginOptions,
+  createCanonicalOriginVitePlugin,
   resolveViteRuntimeProfile,
   RUNTIME_PROFILE_ENV_KEY,
   runtimeServerEntryPlugin,
@@ -19,6 +20,7 @@ import {
 import { BROWSER_TELEMETRY_BUILD_TARGET } from './scripts/browser-telemetry-target.js';
 import { shouldEnableSentryBuildPlugin } from './scripts/sentry-build-plugin.js';
 import { loadViteBuildEnvironment } from './scripts/vite-build-environment.js';
+import { resolveCanonicalOrigin } from './src/platform/env/canonical-origin.js';
 import type { RuntimeProfile } from './src/platform/runtime/runtime-profile.js';
 
 const createRuntimeBuildPlugins = (
@@ -126,6 +128,13 @@ export default defineConfig(({ command, mode }) => {
     mode,
     root,
   });
+  const canonicalOrigin = resolveCanonicalOrigin(
+    {
+      ...env,
+      NODE_ENV: command === 'build' ? 'production' : 'development',
+    },
+    runtimeProfile
+  );
   const sentryEnv: Record<string, string> = cloudBuildPluginsDisabled
     ? {}
     : loadEnv(mode, root, 'SENTRY_');
@@ -180,6 +189,7 @@ export default defineConfig(({ command, mode }) => {
     plugins: [
       ...(isTestRuntime ? [] : devtools()),
       srcJsonImportPlugin(),
+      createCanonicalOriginVitePlugin(canonicalOrigin),
       runtimeServerEntryPlugin({ profile: runtimeProfile, root }),
       ...runtimeBuildPlugins,
       // react's vite plugin must come after start's vite plugin

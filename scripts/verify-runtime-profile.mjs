@@ -423,6 +423,24 @@ const assertRequiredRuntimeTokens = (directoryPath, profile) => {
   }
 };
 
+const assertNoArtifactTokens = (directoryPath, tokens) => {
+  const files = findFilesNamedLike(directoryPath, (name) =>
+    /\.(?:cjs|css|html|js|json|mjs)$/u.test(name)
+  );
+  for (const filePath of files) {
+    const source = fs.readFileSync(filePath, 'utf8');
+    for (const token of tokens) {
+      assert(!source.includes(token), `${filePath} contains ${token}`);
+    }
+  }
+};
+
+const runtimeArtifactOutput = (profile, root) => {
+  if (profile === 'node') return path.join(root, '.output/node');
+  if (profile === 'vercel') return path.join(root, '.vercel/output');
+  return path.join(root, 'dist');
+};
+
 const verifyNode = (root) => {
   const output = path.join(root, '.output/node');
   const manifest = readJson(path.join(output, 'nitro.json'));
@@ -527,12 +545,16 @@ const verifyCloudflare = (root, expectedAppSlug) => {
 export const verifyRuntimeProfile = (
   profile,
   root = process.cwd(),
-  { expectedAppSlug = process.env.APP_SLUG } = {}
+  { expectedAppSlug = process.env.APP_SLUG, forbiddenBuildTokens = [] } = {}
 ) => {
   assert(profiles.has(profile), `unknown profile ${String(profile)}`);
   if (profile === 'node') verifyNode(root);
   else if (profile === 'vercel') verifyVercel(root);
   else verifyCloudflare(root, expectedAppSlug);
+  assertNoArtifactTokens(
+    runtimeArtifactOutput(profile, root),
+    forbiddenBuildTokens
+  );
   return profile;
 };
 

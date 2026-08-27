@@ -141,7 +141,6 @@ const betterAuthEnvSchema = baseEnvSchema
     AUTH_OTP_ALLOWED_ATTEMPTS: z.coerce.number().int().min(1).prefault(3),
     AUTH_OTP_SEND_WINDOW_SECONDS: z.coerce.number().int().min(1).prefault(60),
     AUTH_OTP_SEND_MAX: z.coerce.number().int().min(1).prefault(3),
-    AUTH_ALLOWED_HOSTS: z.string().optional(),
     AUTH_TRUSTED_ORIGINS: z.string().optional(),
     GITHUB_CLIENT_ID: zOptionalProviderSecret(),
     GITHUB_CLIENT_SECRET: zOptionalProviderSecret(),
@@ -178,7 +177,6 @@ export type BetterAuthConfig = {
   otpAllowedAttempts: number;
   otpSendWindowSeconds: number;
   otpSendMax: number;
-  allowedHosts?: string[];
   trustedOrigins?: string[];
   githubClientId?: string;
   githubClientSecret?: string;
@@ -215,7 +213,6 @@ export function getBetterAuthConfig(): BetterAuthConfig {
     otpAllowedAttempts: env.AUTH_OTP_ALLOWED_ATTEMPTS,
     otpSendWindowSeconds: env.AUTH_OTP_SEND_WINDOW_SECONDS,
     otpSendMax: env.AUTH_OTP_SEND_MAX,
-    allowedHosts: splitCsv(env.AUTH_ALLOWED_HOSTS),
     trustedOrigins: splitCsv(env.AUTH_TRUSTED_ORIGINS),
     githubClientId: env.GITHUB_CLIENT_ID,
     githubClientSecret: env.GITHUB_CLIENT_SECRET,

@@ -32,7 +32,6 @@ vi.mock('better-auth/tanstack-start', () => ({
 
 vi.mock('@/modules/kernel/infrastructure/config/auth', () => ({
   getBetterAuthConfig: () => ({
-    allowedHosts: ['preview.example'],
     githubClientId: undefined,
     githubClientSecret: undefined,
     secret: globalThis.crypto.randomUUID(),
@@ -75,6 +74,7 @@ describe('Better Auth security configuration', () => {
 
     const options = mocks.betterAuth.mock.calls[0]?.[0] as ExplicitAny;
 
+    expect(options.baseURL).toBe('https://app.example');
     expect(options.advanced.disableCSRFCheck).toBeUndefined();
     expect(options.advanced.disableOriginCheck).toBeUndefined();
     expect(options.advanced.ipAddress).toEqual({

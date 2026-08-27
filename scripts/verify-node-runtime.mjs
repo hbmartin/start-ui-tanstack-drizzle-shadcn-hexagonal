@@ -476,7 +476,9 @@ const buildNodeRuntimeArtifact = async (env) => {
   await runCommand(path.join(root, 'node_modules/.bin/vite'), ['build'], {
     env,
   });
-  verifyRuntimeProfile('node', root);
+  verifyRuntimeProfile('node', root, {
+    forbiddenBuildTokens: [env.VITE_BASE_URL],
+  });
 };
 
 const registerDiagnosticOutput = (diagnostics, name, child) =>
@@ -906,7 +908,7 @@ const parseGithubOAuthRedirectPayload = (body) => {
   return payload;
 };
 
-const verifyGithubOAuthRedirectPayload = (body) => {
+const verifyGithubOAuthRedirectPayload = (body, canonicalOrigin) => {
   const payload = parseGithubOAuthRedirectPayload(body);
   const authorizationUrl = new URL(payload.url);
   assert(
@@ -917,14 +919,19 @@ const verifyGithubOAuthRedirectPayload = (body) => {
     authorizationUrl.pathname === '/login/oauth/authorize',
     'one-hop trusted production auth returned an unexpected GitHub path'
   );
+  assert(
+    authorizationUrl.searchParams.get('redirect_uri') ===
+      `${canonicalOrigin}/api/auth/callback/github`,
+    'one-hop trusted production auth did not use the canonical callback origin'
+  );
 };
 
-const verifyNodeTrustedAuthClientIp = async (appPort) => {
+const verifyNodeTrustedAuthClientIp = async (appPort, canonicalOrigin) => {
   const url = `http://localhost:${appPort}/api/auth/sign-in/social`;
   const body = JSON.stringify({ provider: 'github' });
   const mutationHeaders = {
     'Content-Type': 'application/json',
-    Origin: `http://localhost:${appPort}`,
+    Origin: canonicalOrigin,
     'Sec-Fetch-Site': 'same-origin',
   };
   const unavailable = await fetch(url, {
@@ -956,7 +963,7 @@ const verifyNodeTrustedAuthClientIp = async (appPort) => {
     trusted.status === 200,
     `one-hop trusted production auth was HTTP ${trusted.status}, expected HTTP 200: ${trustedBody.slice(0, 240)}`
   );
-  verifyGithubOAuthRedirectPayload(trustedBody);
+  verifyGithubOAuthRedirectPayload(trustedBody, canonicalOrigin);
   console.log(
     'Verified Node trusted client-IP ingress: headerless HTTP 503 and one-hop GitHub OAuth HTTP 200.'
   );
@@ -1108,7 +1115,7 @@ export const verifyNodeRuntime = async () => {
       env,
     });
     await verifyNodeLoginResponses({ appPort, application, pglite, preset });
-    await verifyNodeTrustedAuthClientIp(appPort);
+    await verifyNodeTrustedAuthClientIp(appPort, env.APP_DOMAIN);
     await verifyBuiltNodeServerFunctionErrorContract(appPort);
     await verifyStrictCspBrowserHydration(appPort);
     assertChildRunning(application, 'Node application');

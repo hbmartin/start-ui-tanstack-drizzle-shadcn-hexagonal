@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   cloudflareVitePluginOptions,
+  createCanonicalOriginVitePlugin,
   createRuntimeServerEntrySource,
   resolveViteRuntimeProfile,
   runtimeServerEntryPaths,
@@ -42,6 +43,21 @@ describe('runtime profile Vite selection', () => {
     expect(
       shouldInstallNodeNitroFatalOwner({ command: 'build' }, 'vercel')
     ).toBe(false);
+  });
+
+  it('replaces a divergent Vite client origin with the canonical origin', () => {
+    const plugin = createCanonicalOriginVitePlugin(
+      'https://canonical.example.test'
+    );
+    const config = {
+      env: { VITE_BASE_URL: 'https://hostile-build-value.invalid' },
+    };
+    const hook = plugin.configResolved as (config: never) => void;
+    expect(typeof hook).toBe('function');
+
+    hook(config as never);
+
+    expect(config.env.VITE_BASE_URL).toBe('https://canonical.example.test');
   });
 
   it.each([

@@ -14,7 +14,7 @@ describe('getEnvClient URL security', () => {
     vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', 'https://cdn.example.com/bucket');
     const { getEnvClient } = await import('@/platform/env/config');
 
-    expect(() => getEnvClient()).toThrow(/HTTPS in production/);
+    expect(() => getEnvClient()).toThrow(/must use HTTPS/);
   });
 
   it('rejects cleartext VITE_S3_BUCKET_PUBLIC_URL for remote hosts in production', async () => {
@@ -35,23 +35,90 @@ describe('getEnvClient URL security', () => {
     expect(getEnvClient().VITE_BASE_URL).toBe('https://app.example.com');
   });
 
-  it('prefers deploy-time process values over Vite build values', async () => {
+  it('uses Vercel production URL precedence for the Vercel profile', async () => {
     vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VERCEL_PROJECT_PRODUCTION_URL', 'production.example.com');
     vi.stubEnv('VERCEL_URL', 'runtime.example.com');
     vi.stubEnv('VITE_BASE_URL', 'https://build.example.com');
     vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', 'https://cdn.example.com/bucket');
     const { getEnvClient } = await import('@/platform/env/config');
 
-    expect(getEnvClient().VITE_BASE_URL).toBe('https://runtime.example.com');
+    expect(getEnvClient('vercel').VITE_BASE_URL).toBe(
+      'https://production.example.com'
+    );
   });
 
-  it('accepts cleartext localhost URLs in production', async () => {
+  it('falls back to VERCEL_URL when the production URL is blank', async () => {
     vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('VITE_BASE_URL', 'http://localhost:3000');
-    vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', 'http://127.0.0.1:9000/default');
+    vi.stubEnv('VERCEL_PROJECT_PRODUCTION_URL', '  ');
+    vi.stubEnv('VERCEL_URL', 'preview.example.com');
+    vi.stubEnv('VITE_BASE_URL', 'https://build.example.com');
     const { getEnvClient } = await import('@/platform/env/config');
 
-    expect(getEnvClient().VITE_BASE_URL).toBe('http://localhost:3000');
+    expect(getEnvClient('vercel').VITE_BASE_URL).toBe(
+      'https://preview.example.com'
+    );
+  });
+
+  it('uses APP_DOMAIN for Node and ignores ambient Vercel variables', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_DOMAIN', 'https://node.example.com');
+    vi.stubEnv('VERCEL_PROJECT_PRODUCTION_URL', 'vercel.example.com');
+    vi.stubEnv('VITE_BASE_URL', 'https://build.example.com');
+    const { getEnvClient } = await import('@/platform/env/config');
+
+    expect(getEnvClient('node').VITE_BASE_URL).toBe('https://node.example.com');
+  });
+
+  it('requires APP_DOMAIN to be an explicit origin', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_DOMAIN', 'node.example.com');
+    vi.stubEnv('VITE_BASE_URL', 'https://build.example.com');
+    const { getEnvClient } = await import('@/platform/env/config');
+
+    expect(() => getEnvClient('node')).toThrow(/valid HTTP\(S\) origin/);
+  });
+
+  it.each(['node', 'cloudflare'] as const)(
+    'requires APP_DOMAIN for production %s',
+    async (profile) => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('VITE_BASE_URL', 'https://build.example.com');
+      const { getEnvClient } = await import('@/platform/env/config');
+
+      expect(() => getEnvClient(profile)).toThrow(/APP_DOMAIN is required/);
+    }
+  );
+
+  it.each([
+    'https://user:secret@app.example.com',
+    'https://app.example.com/path',
+    'https://app.example.com?debug=true',
+    'https://app.example.com#fragment',
+  ])('rejects non-origin APP_DOMAIN value %s', async (appDomain) => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_DOMAIN', appDomain);
+    vi.stubEnv('VITE_BASE_URL', 'https://build.example.com');
+    const { getEnvClient } = await import('@/platform/env/config');
+
+    expect(() => getEnvClient('node')).toThrow(/must contain only an origin/);
+  });
+
+  it('rejects cleartext localhost origins in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_DOMAIN', 'http://localhost:3000');
+    vi.stubEnv('VITE_BASE_URL', 'https://build.example.com');
+    const { getEnvClient } = await import('@/platform/env/config');
+
+    expect(() => getEnvClient('node')).toThrow(/must use HTTPS/);
+  });
+
+  it('accepts cleartext localhost only outside production', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('VITE_BASE_URL', 'http://localhost:3000');
+    const { getEnvClient } = await import('@/platform/env/config');
+
+    expect(getEnvClient('node').VITE_BASE_URL).toBe('http://localhost:3000');
   });
 
   it('rejects cleartext VITE_SENTRY_DSN for remote hosts in production', async () => {

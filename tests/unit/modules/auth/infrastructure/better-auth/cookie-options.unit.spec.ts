@@ -43,10 +43,10 @@ describe('createAuthCookieSecurityOptions', () => {
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'http://[::1]:3000',
-  ])('allows local HTTP cookie configuration for %s', (baseUrl) => {
+  ])('rejects production local HTTP cookie configuration for %s', (baseUrl) => {
     expect(() =>
       createAuthCookieSecurityOptions(baseUrl, { isProduction: true })
-    ).not.toThrow();
+    ).toThrow(/HTTPS VITE_BASE_URL/);
   });
 
   it('rejects production HTTP cookies for non-localhost origins', () => {

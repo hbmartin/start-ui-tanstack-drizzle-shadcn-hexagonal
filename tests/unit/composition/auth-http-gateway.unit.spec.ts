@@ -10,7 +10,6 @@ const mocks = vi.hoisted(() => {
 
   return {
     authConfig: {
-      allowedHosts: undefined as string[] | undefined,
       githubClientId: undefined as string | undefined,
       githubClientSecret: undefined as string | undefined,
       secret: testAuthSecret,

@@ -65,12 +65,7 @@ export function createAuth(input?: Database | CreateAuthOptions) {
 
   return betterAuth({
     secret: authConfig.secret,
-    baseURL: {
-      allowedHosts: [
-        new URL(envClient.VITE_BASE_URL).host,
-        ...(authConfig.allowedHosts ?? []),
-      ],
-    },
+    baseURL: envClient.VITE_BASE_URL,
     rateLimit: {
       // The app HTTP gateway owns the HMAC-keyed global/network/identity
       // limiter. Disabling the provider middleware prevents Better Auth from

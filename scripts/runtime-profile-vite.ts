@@ -40,6 +40,18 @@ export const shouldInstallNodeNitroFatalOwner = (
   profile: RuntimeProfile
 ) => config.command === 'build' && profile === 'node';
 
+export const createCanonicalOriginVitePlugin = (
+  canonicalOrigin: string
+): Plugin => ({
+  name: 'start-ui:canonical-origin',
+  configResolved(config) {
+    // Vite expands whole-object import.meta.env reads from config.env. Mutate
+    // the resolved allowlist so client and SSR bundles consume the same
+    // profile-selected origin that startup validation approved.
+    config.env.VITE_BASE_URL = canonicalOrigin;
+  },
+});
+
 export const createRuntimeServerEntrySource = ({
   profile,
   root,

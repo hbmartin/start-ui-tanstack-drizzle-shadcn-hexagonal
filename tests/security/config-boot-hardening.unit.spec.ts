@@ -24,6 +24,7 @@ describe('validateServerConfig fails closed on insecure production config', () =
     vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
     vi.stubEnv('APP_NAME', 'Start UI Test');
     vi.stubEnv('APP_SLUG', 'start-ui-test');
+    vi.stubEnv('APP_DOMAIN', 'https://app.example.test');
     vi.stubEnv('CAPABILITY_PRESET', ACTIVE_CAPABILITY_PRESET);
     vi.stubEnv('TRUSTED_PROXY_DEPTH', '1');
     vi.stubEnv(

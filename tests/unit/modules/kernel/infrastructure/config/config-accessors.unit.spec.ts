@@ -349,6 +349,7 @@ describe('server config accessors', () => {
 
   it('runs server config validation in production even when SKIP_ENV_VALIDATION is true', async () => {
     vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_DOMAIN', 'https://app.example.test');
     vi.stubEnv('SKIP_ENV_VALIDATION', 'true');
     vi.stubEnv('AUTH_SECRET', undefined);
     vi.stubEnv('DATABASE_URL', undefined);

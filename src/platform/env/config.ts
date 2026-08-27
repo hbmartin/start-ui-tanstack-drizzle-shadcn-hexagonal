@@ -2,6 +2,8 @@
 import { z } from 'zod';
 
 import { applicationIdentitySchema } from './application-identity';
+import { resolveCanonicalOrigin } from './canonical-origin';
+import type { RuntimeProfile } from '../runtime/runtime-profile';
 
 import {
   isDevRuntimeEnvironment,
@@ -19,33 +21,11 @@ const isTruthy = (value: unknown) => value === true || value === 'true';
 const emptyStringAsUndefined = (value: unknown) =>
   typeof value === 'string' && value.trim() === '' ? undefined : value;
 
-const isProd = () => isProdRuntimeEnvironment();
-const isDev = () => isDevRuntimeEnvironment();
-
 export const isDevEnvironment = isDevRuntimeEnvironment;
 
-const getBaseUrl = (env: RuntimeEnv) => {
-  const vercelUrl =
-    env.VERCEL_PROJECT_PRODUCTION_URL ?? env.VERCEL_URL ?? undefined;
-  if (typeof vercelUrl === 'string' && vercelUrl.trim()) {
-    return `https://${vercelUrl.trim().replace(/^https?:\/\//u, '')}`;
-  }
-
-  if (typeof env.APP_DOMAIN === 'string' && env.APP_DOMAIN.trim()) {
-    const appDomain = env.APP_DOMAIN.trim();
-    return /^https?:\/\//u.test(appDomain) ? appDomain : `https://${appDomain}`;
-  }
-
-  return env.VITE_BASE_URL;
-};
-
-const clientSchema = () =>
+const clientSchema = (isProduction: boolean, isDevelopment: boolean) =>
   applicationIdentitySchema.extend({
-    VITE_BASE_URL: z
-      .url()
-      .refine((value) => isSecureUrlForProduction(value, isProd()), {
-        message: httpsInProductionMessage('VITE_BASE_URL'),
-      }),
+    VITE_BASE_URL: z.url(),
     VITE_AUTH_SIGNUP_ENABLED: z
       .enum(['true', 'false'])
       .optional()
@@ -59,24 +39,26 @@ const clientSchema = () =>
     DEV: z
       .union([z.boolean(), z.string()])
       .optional()
-      .transform((value) => (value === undefined ? isDev() : isTruthy(value))),
+      .transform((value) =>
+        value === undefined ? isDevelopment : isTruthy(value)
+      ),
     VITE_ENV_NAME: z
       .string()
       .optional()
-      .transform((value) => value ?? (isDev() ? 'LOCAL' : undefined)),
+      .transform((value) => value ?? (isDevelopment ? 'LOCAL' : undefined)),
     VITE_ENV_EMOJI: z
       .emoji()
       .optional()
-      .transform((value) => value ?? (isDev() ? '🚧' : undefined)),
+      .transform((value) => value ?? (isDevelopment ? '🚧' : undefined)),
     VITE_ENV_COLOR: z
       .string()
       .optional()
-      .transform((value) => value ?? (isDev() ? 'gold' : 'plum')),
+      .transform((value) => value ?? (isDevelopment ? 'gold' : 'plum')),
     VITE_S3_BUCKET_PUBLIC_URL: z.preprocess(
       emptyStringAsUndefined,
       z
         .url()
-        .refine((value) => isSecureUrlForProduction(value, isProd()), {
+        .refine((value) => isSecureUrlForProduction(value, isProduction), {
           message: httpsInProductionMessage('VITE_S3_BUCKET_PUBLIC_URL'),
         })
         .optional()
@@ -84,7 +66,7 @@ const clientSchema = () =>
     VITE_SENTRY_DSN: z
       .string()
       .url()
-      .refine((value) => isSecureUrlForProduction(value, isProd()), {
+      .refine((value) => isSecureUrlForProduction(value, isProduction), {
         message: httpsInProductionMessage('VITE_SENTRY_DSN'),
       })
       .optional(),
@@ -111,17 +93,33 @@ const clientSchema = () =>
 
 export type EnvClient = z.infer<ReturnType<typeof clientSchema>>;
 
-export const parseClientEnv = (raw: RuntimeEnv): EnvClient =>
-  clientSchema().parse({
+export const parseClientEnv = (
+  raw: RuntimeEnv,
+  runtimeProfile?: RuntimeProfile
+): EnvClient =>
+  clientSchema(
+    isProdRuntimeEnvironment(raw),
+    isDevRuntimeEnvironment(raw)
+  ).parse({
     ...raw,
-    VITE_BASE_URL: getBaseUrl(raw),
+    VITE_BASE_URL: resolveCanonicalOrigin(raw, runtimeProfile),
   });
 
 let cachedClientEnv: EnvClient | undefined;
+let cachedRuntimeProfile: RuntimeProfile | undefined;
 
-export function getEnvClient(): EnvClient {
-  if (cachedClientEnv) return cachedClientEnv;
-  cachedClientEnv = parseClientEnv(readRuntimeEnv());
+export function getEnvClient(runtimeProfile?: RuntimeProfile): EnvClient {
+  if (cachedClientEnv && runtimeProfile === undefined) return cachedClientEnv;
+  if (cachedClientEnv && cachedRuntimeProfile === runtimeProfile) {
+    return cachedClientEnv;
+  }
+  if (cachedRuntimeProfile && runtimeProfile !== cachedRuntimeProfile) {
+    throw new TypeError(
+      `Client configuration was already initialized for the ${cachedRuntimeProfile} runtime profile.`
+    );
+  }
+  cachedClientEnv = parseClientEnv(readRuntimeEnv(), runtimeProfile);
+  cachedRuntimeProfile = runtimeProfile;
   return cachedClientEnv;
 }
 

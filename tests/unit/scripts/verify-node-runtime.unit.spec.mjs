@@ -113,6 +113,10 @@ describe('Node verification configuration', () => {
       redisPort: 30_002,
     });
     expect(environment.CAPABILITY_PRESET).toBe('core');
+    expect(environment.APP_DOMAIN).toBe(
+      'https://start-ui-runtime-verification.example.test'
+    );
+    expect(environment.VITE_BASE_URL).toBe('https://build-placeholder.invalid');
     expect(environment.GITHUB_CLIENT_ID).toBe(
       'runtime-verification-github-client-id'
     );

@@ -58,12 +58,19 @@ export const createVerificationEnvironment = ({
   profile = 'node',
   redisPort,
 }) => {
-  const origin = `http://localhost:${appPort}`;
+  const origin = 'https://start-ui-runtime-verification.example.test';
   const databaseUrl = `postgres://postgres:postgres@127.0.0.1:${databasePort}/postgres`;
   return {
     ...buildToolEnvironment(),
     APP_NAME: 'Start UI Runtime Verification',
     APP_SLUG: 'start-ui-runtime-verification',
+    ...(profile === 'vercel'
+      ? {
+          VERCEL_PROJECT_PRODUCTION_URL:
+            'start-ui-runtime-verification.example.test',
+          VERCEL_URL: 'start-ui-runtime-preview.example.test',
+        }
+      : { APP_DOMAIN: origin }),
     AUTH_RATE_LIMIT_HMAC_SECRET: randomBytes(48).toString('base64url'),
     AUTH_SECRET: randomBytes(48).toString('base64url'),
     CAPABILITY_PRESET: preset,
@@ -88,7 +95,9 @@ export const createVerificationEnvironment = ({
     UPSTASH_REDIS_REST_TOKEN: 'runtime-verification-token',
     UPSTASH_REDIS_REST_URL: `http://127.0.0.1:${redisPort}`,
     VITE_AUTH_SIGNUP_ENABLED: 'false',
-    VITE_BASE_URL: origin,
+    // The build must replace this divergent placeholder with the
+    // profile-selected canonical origin in every client and SSR artifact.
+    VITE_BASE_URL: 'https://build-placeholder.invalid',
     VITE_ENV_COLOR: 'plum',
     VITE_ENV_EMOJI: '🧪',
     VITE_ENV_NAME: 'RUNTIME-VERIFY',

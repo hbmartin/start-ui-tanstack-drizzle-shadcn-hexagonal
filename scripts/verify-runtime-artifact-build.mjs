@@ -91,6 +91,7 @@ export const verifyRuntimeArtifactBuild = async (profile) => {
   await runCommand(path.join(root, 'node_modules/.bin/vite'), ['build'], env);
   verifyRuntimeProfile(selectedProfile, root, {
     expectedAppSlug: env.APP_SLUG,
+    forbiddenBuildTokens: [env.VITE_BASE_URL],
   });
   console.log(`Verified ${selectedProfile} runtime artifact build contract.`);
 };

@@ -303,8 +303,9 @@ pnpm dlx vercel --prod
 
 Run `pnpm verify:artifact:vercel` locally or in CI to validate the function
 entry, Node 24 runtime metadata, response-streaming flag, and static output.
-Configure the canonical application origin and allowed auth hosts explicitly
-until the v5 canonical-origin policy is implemented.
+Vercel selects the canonical application origin from its validated
+`VERCEL_PROJECT_PRODUCTION_URL`, falling back to `VERCEL_URL`; Better Auth uses
+that fixed origin rather than deriving links or callbacks from request hosts.
 
 Docs: [TanStack Start on Vercel](https://vercel.com/docs/frameworks/full-stack/tanstack-start), [Vercel Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions)
 
@@ -322,7 +323,7 @@ Deploy from Git:
 3. Add the production environment variables from `.env.example`.
 4. Set `RAILPACK_NODE_VERSION=24` if Railway does not pick Node 24 from `package.json`.
 5. Generate a public domain in the service Networking tab.
-6. Set `VITE_BASE_URL` to that public URL and redeploy.
+6. Set `APP_DOMAIN` to that exact HTTPS origin and redeploy.
 
 Deploy from the CLI after installing and authenticating the Railway CLI:
 

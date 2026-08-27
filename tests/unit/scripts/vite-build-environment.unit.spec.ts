@@ -17,6 +17,7 @@ afterEach(() => {
 
 describe('loadViteBuildEnvironment', () => {
   it('does not load hostile local env files for an isolated build', () => {
+    vi.stubEnv('APP_DOMAIN', undefined);
     vi.stubEnv('VITE_S3_BUCKET_PUBLIC_URL', undefined);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'start-ui-vite-env-'));
     temporaryDirectories.push(root);
@@ -25,6 +26,7 @@ describe('loadViteBuildEnvironment', () => {
       [
         'VITE_HOSTILE_LOCAL_SENTINEL=must-not-enter-build',
         'VITE_S3_BUCKET_PUBLIC_URL=https://hostile.example.test',
+        'APP_DOMAIN=https://hostile-origin.example.test',
       ].join('\n')
     );
 
@@ -42,8 +44,10 @@ describe('loadViteBuildEnvironment', () => {
     expect(isolated.envDir).toBe(false);
     expect(isolated.env.VITE_HOSTILE_LOCAL_SENTINEL).toBeUndefined();
     expect(isolated.env.VITE_S3_BUCKET_PUBLIC_URL).toBeUndefined();
+    expect(isolated.env.APP_DOMAIN).toBeUndefined();
     expect(ordinary.env.VITE_HOSTILE_LOCAL_SENTINEL).toBe(
       'must-not-enter-build'
     );
+    expect(ordinary.env.APP_DOMAIN).toBe('https://hostile-origin.example.test');
   });
 });

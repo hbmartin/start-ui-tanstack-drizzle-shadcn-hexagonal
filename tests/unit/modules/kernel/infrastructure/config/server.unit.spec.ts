@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configMock = vi.hoisted(() => ({
+  getEnvClient: vi.fn(),
   production: true,
   trustedProxyDepth: undefined as number | undefined,
+}));
+
+vi.mock('@/platform/env/client', () => ({
+  getEnvClient: configMock.getEnvClient,
 }));
 
 vi.mock('@/modules/kernel/infrastructure/config/application', () => ({
@@ -41,6 +46,7 @@ vi.mock('@/modules/kernel/infrastructure/config/telemetry', () => ({
 
 describe('runtime-profile server configuration', () => {
   beforeEach(() => {
+    configMock.getEnvClient.mockClear();
     configMock.production = true;
     configMock.trustedProxyDepth = undefined;
   });
@@ -52,6 +58,7 @@ describe('runtime-profile server configuration', () => {
         await import('@/modules/kernel/infrastructure/config/server');
 
       expect(() => validateServerConfig(runtimeProfile)).not.toThrow();
+      expect(configMock.getEnvClient).toHaveBeenCalledWith(runtimeProfile);
     }
   );
 
@@ -64,5 +71,6 @@ describe('runtime-profile server configuration', () => {
     expect(() => validateServerConfig('node')).toThrow('positive integer');
     configMock.trustedProxyDepth = 1;
     expect(() => validateServerConfig('node')).not.toThrow();
+    expect(configMock.getEnvClient).toHaveBeenLastCalledWith('node');
   });
 });
