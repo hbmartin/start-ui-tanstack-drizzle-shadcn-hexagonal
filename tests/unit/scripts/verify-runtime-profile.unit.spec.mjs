@@ -507,6 +507,72 @@ describe('runtime artifact verifier', () => {
     ).toThrow('Worker fetch must not override active parameter request');
   });
 
+  it('rejects a destructured catch parameter captured by an application callback', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleApplication=()=>application.fetch(request);',
+          'try{throw {request:new Request("https://bypassed.test")}}catch({request}){var handleApplication=()=>application.fetch(request)}'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must not override active parameter request');
+  });
+
+  it('rejects an active callback captured from a catch binding', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});',
+          'try{throw ()=>new Response("bypassed")}catch(handleApplication){var handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request})}'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('Worker fetch must not shadow active binding handleApplication');
+  });
+
+  it('allows a nested-function-local catch parameter', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const sentryOptions=configure();',
+          'const unrelated=()=>{try{throw 1}catch(request){return request}};const sentryOptions=configure();'
+        )
+    );
+
+    expect(
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toBe('cloudflare');
+  });
+
   it('rejects fetch-local substitutions for trusted Cloudflare owners', () => {
     const root = fixture();
     createCloudflareArtifact(root);

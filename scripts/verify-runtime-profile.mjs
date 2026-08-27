@@ -232,14 +232,21 @@ const isInsideContainingFunction = (node, ranges) =>
       (start !== node.start || end !== node.end)
   );
 
-const directDeclaredNames = (functionNode) => {
+const directCatchBindingNames = (functionNode, nestedRanges) => {
   const names = new Set();
-  const nestedRanges = nestedFunctionRanges(functionNode);
   new Visitor({
     CatchClause(node) {
       if (isInsideNestedFunction(node, nestedRanges)) return;
       for (const name of bindingNames(node.param)) names.add(name);
     },
+  }).visit(functionNode);
+  return names;
+};
+
+const directDeclaredNames = (functionNode) => {
+  const nestedRanges = nestedFunctionRanges(functionNode);
+  const names = directCatchBindingNames(functionNode, nestedRanges);
+  new Visitor({
     ClassDeclaration(node) {
       if (isInsideContainingFunction(node, nestedRanges)) return;
       if (node.id) names.add(node.id.name);
@@ -316,7 +323,7 @@ const assertNoActiveParameterOverrides = (declared, mutated, filePath) => {
   }
 };
 
-const assertNoActiveBindingMutations = (mutated, filePath) => {
+const assertNoActiveBindingOverrides = (catchBindings, mutated, filePath) => {
   const activeBindings = [
     'handleApplication',
     'handleDatabase',
@@ -327,15 +334,21 @@ const assertNoActiveBindingMutations = (mutated, filePath) => {
       !mutated.has(binding),
       `${filePath} Worker fetch must not mutate active binding ${binding}`
     );
+    assert(
+      !catchBindings.has(binding),
+      `${filePath} Worker fetch must not shadow active binding ${binding}`
+    );
   }
 };
 
 const assertNoCloudflareOwnerOverrides = (fetchFunction, filePath) => {
+  const nestedRanges = nestedFunctionRanges(fetchFunction);
+  const catchBindings = directCatchBindingNames(fetchFunction, nestedRanges);
   const declared = directDeclaredNames(fetchFunction);
   const mutated = mutatedNames(fetchFunction);
   assertNoTrustedCloudflareOverrides(declared, mutated, filePath);
   assertNoActiveParameterOverrides(declared, mutated, filePath);
-  assertNoActiveBindingMutations(mutated, filePath);
+  assertNoActiveBindingOverrides(catchBindings, mutated, filePath);
 };
 
 const identifierOccurrenceCount = (functionNode, localName) => {
