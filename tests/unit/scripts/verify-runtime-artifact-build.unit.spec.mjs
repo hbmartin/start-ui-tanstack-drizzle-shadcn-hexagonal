@@ -41,6 +41,32 @@ describe('runtime artifact build verification', () => {
     }
   );
 
+  it.each([
+    ['node', 'node-pg', 'off'],
+    ['vercel', 'neon-http', 'verify'],
+  ])(
+    'selects the %s artifact database fixture %s with TLS %s',
+    (profile, driver, tlsPolicy) => {
+      const environment = createArtifactVerificationEnvironment(profile);
+
+      expect(environment.DATABASE_DRIVER).toBe(driver);
+      expect(environment.DATABASE_TLS_POLICY).toBe(tlsPolicy);
+      expect(environment.DATABASE_MIGRATION_DRIVER).toBe('node-pg');
+      expect(environment.DATABASE_MIGRATION_TLS_POLICY).toBe('off');
+    }
+  );
+
+  it('does not invent a process database adapter for a Cloudflare artifact', () => {
+    const environment = createArtifactVerificationEnvironment('cloudflare');
+
+    expect(environment.DATABASE_URL).toBeUndefined();
+    expect(environment.DATABASE_DRIVER).toBeUndefined();
+    expect(environment.DATABASE_TLS_POLICY).toBeUndefined();
+    expect(environment.DATABASE_MIGRATION_URL).toBeUndefined();
+    expect(environment.DATABASE_MIGRATION_DRIVER).toBeUndefined();
+    expect(environment.DATABASE_MIGRATION_TLS_POLICY).toBeUndefined();
+  });
+
   it('rejects implicit and unknown profiles', () => {
     expect(() => parseArtifactProfile(undefined)).toThrow('unknown profile');
     expect(() => parseArtifactProfile('auto')).toThrow('unknown profile auto');

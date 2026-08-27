@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configMock = vi.hoisted(() => ({
+  assertDatabaseDriverForRuntimeProfile: vi.fn(),
   getEnvClient: vi.fn(),
+  getDatabaseConfig: vi.fn(() => ({ driver: 'node-pg' })),
   production: true,
   trustedProxyDepth: undefined as number | undefined,
 }));
@@ -17,7 +19,9 @@ vi.mock('@/modules/kernel/infrastructure/config/auth', () => ({
   getAuthConfig: vi.fn(),
 }));
 vi.mock('@/modules/kernel/infrastructure/config/database', () => ({
-  getDatabaseConfig: vi.fn(),
+  assertDatabaseDriverForRuntimeProfile:
+    configMock.assertDatabaseDriverForRuntimeProfile,
+  getDatabaseConfig: configMock.getDatabaseConfig,
 }));
 vi.mock('@/modules/kernel/infrastructure/config/email', () => ({
   getEmailConfig: vi.fn(),
@@ -47,11 +51,13 @@ vi.mock('@/modules/kernel/infrastructure/config/telemetry', () => ({
 describe('runtime-profile server configuration', () => {
   beforeEach(() => {
     configMock.getEnvClient.mockClear();
+    configMock.assertDatabaseDriverForRuntimeProfile.mockClear();
+    configMock.getDatabaseConfig.mockClear();
     configMock.production = true;
     configMock.trustedProxyDepth = undefined;
   });
 
-  it.each(['vercel', 'cloudflare'] as const)(
+  it.each(['vercel'] as const)(
     'does not require Node proxy depth for the %s profile',
     async (runtimeProfile) => {
       const { validateServerConfig } =
@@ -59,8 +65,35 @@ describe('runtime-profile server configuration', () => {
 
       expect(() => validateServerConfig(runtimeProfile)).not.toThrow();
       expect(configMock.getEnvClient).toHaveBeenCalledWith(runtimeProfile);
+      expect(
+        configMock.assertDatabaseDriverForRuntimeProfile
+      ).toHaveBeenCalledWith(runtimeProfile, { driver: 'node-pg' });
     }
   );
+
+  it('allows Cloudflare artifact validation before the live Hyperdrive adapter is installed', async () => {
+    const { validateServerBuildConfig } =
+      await import('@/modules/kernel/infrastructure/config/server');
+
+    expect(() => validateServerBuildConfig('cloudflare')).not.toThrow();
+    expect(
+      configMock.assertDatabaseDriverForRuntimeProfile
+    ).not.toHaveBeenCalled();
+    expect(configMock.getDatabaseConfig).not.toHaveBeenCalled();
+  });
+
+  it('rejects Cloudflare live startup until Hyperdrive is injected', async () => {
+    const { validateServerConfig } =
+      await import('@/modules/kernel/infrastructure/config/server');
+
+    expect(() => validateServerConfig('cloudflare')).toThrow(
+      'Hyperdrive database adapter'
+    );
+    expect(
+      configMock.assertDatabaseDriverForRuntimeProfile
+    ).not.toHaveBeenCalled();
+    expect(configMock.getDatabaseConfig).not.toHaveBeenCalled();
+  });
 
   it('requires a positive Node proxy depth in production', async () => {
     const { validateServerConfig } =
@@ -72,5 +105,8 @@ describe('runtime-profile server configuration', () => {
     configMock.trustedProxyDepth = 1;
     expect(() => validateServerConfig('node')).not.toThrow();
     expect(configMock.getEnvClient).toHaveBeenLastCalledWith('node');
+    expect(
+      configMock.assertDatabaseDriverForRuntimeProfile
+    ).toHaveBeenCalledWith('node', { driver: 'node-pg' });
   });
 });

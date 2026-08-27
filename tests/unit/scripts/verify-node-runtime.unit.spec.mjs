@@ -139,6 +139,21 @@ describe('Node verification configuration', () => {
       /^http:\/\/127\.0\.0\.1/u
     );
   });
+
+  it('selects the Vercel fetch database adapter for artifact verification', () => {
+    const environment = createVerificationEnvironment({
+      appPort: 30_000,
+      databasePort: 30_001,
+      preset: 'core',
+      profile: 'vercel',
+      redisPort: 30_002,
+    });
+
+    expect(environment.DATABASE_DRIVER).toBe('neon-http');
+    expect(environment.DATABASE_TLS_POLICY).toBe('verify');
+    expect(environment.DATABASE_MIGRATION_DRIVER).toBe('node-pg');
+    expect(environment.DATABASE_MIGRATION_TLS_POLICY).toBe('off');
+  });
 });
 
 describe('terminateChild', () => {

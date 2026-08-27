@@ -86,6 +86,14 @@ until the distributed authentication limiter is configured.
 
 Database transport is controlled by `DATABASE_TLS_POLICY`, not URL parameters. Loopback URLs default to `off`; every remote URL defaults to `verify`, including migration and Drizzle CLI processes. `encrypt` is an explicit opt-down that encrypts traffic without verifying the certificate or hostname. For private certificate authorities, extend the Node trust store (for example with `NODE_EXTRA_CA_CERTS`) instead of adding `sslmode` or certificate parameters to the database URL.
 
+The trusted runtime entrypoint also fixes the request-path database adapter:
+Node requires `DATABASE_DRIVER=node-pg`, while Vercel requires
+`DATABASE_DRIVER=neon-http`. Maintenance migrations may independently use
+`node-pg` or `neon-websocket`. The Cloudflare request path will use a separately
+injected Hyperdrive binding rather than one of these process-owned drivers.
+Live Worker startup fails explicitly until that binding contract is installed
+and verified; artifact-only build validation remains available.
+
 ## Run
 
 ```bash
@@ -294,6 +302,8 @@ Deploy from Git:
 4. Set Build Command to `pnpm build:vercel`.
 5. Leave Output Directory empty/default.
 6. Add the production environment variables from `.env.example`.
+   Set `DATABASE_DRIVER=neon-http` for the Vercel request runtime; use a direct
+   `node-pg` or `neon-websocket` maintenance connection for migrations.
 7. Deploy.
 
 Deploy from the CLI:

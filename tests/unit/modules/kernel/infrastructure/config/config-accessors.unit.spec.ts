@@ -27,6 +27,43 @@ describe('server config accessors', () => {
     );
   });
 
+  it.each([
+    ['node', 'node-pg'],
+    ['vercel', 'neon-http'],
+  ] as const)(
+    'accepts the %s profile runtime database driver %s',
+    async (runtimeProfile, driver) => {
+      const { assertDatabaseDriverForRuntimeProfile } =
+        await import('@/modules/kernel/infrastructure/config/database');
+
+      expect(() =>
+        assertDatabaseDriverForRuntimeProfile(runtimeProfile, { driver })
+      ).not.toThrow();
+    }
+  );
+
+  it.each([
+    ['node', 'neon-http'],
+    ['node', 'neon-websocket'],
+    ['vercel', 'node-pg'],
+    ['vercel', 'neon-websocket'],
+  ] as const)(
+    'rejects %s runtime database driver %s',
+    async (runtimeProfile, driver) => {
+      const { assertDatabaseDriverForRuntimeProfile } =
+        await import('@/modules/kernel/infrastructure/config/database');
+      const { ConfigurationError } =
+        await import('@/modules/kernel/domain/errors/configuration-error');
+
+      expect(() =>
+        assertDatabaseDriverForRuntimeProfile(runtimeProfile, { driver })
+      ).toThrow(ConfigurationError);
+      expect(() =>
+        assertDatabaseDriverForRuntimeProfile(runtimeProfile, { driver })
+      ).toThrow(`requires the`);
+    }
+  );
+
   it('caches parsed database config', async () => {
     const firstDatabaseUrl = makeTestDatabaseUrl({
       credentialLabel: 'first',

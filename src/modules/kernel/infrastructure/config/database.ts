@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
 import {
+  runtimeCapabilityRequirements,
+  type DatabaseAdapterKind,
+  type RuntimeProfile,
+} from '@/platform/runtime/runtime-profile';
+
+import {
   DATABASE_TLS_POLICIES,
   resolveDatabaseTlsPolicy,
   type DatabaseTlsPolicy,
@@ -34,6 +40,28 @@ export type MigrationDatabaseConfig = {
   driver: MigrationDatabaseDriver;
   tlsPolicy: DatabaseTlsPolicy;
 };
+
+const DATABASE_DRIVER_ADAPTER_KINDS = {
+  'neon-http': 'postgres-fetch',
+  'neon-websocket': undefined,
+  'node-pg': 'postgres-node',
+} as const satisfies Readonly<
+  Record<DatabaseDriver, DatabaseAdapterKind | undefined>
+>;
+
+export function assertDatabaseDriverForRuntimeProfile(
+  runtimeProfile: Exclude<RuntimeProfile, 'cloudflare'>,
+  config: Pick<DatabaseConfig, 'driver'>
+): void {
+  const requiredAdapter =
+    runtimeCapabilityRequirements[runtimeProfile].database;
+  const configuredAdapter = DATABASE_DRIVER_ADAPTER_KINDS[config.driver];
+  if (configuredAdapter !== requiredAdapter) {
+    throw new ConfigurationError(
+      `The ${runtimeProfile} runtime profile requires the ${requiredAdapter} request database adapter; DATABASE_DRIVER=${config.driver} does not provide it. Runtime database adapters are selected by the trusted entrypoint, not by deployment autodetection.`
+    );
+  }
+}
 
 let cachedDatabaseConfig: DatabaseConfig | undefined;
 let cachedMigrationDatabaseConfig: MigrationDatabaseConfig | undefined;

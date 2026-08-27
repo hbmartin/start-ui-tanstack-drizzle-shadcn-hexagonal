@@ -51,6 +51,18 @@ const buildToolEnvironment = () => {
   );
 };
 
+const runtimeDatabaseEnvironment = {
+  cloudflare: {},
+  node: {
+    DATABASE_DRIVER: 'node-pg',
+    DATABASE_TLS_POLICY: 'off',
+  },
+  vercel: {
+    DATABASE_DRIVER: 'neon-http',
+    DATABASE_TLS_POLICY: 'verify',
+  },
+};
+
 export const createVerificationEnvironment = ({
   appPort,
   databasePort,
@@ -60,6 +72,7 @@ export const createVerificationEnvironment = ({
 }) => {
   const origin = 'https://start-ui-runtime-verification.example.test';
   const databaseUrl = `postgres://postgres:postgres@127.0.0.1:${databasePort}/postgres`;
+  const databaseEnvironment = runtimeDatabaseEnvironment[profile];
   return {
     ...buildToolEnvironment(),
     APP_NAME: 'Start UI Runtime Verification',
@@ -75,12 +88,15 @@ export const createVerificationEnvironment = ({
     AUTH_SECRET: randomBytes(48).toString('base64url'),
     CAPABILITY_PRESET: preset,
     CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: 'false',
-    DATABASE_DRIVER: 'node-pg',
-    DATABASE_MIGRATION_DRIVER: 'node-pg',
-    DATABASE_MIGRATION_TLS_POLICY: 'off',
-    DATABASE_MIGRATION_URL: databaseUrl,
-    DATABASE_TLS_POLICY: 'off',
-    DATABASE_URL: databaseUrl,
+    ...databaseEnvironment,
+    ...(profile === 'cloudflare'
+      ? {}
+      : {
+          DATABASE_MIGRATION_DRIVER: 'node-pg',
+          DATABASE_MIGRATION_TLS_POLICY: 'off',
+          DATABASE_MIGRATION_URL: databaseUrl,
+          DATABASE_URL: databaseUrl,
+        }),
     EMAIL_DELIVERY_DISABLED: 'true',
     EMAIL_FROM: 'Start UI Runtime Verification <noreply@example.test>',
     EMAIL_SERVER: '',

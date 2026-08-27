@@ -4,7 +4,10 @@ import { getEnvClient } from '@/platform/env/client';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 import { getApplicationConfig } from './application';
 import { getAuthConfig } from './auth';
-import { getDatabaseConfig } from './database';
+import {
+  assertDatabaseDriverForRuntimeProfile,
+  getDatabaseConfig,
+} from './database';
 import { getEmailConfig } from './email';
 import {
   isProdRuntimeEnvironment,
@@ -31,6 +34,23 @@ const validateTrustedClientIpConfiguration = (
   }
 };
 
+const validateRuntimeDatabaseConfiguration = (
+  runtimeProfile: RuntimeProfile,
+  requiredRuntimeServices: boolean
+) => {
+  if (runtimeProfile === 'cloudflare') {
+    if (requiredRuntimeServices) {
+      throw new ConfigurationError(
+        'Cloudflare live startup is unavailable until the Worker entrypoint injects and verifies its Hyperdrive database adapter. Artifact build validation remains available.'
+      );
+    }
+    return;
+  }
+
+  const database = getDatabaseConfig();
+  assertDatabaseDriverForRuntimeProfile(runtimeProfile, database);
+};
+
 const validateServerConfiguration = (
   requiredRuntimeServices: boolean,
   runtimeProfile?: RuntimeProfile
@@ -47,7 +67,14 @@ const validateServerConfiguration = (
     );
   }
   getAuthConfig();
-  getDatabaseConfig();
+  if (runtimeProfile) {
+    validateRuntimeDatabaseConfiguration(
+      runtimeProfile,
+      requiredRuntimeServices
+    );
+  } else {
+    getDatabaseConfig();
+  }
   getEmailConfig();
   getLoggerConfig();
   getRedisConfig({ requiredInProduction: requiredRuntimeServices });
