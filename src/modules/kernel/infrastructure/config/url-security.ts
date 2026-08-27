@@ -106,7 +106,7 @@ export const assertDatabaseUrlTls = ({
   env,
   policy,
   policyOverrideName,
-  urlOwnerPolicyName,
+  urlOwnerPolicyName = policyOverrideName,
 }: {
   name: string;
   url: string;
@@ -154,11 +154,8 @@ export const assertDatabaseUrlTls = ({
   }
 
   if (policy === 'off' && !isLocalhostUrl(url)) {
-    const policyRemedy = policyOverrideName
-      ? `set ${policyOverrideName}=verify`
-      : "use a 'verify' policy";
     throw new ConfigurationError(
-      `${name} must not use TLS policy 'off' for a remote database; ${policyRemedy} or use a loopback endpoint.`
+      `${name} must not use TLS policy 'off' for a remote database; select a 'verify' policy or target a loopback endpoint.`
     );
   }
 

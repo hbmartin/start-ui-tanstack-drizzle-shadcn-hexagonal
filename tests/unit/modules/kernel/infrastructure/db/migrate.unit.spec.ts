@@ -224,6 +224,24 @@ describe('createMigrationDbClient', () => {
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });
 
+  it('rejects transaction-pooled programmatic config before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl({
+          host: 'ep-example-pooler.us-east-1.aws.neon.tech',
+        }),
+        driver: 'node-pg',
+        tlsPolicy: 'verify',
+      })
+    ).rejects.toThrow(
+      'Migration database client URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+  });
+
   it('uses natural policy remediation for programmatic migration config', async () => {
     const { createMigrationDbClient } =
       await import('@/modules/kernel/infrastructure/db/migrate');
@@ -235,7 +253,7 @@ describe('createMigrationDbClient', () => {
         tlsPolicy: 'off',
       })
     ).rejects.toThrow(
-      "migration database client URL must not use TLS policy 'off' for a remote database; use a 'verify' policy or use a loopback endpoint."
+      "migration database client URL must not use TLS policy 'off' for a remote database; select a 'verify' policy or target a loopback endpoint."
     );
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });

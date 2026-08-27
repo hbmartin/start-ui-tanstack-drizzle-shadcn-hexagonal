@@ -49,6 +49,11 @@ const DATABASE_DRIVER_ADAPTER_KINDS = {
   Record<DatabaseDriver, DatabaseAdapterKind | undefined>
 >;
 
+const DATABASE_URL_POLICY_NAMES = {
+  DATABASE_MIGRATION_URL: 'DATABASE_MIGRATION_TLS_POLICY',
+  DATABASE_URL: 'DATABASE_TLS_POLICY',
+} as const;
+
 export function assertDatabaseDriverForRuntimeProfile(
   runtimeProfile: Exclude<RuntimeProfile, 'cloudflare'>,
   config: Pick<DatabaseConfig, 'driver'>
@@ -100,7 +105,6 @@ export function getDatabaseConfig(): DatabaseConfig {
     env,
     policy: tlsPolicy,
     policyOverrideName: 'DATABASE_TLS_POLICY',
-    urlOwnerPolicyName: 'DATABASE_TLS_POLICY',
   });
   cachedDatabaseConfig = {
     databaseUrl: env.DATABASE_URL,
@@ -123,9 +127,9 @@ export function isLikelyTransactionPooledDatabaseUrl(url: string): boolean {
   }
 }
 
-function assertMigrationUrlSupportsMigrations(
+export function assertMigrationUrlSupportsMigrations(
   databaseUrl: string,
-  databaseUrlName: 'DATABASE_MIGRATION_URL' | 'DATABASE_URL'
+  databaseUrlName?: 'DATABASE_MIGRATION_URL' | 'DATABASE_URL'
 ): void {
   if (!isLikelyTransactionPooledDatabaseUrl(databaseUrl)) return;
 
@@ -135,8 +139,14 @@ function assertMigrationUrlSupportsMigrations(
     );
   }
 
+  if (databaseUrlName === 'DATABASE_MIGRATION_URL') {
+    throw new ConfigurationError(
+      'DATABASE_MIGRATION_URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+    );
+  }
+
   throw new ConfigurationError(
-    'DATABASE_MIGRATION_URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+    'Migration database client URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
   );
 }
 
@@ -164,10 +174,7 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
     databaseUrlName === 'DATABASE_MIGRATION_URL'
       ? 'DATABASE_MIGRATION_TLS_POLICY'
       : 'DATABASE_TLS_POLICY';
-  const urlOwnerPolicyName =
-    databaseUrlName === 'DATABASE_MIGRATION_URL'
-      ? 'DATABASE_MIGRATION_TLS_POLICY'
-      : 'DATABASE_TLS_POLICY';
+  const urlOwnerPolicyName = DATABASE_URL_POLICY_NAMES[databaseUrlName];
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy:
       env.DATABASE_MIGRATION_TLS_POLICY ?? env.DATABASE_TLS_POLICY,

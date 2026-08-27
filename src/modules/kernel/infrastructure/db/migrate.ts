@@ -11,6 +11,7 @@ import { Client as PgClient } from 'pg';
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
 import { getApplicationIdentity } from '@/modules/kernel/infrastructure/config/application';
 import {
+  assertMigrationUrlSupportsMigrations,
   getMigrationDatabaseConfig,
   type MigrationDatabaseConfig,
   type MigrationDatabaseDriver,
@@ -104,6 +105,7 @@ export async function createMigrationDbClient(
     policy: config.tlsPolicy,
     url: config.databaseUrl,
   });
+  assertMigrationUrlSupportsMigrations(config.databaseUrl);
   const db =
     config.driver === 'node-pg'
       ? createNodePgMigrationDb(config.databaseUrl, config.tlsPolicy)
