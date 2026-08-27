@@ -35,11 +35,18 @@ vi.mock('pg', () => ({
       mocks.poolConfig = config;
     }
 
-    connect = vi.fn(async () => ({
-      on: mocks.clientOn,
-      query: mocks.query,
-      release: mocks.release,
-    }));
+    connect = vi.fn(async () => {
+      const client = {
+        on: mocks.clientOn,
+        query: mocks.query,
+        release: mocks.release,
+      };
+      const connectListener = mocks.poolOn.mock.calls.find(
+        ([eventName]) => eventName === 'connect'
+      )?.[1] as ((connectedClient: typeof client) => void) | undefined;
+      connectListener?.(client);
+      return client;
+    });
 
     end = mocks.poolEnd;
     on = mocks.poolOn;
@@ -73,6 +80,10 @@ describe('PostgreSQL advisory lock TLS policy', () => {
         ssl,
       });
       expect(mocks.poolOn).toHaveBeenCalledWith('error', expect.any(Function));
+      expect(mocks.poolOn).toHaveBeenCalledWith(
+        'connect',
+        expect.any(Function)
+      );
       expect(mocks.clientOn).toHaveBeenCalledWith(
         'error',
         expect.any(Function)

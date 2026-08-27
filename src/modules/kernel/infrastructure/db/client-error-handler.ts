@@ -49,6 +49,9 @@ export const attachDatabasePoolErrorHandlers = (
   onError?: DatabaseClientErrorHandler
 ): void => {
   const handleClientError = createDatabaseClientErrorHandler(source, onError);
+  // @neondatabase/serverless treats non-error Pool listeners as incompatible
+  // with its optional poolQueryViaFetch shortcut. Callers use this only for
+  // session-sticky/transaction pools that intentionally require WebSockets.
   pool.on('connect', (client) => {
     client.on('error', handleClientError);
   });
