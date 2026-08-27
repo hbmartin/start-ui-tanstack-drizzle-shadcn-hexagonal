@@ -81,6 +81,24 @@ const readJson = (filePath) => {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 };
 
+const viteManifestEntries = (manifest, manifestFile) => {
+  assert(
+    manifest !== null &&
+      typeof manifest === 'object' &&
+      !Array.isArray(manifest),
+    `${manifestFile} must contain a Vite manifest object`
+  );
+  const entries = Object.values(manifest);
+  assert(
+    entries.every(
+      (entry) =>
+        entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+    ),
+    `${manifestFile} must contain valid Vite manifest entries`
+  );
+  return entries;
+};
+
 const readParsedModule = (filePath) => {
   assertFile(filePath);
   const source = fs.readFileSync(filePath, 'utf8');
@@ -139,15 +157,28 @@ const propertyKeyName = (property) =>
 const identifierMemberSignature = ({ type, computed, object, property } = {}) =>
   [type, computed, identifierName(object), identifierName(property)].join(':');
 
+const defaultExportEntries = (statement) => {
+  if (statement.type === 'ExportDefaultDeclaration') {
+    const localName = identifierName(statement.declaration);
+    return localName ? [{ localName, statement }] : [];
+  }
+  return namedExportEntries(statement)
+    .filter(([exportedName]) => exportedName === 'default')
+    .map(([, localName]) => ({ localName, statement }));
+};
+
 const findDefaultWorkerFetch = (program, filePath) => {
-  const defaultExports = program.body
-    .flatMap(namedExportEntries)
-    .filter(([exportedName]) => exportedName === 'default');
+  const defaultExports = program.body.flatMap(defaultExportEntries);
   assert(
     defaultExports.length === 1,
     `${filePath} must export one default Worker object`
   );
-  const defaultLocalName = defaultExports[0][1];
+  const [defaultExport] = defaultExports;
+  assert(
+    !defaultExport.statement.source,
+    `${filePath} must export one default Worker object`
+  );
+  const defaultLocalName = defaultExport.localName;
   const declarations = program.body.flatMap((statement) =>
     statement.type === 'VariableDeclaration' ? statement.declarations : []
   );
@@ -155,12 +186,24 @@ const findDefaultWorkerFetch = (program, filePath) => {
     (declarator) => identifierName(declarator.id) === defaultLocalName
   );
   assert(
-    workerOwners.length === 1 &&
-      workerOwners[0].init?.type === 'ObjectExpression',
+    workerOwners.length === 1,
     `${filePath} must export one default Worker object`
   );
+  const [workerOwner] = workerOwners;
+  assert(
+    nodeType(workerOwner.init) === 'ObjectExpression',
+    `${filePath} must export one default Worker object`
+  );
+  assert(
+    !mutatedNames(program).has(defaultLocalName),
+    `${filePath} must not mutate or alias the default Worker object`
+  );
+  assert(
+    identifierOccurrenceCount(program, defaultLocalName) === 2,
+    `${filePath} must not mutate or alias the default Worker object`
+  );
   const workerProperties = ownerProperties(
-    workerOwners[0].init,
+    workerOwner.init,
     filePath,
     'the default Worker object'
   );
@@ -202,19 +245,6 @@ const memberCallsAnywhere = (node, signature) => {
       if (identifierMemberSignature(call.callee) === signature) {
         calls.push(call);
       }
-    },
-  }).visit(node);
-  return calls;
-};
-
-const nestedMemberCallsAnywhere = (node, objectSignature, propertyName) => {
-  const calls = [];
-  new Visitor({
-    CallExpression(call) {
-      if (identifierName(call.callee?.property) !== propertyName) return;
-      if (identifierMemberSignature(call.callee.object) !== objectSignature)
-        return;
-      calls.push(call);
     },
   }).visit(node);
   return calls;
@@ -371,7 +401,9 @@ const directAssignments = (functionNode, localName) => {
   const assignments = [];
   new Visitor({
     AssignmentExpression(node) {
-      if (mutationRootName(node.left) === localName) assignments.push(node);
+      if (mutationTargetNames(node.left).includes(localName)) {
+        assignments.push(node);
+      }
     },
   }).visit(functionNode);
   const nestedRanges = nestedFunctionRanges(functionNode);
@@ -384,7 +416,7 @@ const assignmentsAnywhere = (node, localName) => {
   const assignments = [];
   new Visitor({
     AssignmentExpression(assignment) {
-      if (mutationRootName(assignment.left) === localName) {
+      if (mutationTargetNames(assignment.left).includes(localName)) {
         assignments.push(assignment);
       }
     },
@@ -511,6 +543,10 @@ const assertCloudflareNativeTelemetryOwner = (
   assert(
     fallbackOwners.length === 1,
     `${filePath} must declare one native telemetry fallback owner`
+  );
+  assert(
+    identifierName(fallbackOwners[0].id) === 'lastKnownNativeTelemetry',
+    `${filePath} must bind its native telemetry fallback directly`
   );
   const fallbackInitializer = unwrapAwaitExpression(fallbackOwners[0].init);
   assert(
@@ -974,12 +1010,14 @@ const assertCloudflareChunkProvenance = (
   );
   assertFile(chunkFile);
   const manifestFile = path.join(artifactRoot, '.vite', 'manifest.json');
+  // This checks that the emitted graph matches Vite's co-produced metadata.
+  // It is drift detection, not cryptographic attestation of a hostile output.
   const manifest = readJson(manifestFile);
   const assetFile = path
     .relative(artifactRoot, chunkFile)
     .split(path.sep)
     .join('/');
-  const sources = Object.values(manifest).filter(
+  const sources = viteManifestEntries(manifest, manifestFile).filter(
     (entry) => entry.file === assetFile
   );
   assert(
@@ -1052,6 +1090,12 @@ const assertCloudflareRequestTelemetryOwner = (
       [owner]: ['createCloudflareSentryOptions', 'setTelemetry'],
     },
   });
+  assertCloudflareChunkProvenance(
+    filePath,
+    chunkFile,
+    'src/runtime/cloudflare/request-telemetry.ts',
+    'request telemetry owner'
+  );
   assertCloudflareRequestTelemetryChunkBehavior(chunkProgram, chunkFile);
   assert(
     !hasIdentifierOutsideRanges(program, owner, [
@@ -1137,6 +1181,440 @@ const assertCloudflareApplicationLoader = (loader, filePath) => {
   );
 };
 
+const assertExactDirectVariableOwner = (owner, kind, message) =>
+  assertConditions(
+    [
+      owner.declaration.kind === kind,
+      owner.declaration.declarations.length === 1,
+      owner.declaration.declarations[0] === owner.declarator,
+    ],
+    message
+  );
+
+const assertUniversalApplicationFrameworkFailure = (
+  handler,
+  applicationChunk
+) => {
+  const message = `${applicationChunk} universal request owner must preserve framework failures`;
+  assert(nodeType(handler) === 'CatchClause', message);
+  assert(identifierName(handler.param) === 'error', message);
+  assert(handler.body.body.length === 2, message);
+  const [captureGuard, catchTail] = handler.body.body;
+  assert(nodeType(captureGuard) === 'IfStatement', message);
+  assert(nodeType(captureGuard.test) === 'LogicalExpression', message);
+  assert(nodeType(captureGuard.consequent) === 'ExpressionStatement', message);
+  assertConditions(
+    [captureGuard.alternate === null, captureGuard.test.operator === '&&'],
+    message
+  );
+  assertConditions(
+    [
+      nodeType(catchTail) === 'ThrowStatement',
+      identifierName(catchTail.argument) === 'error',
+    ],
+    message
+  );
+};
+
+const assertUniversalApplicationFrameworkCall = (scope, applicationChunk) => {
+  const message = `${applicationChunk} must execute the live TanStack application request path`;
+  assert(nodeType(scope) === 'TryStatement', message);
+  assert(scope.block.body.length === 1, message);
+  const [frameworkReturn] = scope.block.body;
+  assert(nodeType(frameworkReturn) === 'ReturnStatement', message);
+  assert(nodeType(frameworkReturn.argument) === 'AwaitExpression', message);
+  const frameworkCall = frameworkReturn.argument.argument;
+  assert(nodeType(frameworkCall) === 'CallExpression', message);
+  assert(nodeType(frameworkCall.callee) === 'MemberExpression', message);
+  assertConditions(
+    [
+      identifierName(frameworkCall.callee.property) === 'fetch',
+      identifierMemberSignature(frameworkCall.callee.object) ===
+        'MemberExpression:false:tanstack:default',
+      frameworkCall.arguments.length === 2,
+      identifierName(frameworkCall.arguments[0]) === 'request',
+    ],
+    message
+  );
+  const requestOptions = ownerProperties(
+    frameworkCall.arguments[1],
+    applicationChunk,
+    'the universal TanStack request options'
+  );
+  assertConditions(
+    [
+      requestOptions.size === 1,
+      identifierName(requestOptions.get('context')) === 'context',
+    ],
+    message
+  );
+  assertUniversalApplicationFrameworkFailure(scope.handler, applicationChunk);
+};
+
+const assertUniversalApplicationLifecycle = (scope, applicationChunk) => {
+  const message = `${applicationChunk} universal request owner must settle its active lifecycle`;
+  assert(nodeType(scope.finalizer) === 'BlockStatement', message);
+  assert(scope.finalizer.body.length === 1, message);
+  const [lifecycleScope] = scope.finalizer.body;
+  assert(nodeType(lifecycleScope) === 'TryStatement', message);
+  assertConditions(
+    [
+      lifecycleScope.block.body.length === 1,
+      lifecycleScope.finalizer === null,
+      nodeType(lifecycleScope.handler) === 'CatchClause',
+      lifecycleScope.handler.body.body.length === 0,
+    ],
+    message
+  );
+  const lifecycleStatement = lifecycleScope.block.body[0];
+  assert(nodeType(lifecycleStatement) === 'ExpressionStatement', message);
+  const lifecycleCall = unwrapChainExpression(lifecycleStatement.expression);
+  assertConditions(
+    [
+      nodeType(lifecycleCall) === 'CallExpression',
+      identifierMemberSignature(lifecycleCall.callee) ===
+        'MemberExpression:false:lifecycle:onRequestSettled',
+      lifecycleCall.arguments.length === 1,
+      identifierName(lifecycleCall.arguments[0]) === 'request',
+    ],
+    message
+  );
+};
+
+const assertUniversalApplicationCaptureState = (
+  captureDeclaration,
+  message
+) => {
+  assert(nodeType(captureDeclaration) === 'VariableDeclaration', message);
+  assertConditions(
+    [
+      captureDeclaration.kind === 'const',
+      captureDeclaration.declarations.length === 1,
+    ],
+    message
+  );
+  const [captureOwner] = captureDeclaration.declarations;
+  const captureCall = captureOwner.init;
+  assert(identifierName(captureOwner.id) === 'telemetryCaptureState', message);
+  assert(nodeType(captureCall) === 'CallExpression', message);
+  assertConditions(
+    [
+      identifierName(captureCall.callee) ===
+        'createRequestExceptionCaptureState',
+      captureCall.arguments.length === 0,
+    ],
+    message
+  );
+};
+
+const assertUniversalApplicationRequestBinding = (bindStatement, message) => {
+  assert(nodeType(bindStatement) === 'ExpressionStatement', message);
+  const bindCall = bindStatement?.expression;
+  assert(nodeType(bindCall) === 'CallExpression', message);
+  assertConditions(
+    [
+      identifierName(bindCall.callee) === 'bindRequestExceptionState',
+      bindCall.arguments.map(identifierName).join(':') ===
+        'request:telemetryCaptureState',
+    ],
+    message
+  );
+};
+
+const assertUniversalApplicationContext = (
+  contextDeclaration,
+  applicationChunk,
+  message
+) => {
+  assert(nodeType(contextDeclaration) === 'VariableDeclaration', message);
+  assertConditions(
+    [
+      contextDeclaration.kind === 'const',
+      contextDeclaration.declarations.length === 1,
+      identifierName(contextDeclaration.declarations[0].id) === 'context',
+    ],
+    message
+  );
+  const context = ownerProperties(
+    contextDeclaration.declarations[0].init,
+    applicationChunk,
+    'the universal request context'
+  );
+  const requestId = context.get('requestId');
+  assert(nodeType(requestId) === 'CallExpression', message);
+  assertConditions(
+    [
+      context.size === 3,
+      identifierMemberSignature(requestId.callee) ===
+        'MemberExpression:false:crypto:randomUUID',
+      requestId.arguments.length === 0,
+      identifierName(context.get('runtimeProfile')) === 'runtimeProfile',
+      identifierName(context.get('telemetryCaptureState')) ===
+        'telemetryCaptureState',
+    ],
+    message
+  );
+};
+
+const assertUniversalApplicationRequestPrelude = (
+  statements,
+  applicationChunk
+) => {
+  const message = `${applicationChunk} universal request owner must establish exact request state`;
+  const [captureDeclaration, bindStatement, contextDeclaration] = statements;
+  assertUniversalApplicationCaptureState(captureDeclaration, message);
+  assertUniversalApplicationRequestBinding(bindStatement, message);
+  assertUniversalApplicationContext(
+    contextDeclaration,
+    applicationChunk,
+    message
+  );
+};
+
+const assertUniversalApplicationRequestHandler = (
+  fetchOwner,
+  applicationChunk
+) => {
+  const message = `${applicationChunk} universal application server entry must own one live request handler`;
+  assertConditions(
+    [
+      nodeType(fetchOwner) === 'FunctionExpression',
+      fetchOwner.async,
+      fetchOwner.generator === false,
+      fetchOwner.params.map(identifierName).join(':') === 'request',
+      nodeType(fetchOwner.body) === 'BlockStatement',
+      fetchOwner.body.body.length === 5,
+    ],
+    message
+  );
+  const handleOwners = directBodyVariableDeclarators(
+    fetchOwner,
+    'handleRequest'
+  );
+  assert(handleOwners.length === 1 && handleOwners[0].index === 0, message);
+  assertExactDirectVariableOwner(handleOwners[0], 'const', message);
+  const handleRequest = handleOwners[0].declarator.init;
+  assertConditions(
+    [
+      nodeType(handleRequest) === 'ArrowFunctionExpression',
+      handleRequest.async,
+      handleRequest.params.length === 0,
+      nodeType(handleRequest.body) === 'BlockStatement',
+      handleRequest.body.body.length === 4,
+    ],
+    message
+  );
+  assertUniversalApplicationRequestPrelude(
+    handleRequest.body.body.slice(0, 3),
+    applicationChunk
+  );
+  const frameworkScope = handleRequest.body.body[3];
+  assertUniversalApplicationFrameworkCall(frameworkScope, applicationChunk);
+  assertUniversalApplicationLifecycle(frameworkScope, applicationChunk);
+  assertUniversalApplicationScope(fetchOwner.body.body, applicationChunk);
+};
+
+const assertUniversalApplicationScope = (statements, applicationChunk) => {
+  const message = `${applicationChunk} universal request owner must execute its application exactly once`;
+  const [requestOwner, disabledScope, resultOwner, runnerOwner, scope] =
+    statements;
+  assert(nodeType(requestOwner) === 'VariableDeclaration', message);
+  assert(nodeType(disabledScope) === 'IfStatement', message);
+  assertConditions(
+    [
+      disabledScope.alternate === null,
+      nodeType(disabledScope.test) === 'UnaryExpression',
+      disabledScope.test.operator === '!',
+      identifierName(disabledScope.test.argument) === 'requestScope',
+      nodeType(disabledScope.consequent) === 'ReturnStatement',
+      identifierName(disabledScope.consequent.argument?.callee) ===
+        'handleRequest',
+      disabledScope.consequent.argument?.arguments.length === 0,
+    ],
+    message
+  );
+  assertConditions(
+    [
+      nodeType(resultOwner) === 'VariableDeclaration',
+      resultOwner.kind === 'let',
+      resultOwner.declarations.length === 1,
+      identifierName(resultOwner.declarations[0]?.id) === 'applicationResult',
+      resultOwner.declarations[0]?.init === null,
+    ],
+    message
+  );
+  assertUniversalApplicationRunner(runnerOwner, applicationChunk);
+  assertUniversalApplicationScopeFallback(scope, applicationChunk);
+};
+
+const assertUniversalApplicationRunner = (statement, applicationChunk) => {
+  const message = `${applicationChunk} universal request owner must memoize one application execution`;
+  assert(nodeType(statement) === 'VariableDeclaration', message);
+  assertConditions(
+    [statement.kind === 'const', statement.declarations.length === 1],
+    message
+  );
+  const [runner] = statement.declarations;
+  assert(identifierName(runner.id) === 'runApplicationOnce', message);
+  assertConditions(
+    [
+      nodeType(runner.init) === 'ArrowFunctionExpression',
+      runner.init.params.length === 0,
+      nodeType(runner.init.body) === 'BlockStatement',
+      runner.init.body.body.length === 2,
+    ],
+    message
+  );
+  const [memoizeStatement, runnerReturn] = runner.init.body.body;
+  const memoize = memoizeStatement?.expression;
+  assert(nodeType(memoizeStatement) === 'ExpressionStatement', message);
+  assert(nodeType(memoize) === 'AssignmentExpression', message);
+  assertConditions(
+    [
+      memoize.operator === '??=',
+      identifierName(memoize.left) === 'applicationResult',
+      identifierName(memoize.right?.callee) === 'handleRequest',
+      memoize.right?.arguments.length === 0,
+      nodeType(runnerReturn) === 'ReturnStatement',
+      identifierName(runnerReturn.argument) === 'applicationResult',
+    ],
+    message
+  );
+};
+
+const assertUniversalApplicationScopeFallback = (scope, applicationChunk) => {
+  const message = `${applicationChunk} universal request owner must preserve scoped execution`;
+  assert(nodeType(scope) === 'TryStatement', message);
+  assertConditions(
+    [
+      scope.block.body.length === 1,
+      scope.finalizer === null,
+      nodeType(scope.handler) === 'CatchClause',
+      identifierName(scope.handler.param) === 'failure',
+      scope.handler.body.body.length === 2,
+    ],
+    message
+  );
+  const scopedReturn = scope.block.body[0];
+  assertConditions(
+    [
+      nodeType(scopedReturn) === 'ReturnStatement',
+      identifierName(scopedReturn.argument?.callee) === 'requestScope',
+      scopedReturn.argument?.arguments.length === 1,
+      identifierName(scopedReturn.argument?.arguments[0]) ===
+        'runApplicationOnce',
+    ],
+    message
+  );
+  const [reportStatement, fallbackReturn] = scope.handler.body.body;
+  const reportCall = reportStatement?.expression;
+  assertConditions(
+    [
+      nodeType(reportStatement) === 'ExpressionStatement',
+      nodeType(reportCall) === 'CallExpression',
+      identifierName(reportCall.callee) === 'reportTelemetryFailure',
+      reportCall.arguments.length === 2,
+      literalString(reportCall.arguments[0]) === 'sentry.request_scope',
+      identifierName(reportCall.arguments[1]) === 'failure',
+      nodeType(fallbackReturn) === 'ReturnStatement',
+      nodeType(fallbackReturn.argument) === 'LogicalExpression',
+      fallbackReturn.argument.operator === '??',
+      identifierName(fallbackReturn.argument.left) === 'applicationResult',
+      identifierName(fallbackReturn.argument.right?.callee) ===
+        'runApplicationOnce',
+      fallbackReturn.argument.right?.arguments.length === 0,
+    ],
+    message
+  );
+};
+
+const assertCloudflareApplicationChunkImports = (owner, applicationChunk) => {
+  for (const [index, ownerName, sourcePattern] of [
+    [0, 'telemetryProxy', /^\.\/telemetry(?:-[\w-]+)?\.js$/],
+    [1, 'tanstack', /^\.\/entry-server(?:-[\w-]+)?\.js$/],
+  ]) {
+    const imports = directBodyVariableDeclarators(owner, ownerName);
+    assert(
+      imports.length === 1,
+      `${applicationChunk} must import trusted ${ownerName} exactly once`
+    );
+    assert(
+      imports[0].index === index,
+      `${applicationChunk} must import trusted owners before returning the application`
+    );
+    assertExactDirectVariableOwner(
+      imports[0],
+      'const',
+      `${applicationChunk} must isolate trusted ${ownerName} import`
+    );
+    assert(
+      nodeType(imports[0].declarator.init) === 'AwaitExpression',
+      `${applicationChunk} must await trusted ${ownerName} import`
+    );
+    assert(
+      sourcePattern.test(dynamicImportSource(imports[0].declarator) ?? ''),
+      `${applicationChunk} must import trusted ${ownerName} from its owner chunk`
+    );
+  }
+};
+
+const assertCloudflareApplicationChunkBehavior = (
+  program,
+  applicationChunk
+) => {
+  assertCloudflareChunkLocalOwner(
+    program,
+    applicationChunk,
+    'createApplicationServerEntry'
+  );
+  const owner = topLevelVariableInitializer(
+    program,
+    'createApplicationServerEntry'
+  );
+  assert(
+    nodeType(owner) === 'ArrowFunctionExpression' && owner.async,
+    `${applicationChunk} universal application server entry must be async`
+  );
+  assert(
+    owner.params.map(identifierName).join(':') ===
+      'runtimeProfile:lifecycle:requestScope',
+    `${applicationChunk} universal application server entry must accept exact owners`
+  );
+  assert(
+    nodeType(owner.body) === 'BlockStatement' && owner.body.body.length === 3,
+    `${applicationChunk} must import owners before returning one TanStack server entry`
+  );
+  assertCloudflareApplicationChunkImports(owner, applicationChunk);
+  const applicationReturn = owner.body.body[2];
+  assert(
+    nodeType(applicationReturn) === 'ReturnStatement',
+    `${applicationChunk} must return one TanStack server entry`
+  );
+  const createEntry = applicationReturn.argument;
+  assertConditions(
+    [
+      nodeType(createEntry) === 'CallExpression',
+      identifierMemberSignature(createEntry.callee) ===
+        'MemberExpression:false:tanstack:createServerEntry',
+      createEntry.arguments.length === 1,
+    ],
+    `${applicationChunk} must return one TanStack server entry`
+  );
+  const entryOptions = ownerProperties(
+    createEntry.arguments[0],
+    applicationChunk,
+    'the universal TanStack server entry'
+  );
+  assert(
+    entryOptions.size === 1 && entryOptions.has('fetch'),
+    `${applicationChunk} must return one TanStack request owner`
+  );
+  assertUniversalApplicationRequestHandler(
+    entryOptions.get('fetch'),
+    applicationChunk
+  );
+};
+
 const assertCloudflareApplicationChunkProvenance = (
   applicationChunk,
   entryFile
@@ -1146,7 +1624,7 @@ const assertCloudflareApplicationChunkProvenance = (
   assertFile(manifestFile);
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
   const assetFile = path.relative(artifactRoot, applicationChunk);
-  const sources = Object.values(manifest).filter(
+  const sources = viteManifestEntries(manifest, manifestFile).filter(
     (entry) => entry.file === assetFile
   );
   assert(
@@ -1161,59 +1639,7 @@ const assertCloudflareApplicationChunkProvenance = (
     `${applicationChunk} must originate from the universal application server entry`
   );
   const { program } = readParsedModule(applicationChunk);
-  assertCloudflareChunkLocalOwner(
-    program,
-    applicationChunk,
-    'createApplicationServerEntry'
-  );
-  const owner = topLevelVariableInitializer(
-    program,
-    'createApplicationServerEntry'
-  );
-  assert(
-    owner.async,
-    `${applicationChunk} universal application server entry must be async`
-  );
-  assert(
-    owner.params.map(identifierName).join(':') ===
-      'runtimeProfile:lifecycle:requestScope',
-    `${applicationChunk} universal application server entry must accept exact owners`
-  );
-  const createEntries = memberCallsAnywhere(
-    owner,
-    'MemberExpression:false:tanstack:createServerEntry'
-  );
-  assert(
-    createEntries.length === 1,
-    `${applicationChunk} must create one TanStack server entry`
-  );
-  const frameworkRequests = nestedMemberCallsAnywhere(
-    owner,
-    'MemberExpression:false:tanstack:default',
-    'fetch'
-  );
-  assert(
-    frameworkRequests.length > 0,
-    `${applicationChunk} must execute the TanStack application request path`
-  );
-  for (const [ownerName, sourcePattern] of [
-    ['telemetryProxy', /^\.\/telemetry(?:-[\w-]+)?\.js$/],
-    ['tanstack', /^\.\/entry-server(?:-[\w-]+)?\.js$/],
-  ]) {
-    const imports = directBodyVariableDeclarators(owner, ownerName);
-    assert(
-      imports.length === 1,
-      `${applicationChunk} must import trusted ${ownerName} exactly once`
-    );
-    assert(
-      nodeType(imports[0].declarator.init) === 'AwaitExpression',
-      `${applicationChunk} must await trusted ${ownerName} import`
-    );
-    assert(
-      sourcePattern.test(dynamicImportSource(imports[0].declarator) ?? ''),
-      `${applicationChunk} must import trusted ${ownerName} from its owner chunk`
-    );
-  }
+  assertCloudflareApplicationChunkBehavior(program, applicationChunk);
 };
 
 const assertCloudflareApplicationInitializer = (initializer, filePath) => {
@@ -1317,7 +1743,7 @@ const assertCloudflareSdkOwner = (program, filePath) => {
   assertFile(manifestFile);
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
   const assetFile = importSource.replace(/^\.\//, '');
-  const sdkSources = Object.values(manifest).filter(
+  const sdkSources = viteManifestEntries(manifest, manifestFile).filter(
     (entry) => entry.file === assetFile
   );
   assert(
@@ -1423,8 +1849,16 @@ const assertCloudflareLifecycleChunk = (program, chunkFile) => {
     `${chunkFile} must define its Cloudflare request flush owner`
   );
   assert(
+    owner.async === false,
+    `${chunkFile} must define its Cloudflare request flush owner`
+  );
+  assert(
     owner.params.map(identifierName).join(':') === 'request:waitUntil',
     `${chunkFile} request flush owner must accept the active request lifecycle`
+  );
+  assert(
+    nodeType(owner.body) === 'BlockStatement',
+    `${chunkFile} request flush owner must own its bounded lifecycle body`
   );
   assert(
     owner.body.body.length === 2,
@@ -1454,7 +1888,8 @@ const assertCloudflareLifecycleChunk = (program, chunkFile) => {
     `${chunkFile} request flush owner must bound its flush completion`
   );
   assert(
-    identifierName(flushThen.callee.property) === 'then',
+    flushThen.callee?.computed === false &&
+      identifierName(flushThen.callee.property) === 'then',
     `${chunkFile} request flush owner must bound its flush completion`
   );
   assert(
@@ -1569,7 +2004,11 @@ const assertCloudflareDatabaseClose = (program, chunkFile) => {
   );
   const owner = topLevelVariableInitializer(program, 'closeDatabase');
   assertConditions(
-    [owner.async, owner.params.map(identifierName).join(':') === 'database'],
+    [
+      nodeType(owner) === 'ArrowFunctionExpression',
+      owner.async,
+      owner.params.map(identifierName).join(':') === 'database',
+    ],
     `${chunkFile} database close owner must accept one active client`
   );
   assert(
@@ -1619,15 +2058,24 @@ const assertCloudflareDatabaseClose = (program, chunkFile) => {
 
 const assertCloudflareDatabaseBodyGuards = (statements, chunkFile) => {
   const bodyGuard = statements[0];
+  assert(
+    nodeType(bodyGuard) === 'IfStatement',
+    `${chunkFile} database response owner must close bodyless responses`
+  );
+  assert(
+    nodeType(bodyGuard.test) === 'UnaryExpression',
+    `${chunkFile} database response owner must close bodyless responses`
+  );
+  assert(
+    nodeType(bodyGuard.consequent) === 'BlockStatement',
+    `${chunkFile} database response owner must close bodyless responses`
+  );
   assertConditions(
     [
-      nodeType(bodyGuard) === 'IfStatement',
       bodyGuard.alternate === null,
-      nodeType(bodyGuard.test) === 'UnaryExpression',
       bodyGuard.test.operator === '!',
       identifierMemberSignature(bodyGuard.test.argument) ===
         'MemberExpression:false:response:body',
-      nodeType(bodyGuard.consequent) === 'BlockStatement',
       bodyGuard.consequent.body.length === 2,
     ],
     `${chunkFile} database response owner must close bodyless responses`
@@ -1646,33 +2094,53 @@ const assertCloudflareDatabaseBodyGuards = (statements, chunkFile) => {
     `${chunkFile} database response owner must close bodyless responses`
   );
   const lockedGuard = statements[1];
+  assert(
+    nodeType(lockedGuard) === 'IfStatement',
+    `${chunkFile} database response owner must reject used or locked bodies`
+  );
+  assert(
+    nodeType(lockedGuard.test) === 'LogicalExpression',
+    `${chunkFile} database response owner must reject used or locked bodies`
+  );
+  assert(
+    nodeType(lockedGuard.consequent) === 'ThrowStatement',
+    `${chunkFile} database response owner must reject used or locked bodies`
+  );
+  const lockedFailure = lockedGuard.consequent.argument;
+  assert(
+    nodeType(lockedFailure) === 'NewExpression',
+    `${chunkFile} database response owner must reject used or locked bodies`
+  );
   assertConditions(
     [
-      nodeType(lockedGuard) === 'IfStatement',
       lockedGuard.alternate === null,
-      nodeType(lockedGuard.test) === 'LogicalExpression',
       lockedGuard.test.operator === '||',
       identifierMemberSignature(lockedGuard.test.left) ===
         'MemberExpression:false:response:bodyUsed',
       identifierName(lockedGuard.test.right?.property) === 'locked',
       identifierMemberSignature(lockedGuard.test.right?.object) ===
         'MemberExpression:false:response:body',
-      nodeType(lockedGuard.consequent) === 'ThrowStatement',
-      nodeType(lockedGuard.consequent.argument) === 'NewExpression',
-      identifierName(lockedGuard.consequent.argument.callee) === 'TypeError',
-      lockedGuard.consequent.argument.arguments.length === 1,
-      typeof literalString(lockedGuard.consequent.argument.arguments[0]) ===
-        'string',
+      identifierName(lockedFailure.callee) === 'TypeError',
+      lockedFailure.arguments.length === 1,
+      typeof literalString(lockedFailure.arguments[0]) === 'string',
     ],
     `${chunkFile} database response owner must reject used or locked bodies`
   );
 };
 
 const assertCloudflareDatabaseCompletion = (thenCall, chunkFile) => {
+  assert(
+    nodeType(thenCall) === 'CallExpression',
+    `${chunkFile} database response owner must close after stream completion`
+  );
+  assert(
+    nodeType(thenCall.callee) === 'MemberExpression',
+    `${chunkFile} database response owner must close after stream completion`
+  );
   assertConditions(
     [
-      nodeType(thenCall) === 'CallExpression',
-      identifierName(thenCall.callee?.property) === 'then',
+      thenCall.callee.computed === false,
+      identifierName(thenCall.callee.property) === 'then',
       thenCall.arguments.length === 1,
     ],
     `${chunkFile} database response owner must close after stream completion`
@@ -1692,10 +2160,18 @@ const assertCloudflareDatabaseCompletion = (thenCall, chunkFile) => {
 };
 
 const assertCloudflareDatabaseProducerIsolation = (catchCall, chunkFile) => {
+  assert(
+    nodeType(catchCall) === 'CallExpression',
+    `${chunkFile} database response owner must isolate producer termination`
+  );
+  assert(
+    nodeType(catchCall.callee) === 'MemberExpression',
+    `${chunkFile} database response owner must isolate producer termination`
+  );
   assertConditions(
     [
-      nodeType(catchCall) === 'CallExpression',
-      identifierName(catchCall.callee?.property) === 'catch',
+      catchCall.callee.computed === false,
+      identifierName(catchCall.callee.property) === 'catch',
       catchCall.arguments.length === 1,
       nodeType(catchCall.arguments[0]) === 'ArrowFunctionExpression',
       catchCall.arguments[0].params.length === 0,
@@ -1709,11 +2185,19 @@ const assertCloudflareDatabaseProducerIsolation = (catchCall, chunkFile) => {
 };
 
 const assertCloudflareDatabasePipe = (pipeCall, chunkFile) => {
+  assert(
+    nodeType(pipeCall) === 'CallExpression',
+    `${chunkFile} database response owner must pipe the active body`
+  );
+  assert(
+    nodeType(pipeCall.callee) === 'MemberExpression',
+    `${chunkFile} database response owner must pipe the active body`
+  );
   assertConditions(
     [
-      nodeType(pipeCall) === 'CallExpression',
-      identifierName(pipeCall.callee?.property) === 'pipeTo',
-      identifierMemberSignature(pipeCall.callee?.object) ===
+      pipeCall.callee.computed === false,
+      identifierName(pipeCall.callee.property) === 'pipeTo',
+      identifierMemberSignature(pipeCall.callee.object) ===
         'MemberExpression:false:response:body',
       pipeCall.arguments.length === 2,
       identifierName(pipeCall.arguments[0]) === 'writable',
@@ -1736,6 +2220,10 @@ const assertCloudflareDatabasePipe = (pipeCall, chunkFile) => {
 };
 
 const assertCloudflareDatabasePipeline = (statement, chunkFile) => {
+  assert(
+    nodeType(statement) === 'ExpressionStatement',
+    `${chunkFile} database response owner must close after stream completion`
+  );
   const catchCall = assertCloudflareDatabaseCompletion(
     statement.expression,
     chunkFile
@@ -1745,6 +2233,26 @@ const assertCloudflareDatabasePipeline = (statement, chunkFile) => {
     chunkFile
   );
   assertCloudflareDatabasePipe(pipeCall, chunkFile);
+};
+
+const assertTrustedChunkBuiltIns = (program, chunkFile, builtIns) => {
+  const mutated = mutatedNames(program);
+  ['globalThis', 'self', 'window', 'global'].forEach((globalAlias) => {
+    assert(
+      identifierOccurrenceCount(program, globalAlias) === 0,
+      `${chunkFile} must not access alternate global built-ins`
+    );
+  });
+  Object.entries(builtIns).forEach(([builtIn, expectedOccurrences]) => {
+    assertConditions(
+      [
+        topLevelDeclarationsForBinding(program, builtIn).length === 0,
+        !mutated.has(builtIn) &&
+          identifierOccurrenceCount(program, builtIn) === expectedOccurrences,
+      ],
+      `${chunkFile} must use the trusted ${builtIn} built-in`
+    );
+  });
 };
 
 const assertCloudflareDatabaseResponseBinding = (program, chunkFile) => {
@@ -1758,29 +2266,17 @@ const assertCloudflareDatabaseResponseBinding = (program, chunkFile) => {
     'bindCloudflareDatabaseToResponse'
   );
   assert(
-    shorthandBindingSignature({ id: owner.params[0] }) ===
-      expectedShorthandBindingSignature(['database', 'request', 'response']),
+    nodeType(owner) === 'ArrowFunctionExpression' &&
+      owner.async === false &&
+      owner.params.length === 1 &&
+      shorthandBindingSignature({ id: owner.params[0] }) ===
+        expectedShorthandBindingSignature(['database', 'request', 'response']),
     `${chunkFile} database response owner must accept exact active inputs`
   );
   assert(
     nodeType(owner.body) === 'BlockStatement',
     `${chunkFile} database response owner must own its stream lifecycle body`
   );
-  const nestedRanges = nestedFunctionRanges(program);
-  const declared = directDeclaredNames(
-    program,
-    nestedRanges,
-    directCatchBindingNames(program, nestedRanges)
-  );
-  const mutated = mutatedNames(program);
-  for (const builtIn of ['Response', 'TransformStream', 'TypeError']) {
-    assert(
-      !declared.has(builtIn) &&
-        !mutated.has(builtIn) &&
-        staticImportsForBinding(program, builtIn).length === 0,
-      `${chunkFile} database response owner must use the trusted ${builtIn} built-in`
-    );
-  }
   assert(
     owner.body.body.length === 5,
     `${chunkFile} database response owner must guard, pipe, and return one response`
@@ -1840,7 +2336,7 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
     'runWithCloudflareDatabase'
   );
   assert(
-    nodeType(owner) === 'ArrowFunctionExpression',
+    nodeType(owner) === 'ArrowFunctionExpression' && owner.async,
     `${chunkFile} must define its Cloudflare database request owner`
   );
   assertConditions(
@@ -1850,6 +2346,10 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
         expectedShorthandBindingSignature(['binding', 'handle', 'request']),
     ],
     `${chunkFile} database owner must accept exact active request inputs`
+  );
+  assert(
+    nodeType(owner.body) === 'BlockStatement',
+    `${chunkFile} database owner must own its bounded request body`
   );
   assert(
     owner.body.body.length === 3,
@@ -1864,6 +2364,7 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
     [
       databaseOwners[0].index === 0,
       databaseOwners[0].declaration.kind === 'let',
+      databaseOwners[0].declaration.declarations.length === 1,
       databaseOwners[0].declarator.init === null,
     ],
     `${chunkFile} database owner must declare one request-local database client`
@@ -1905,6 +2406,10 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
     `${chunkFile} database owner must create its client from Hyperdrive`
   );
   assert(
+    createDatabase.arguments.length === 1,
+    `${chunkFile} database owner must create its client from Hyperdrive`
+  );
+  assert(
     identifierName(createDatabase.arguments[0]) === 'binding',
     `${chunkFile} database owner must use the active Hyperdrive binding`
   );
@@ -1924,6 +2429,10 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
     `${chunkFile} database owner must return its runtime database scope`
   );
   assert(
+    runtimeScope.arguments.length === 2,
+    `${chunkFile} database owner must return its runtime database scope`
+  );
+  assert(
     identifierName(runtimeScope.arguments[0]) === 'database',
     `${chunkFile} database owner must scope the active database client`
   );
@@ -1939,6 +2448,10 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
   assert(
     handleScope.params.length === 0,
     `${chunkFile} database owner must invoke one async scoped handler`
+  );
+  assert(
+    nodeType(handleScope.body) === 'BlockStatement',
+    `${chunkFile} database owner must own its scoped application body`
   );
   assertConditions(
     [
@@ -1968,7 +2481,24 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
     `${chunkFile} database owner must validate the Cloudflare adapter in scope`
   );
   assert(
+    validateCall.arguments.length === 2,
+    `${chunkFile} database owner must validate the Cloudflare adapter in scope`
+  );
+  assert(
     literalString(validateCall.arguments[0]) === 'cloudflare',
+    `${chunkFile} database owner must validate the Cloudflare adapter in scope`
+  );
+  const validationOptions = ownerProperties(
+    validateCall.arguments[1],
+    chunkFile,
+    'the Cloudflare database adapter validation'
+  );
+  assertConditions(
+    [
+      validationOptions.size === 1,
+      identifierMemberSignature(validationOptions.get('databaseAdapter')) ===
+        'MemberExpression:false:database:$adapter',
+    ],
     `${chunkFile} database owner must validate the Cloudflare adapter in scope`
   );
   const responses = directBodyVariableDeclarators(
@@ -1982,6 +2512,14 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
   assert(
     responses[0].index === 1,
     `${chunkFile} database owner must capture the application response directly`
+  );
+  assertConditions(
+    [
+      responses[0].declaration.kind === 'const',
+      responses[0].declaration.declarations.length === 1,
+      responses[0].declaration.declarations[0] === responses[0].declarator,
+    ],
+    `${chunkFile} database owner must isolate one application response`
   );
   const responseInitializer = responses[0].declarator.init;
   assert(
@@ -2016,6 +2554,10 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
       'bindCloudflareDatabaseToResponse',
     `${chunkFile} database owner must return its response lifetime binding`
   );
+  assert(
+    responseBinding.arguments.length === 1,
+    `${chunkFile} database owner must return its response lifetime binding`
+  );
   const [bindingInput = {}] = responseBinding.arguments;
   const bindingProperties = ownerProperties(
     bindingInput,
@@ -2032,22 +2574,37 @@ const assertCloudflareDatabaseChunk = (program, chunkFile) => {
       `${chunkFile} database response lifetime owner must receive active ${name}`
     );
   }
+  assertTrustedChunkBuiltIns(program, chunkFile, {
+    Response: 1,
+    TransformStream: 1,
+    TypeError: 1,
+  });
 };
 
 const assertCloudflareDatabaseConnectFailure = (handler, chunkFile) => {
+  const preserveMessage = `${chunkFile} database owner must preserve connection failures`;
+  assert(nodeType(handler) === 'CatchClause', preserveMessage);
   assertConditions(
     [
-      nodeType(handler) === 'CatchClause',
-      identifierName(handler?.param) === 'failure',
-      handler?.body.body.length === 2,
+      identifierName(handler.param) === 'failure',
+      handler.body.body.length === 2,
     ],
-    `${chunkFile} database owner must preserve connection failures`
+    preserveMessage
   );
-  const capture = handler.body.body[0].expression;
+  const captureStatement = handler.body.body[0];
+  assert(
+    nodeType(captureStatement) === 'ExpressionStatement',
+    `${chunkFile} database owner must report connection failures`
+  );
+  const capture = captureStatement.expression;
+  assert(
+    nodeType(capture) === 'CallExpression',
+    `${chunkFile} database owner must report connection failures`
+  );
   assertConditions(
     [
-      nodeType(capture) === 'CallExpression',
       identifierName(capture.callee) === 'captureDatabaseConnectionFailure',
+      capture.arguments.length === 1,
       identifierName(capture.arguments[0]) === 'failure',
     ],
     `${chunkFile} database owner must report connection failures`
@@ -2078,7 +2635,9 @@ const assertCloudflareDatabaseRequestFailure = (handler, chunkFile) => {
   );
   assertConditions(
     [
+      nodeType(close.argument) === 'CallExpression',
       identifierName(close.argument?.callee) === 'closeDatabase',
+      close.argument?.arguments.length === 1,
       identifierName(close.argument?.arguments[0]) === 'database',
     ],
     `${chunkFile} database owner must close the active client after request failure`
@@ -2338,15 +2897,27 @@ const assertCloudflareRequestTelemetryChunkBehavior = (program, chunkFile) => {
     'configureCloudflareRequestTelemetry'
   );
   assert(
-    shorthandBindingSignature({ id: owner.params[0] }) ===
-      expectedShorthandBindingSignature([
-        'environment',
-        'nativeTelemetry',
-        'request',
-        'sentry',
-        'sentryRequestIsolationReady',
-      ]),
+    nodeType(owner) === 'ArrowFunctionExpression',
     `${chunkFile} request telemetry owner must accept exact active inputs`
+  );
+  assertConditions(
+    [
+      owner.async === false,
+      owner.params.length === 1,
+      shorthandBindingSignature({ id: owner.params[0] }) ===
+        expectedShorthandBindingSignature([
+          'environment',
+          'nativeTelemetry',
+          'request',
+          'sentry',
+          'sentryRequestIsolationReady',
+        ]),
+    ],
+    `${chunkFile} request telemetry owner must accept exact active inputs`
+  );
+  assert(
+    nodeType(owner.body) === 'BlockStatement',
+    `${chunkFile} request telemetry owner must own its configuration body`
   );
   assert(
     owner.body.body.length === 3,
@@ -2389,8 +2960,12 @@ const assertCloudflareIsolationInitializer = (program, chunkFile) => {
     `${chunkFile} must define Sentry async-context isolation for the active API`
   );
   assert(
-    owner.params.map(identifierName).join(':') === 'api',
+    !owner.async && owner.params.map(identifierName).join(':') === 'api',
     `${chunkFile} must define Sentry async-context isolation for the active API`
+  );
+  assert(
+    nodeType(owner.body) === 'BlockStatement',
+    `${chunkFile} Sentry isolation owner must own its fail-safe setup body`
   );
   assert(
     owner.body.body.length === 1,
@@ -2467,8 +3042,14 @@ const assertCloudflareSentryApplicationChunkOwner = (program, chunkFile) => {
     'initializeCloudflareSentryApplication'
   );
   assert(
-    owner.params.map(identifierName).join(':') === 'api:loadApplication',
+    nodeType(owner) === 'ArrowFunctionExpression' &&
+      owner.async &&
+      owner.params.map(identifierName).join(':') === 'api:loadApplication',
     `${chunkFile} Sentry application owner must accept exact initialization inputs`
+  );
+  assert(
+    nodeType(owner.body) === 'BlockStatement',
+    `${chunkFile} Sentry application owner must own its initialization body`
   );
   assert(
     owner.body.body.length === 2,
@@ -2486,6 +3067,14 @@ const assertCloudflareSentryApplicationChunkOwner = (program, chunkFile) => {
     readiness[0].index === 0,
     `${chunkFile} Sentry application owner must establish isolation first`
   );
+  assertConditions(
+    [
+      readiness[0].declaration.kind === 'const',
+      readiness[0].declaration.declarations.length === 1,
+      readiness[0].declaration.declarations[0] === readiness[0].declarator,
+    ],
+    `${chunkFile} Sentry application owner must isolate its readiness state`
+  );
   const initialize = readiness[0].declarator.init;
   assert(
     nodeType(initialize) === 'CallExpression',
@@ -2495,6 +3084,7 @@ const assertCloudflareSentryApplicationChunkOwner = (program, chunkFile) => {
     [
       identifierName(initialize.callee) ===
         'initializeCloudflareSentryIsolation',
+      initialize.arguments.length === 1,
       identifierName(initialize.arguments[0]) === 'api',
     ],
     `${chunkFile} Sentry application owner must initialize the active SDK isolation`
@@ -2537,17 +3127,723 @@ const assertCloudflareSentryApplicationChunkOwner = (program, chunkFile) => {
   );
 };
 
+const identityExpression = (node) => node;
+const chainExpressionValue = (node) => node.expression;
+const chainExpressionReaders = { ChainExpression: chainExpressionValue };
+const unwrapChainExpression = (node) =>
+  (chainExpressionReaders[nodeType(node)] ?? identityExpression)(node);
+
+const assertApplicationOutcomeGuard = (
+  statement,
+  { consequentType, memberName, optional, outcomeType },
+  chunkFile
+) => {
+  assert(
+    nodeType(statement) === 'IfStatement',
+    `${chunkFile} Sentry request owner must preserve ${outcomeType} application outcomes`
+  );
+  const test = statement.test;
+  const consequence = statement.consequent;
+  assertConditions(
+    [
+      statement.alternate === null,
+      nodeType(test) === 'BinaryExpression',
+      nodeType(consequence) === consequentType,
+    ],
+    `${chunkFile} Sentry request owner must preserve ${outcomeType} application outcomes`
+  );
+  const outcomeMember = unwrapChainExpression(test.left);
+  assertConditions(
+    [
+      test.operator === '===',
+      identifierMemberSignature(outcomeMember) ===
+        'MemberExpression:false:applicationOutcome:type',
+      outcomeMember.optional === optional,
+      literalString(test.right) === outcomeType,
+      identifierMemberSignature(consequence.argument) ===
+        `MemberExpression:false:applicationOutcome:${memberName}`,
+    ],
+    `${chunkFile} Sentry request owner must preserve ${outcomeType} application outcomes`
+  );
+};
+
+const assertCloudflareSentryRequestFailure = (requestScope, chunkFile) => {
+  const handler = requestScope.handler;
+  assertConditions(
+    [
+      requestScope.finalizer === null,
+      nodeType(handler) === 'CatchClause',
+      identifierName(handler?.param) === 'failure',
+      handler?.body.body.length === 2,
+    ],
+    `${chunkFile} Sentry request owner must isolate SDK failures`
+  );
+  assertApplicationOutcomeGuard(
+    handler.body.body[0],
+    {
+      consequentType: 'ThrowStatement',
+      memberName: 'failure',
+      optional: true,
+      outcomeType: 'failed',
+    },
+    chunkFile
+  );
+  const report = handler.body.body[1].expression;
+  assertConditions(
+    [
+      nodeType(report) === 'CallExpression',
+      identifierName(report.callee) === 'reportTelemetryFailure',
+      report.arguments.length === 2,
+      literalString(report.arguments[0]) === 'sentry.cloudflare.request',
+      identifierName(report.arguments[1]) === 'failure',
+    ],
+    `${chunkFile} Sentry request owner must report bounded SDK failure diagnostics`
+  );
+};
+
+const assertCloudflareSentrySkippedReport = (statement, chunkFile) => {
+  const report = statement?.expression;
+  const skipped = report?.arguments[1];
+  assertConditions(
+    [
+      nodeType(statement) === 'ExpressionStatement',
+      nodeType(report) === 'CallExpression',
+      identifierName(report?.callee) === 'reportTelemetryFailure',
+      report?.arguments.length === 2,
+      literalString(report?.arguments[0]) === 'sentry.cloudflare.request',
+      nodeType(skipped) === 'NewExpression',
+      identifierName(skipped?.callee) === 'Error',
+      skipped?.arguments.length === 1,
+      literalString(skipped?.arguments[0]) ===
+        'Sentry request wrapper skipped application handler',
+    ],
+    `${chunkFile} Sentry request owner must report a skipped SDK application path`
+  );
+};
+
+const assertCloudflareSentryLifecycleRequestHelper = (program, chunkFile) => {
+  const helper = 'sentryLifecycleRequest';
+  const ownerMessage = `${chunkFile} Sentry lifecycle request owner must bound request normalization`;
+  assertExactLocalChunkFunction(program, chunkFile, helper);
+  assert(
+    identifierOccurrenceCount(program, helper) === 2,
+    `${chunkFile} must not alias trusted helper ${helper}`
+  );
+  const owner = topLevelVariableInitializer(program, helper);
+  assertConditions(
+    [
+      nodeType(owner) === 'ArrowFunctionExpression',
+      nodeType(owner.body) === 'BlockStatement',
+    ],
+    ownerMessage
+  );
+  assertConditions(
+    [
+      owner.params.map(identifierName).join(':') === 'request',
+      owner.async === false,
+      owner.body.body.length === 2,
+    ],
+    ownerMessage
+  );
+  const [methodGuard, normalizedReturn] = owner.body.body;
+  assertConditions(
+    [
+      nodeType(methodGuard) === 'IfStatement',
+      nodeType(normalizedReturn) === 'ReturnStatement',
+    ],
+    `${chunkFile} Sentry lifecycle request owner must preserve bodyful methods`
+  );
+  const methodTest = methodGuard.test;
+  assert(
+    nodeType(methodTest) === 'LogicalExpression',
+    `${chunkFile} Sentry lifecycle request owner must preserve bodyful methods`
+  );
+  const [headCheck, optionsCheck] = [methodTest.left, methodTest.right];
+  assertConditions(
+    [
+      methodGuard.alternate === null,
+      methodTest.operator === '&&',
+      nodeType(headCheck) === 'BinaryExpression',
+      nodeType(optionsCheck) === 'BinaryExpression',
+      nodeType(methodGuard.consequent) === 'ReturnStatement',
+    ],
+    `${chunkFile} Sentry lifecycle request owner must preserve bodyful methods`
+  );
+  assertConditions(
+    [
+      headCheck.operator === '!==',
+      identifierMemberSignature(headCheck.left) ===
+        'MemberExpression:false:request:method',
+      literalString(headCheck.right) === 'HEAD',
+      optionsCheck.operator === '!==',
+      identifierMemberSignature(optionsCheck.left) ===
+        'MemberExpression:false:request:method',
+      literalString(optionsCheck.right) === 'OPTIONS',
+      identifierName(methodGuard.consequent.argument) === 'request',
+    ],
+    `${chunkFile} Sentry lifecycle request owner must preserve bodyful methods`
+  );
+  const normalized = normalizedReturn.argument;
+  assertConditions(
+    [
+      nodeType(normalized) === 'NewExpression',
+      identifierName(normalized.callee) === 'Request',
+      normalized.arguments.length === 2,
+      identifierMemberSignature(normalized.arguments[0]) ===
+        'MemberExpression:false:request:url',
+    ],
+    `${chunkFile} Sentry lifecycle request owner must normalize bodyless methods`
+  );
+  const normalizedOptions = ownerProperties(
+    normalized.arguments[1],
+    chunkFile,
+    'the Sentry lifecycle request normalization'
+  );
+  assertConditions(
+    [
+      normalizedOptions.size === 2,
+      identifierMemberSignature(normalizedOptions.get('headers')) ===
+        'MemberExpression:false:request:headers',
+      literalString(normalizedOptions.get('method')) === 'GET',
+    ],
+    `${chunkFile} Sentry lifecycle request owner must preserve headers and normalize its method`
+  );
+};
+
+const assertCloudflareSentinelSettle = (settle, chunkFile) => {
+  const message = `${chunkFile} Sentry sentinel owner must close its stream on completion`;
+  assert(nodeType(settle) === 'ArrowFunctionExpression', message);
+  assert(nodeType(settle.body) === 'CallExpression', message);
+  assertConditions(
+    [
+      settle.params.length === 0,
+      settle.expression,
+      identifierMemberSignature(settle.body.callee) ===
+        'MemberExpression:false:controller:close',
+      settle.body.arguments.length === 0,
+    ],
+    message
+  );
+};
+
+const assertCloudflareSentinelMetadata = (responseOptions, chunkFile) => {
+  const options = ownerProperties(
+    responseOptions,
+    chunkFile,
+    'the Sentry sentinel response'
+  );
+  const headers = ownerProperties(
+    options.get('headers'),
+    chunkFile,
+    'the Sentry sentinel response headers'
+  );
+  const status = options.get('status');
+  assert(
+    nodeType(status) === 'Literal',
+    `${chunkFile} Sentry sentinel owner must emit exact bounded response metadata`
+  );
+  assertConditions(
+    [
+      options.size === 2,
+      headers.size === 1,
+      literalString(headers.get('content-type')) ===
+        'text/plain; charset=utf-8',
+      status.value === 200,
+    ],
+    `${chunkFile} Sentry sentinel owner must emit exact bounded response metadata`
+  );
+};
+
+const assertCloudflareSentrySentinelHelper = (program, chunkFile) => {
+  const helper = 'sentrySentinelResponse';
+  const ownerMessage = `${chunkFile} Sentry sentinel owner must create one bounded streaming response`;
+  assertExactLocalChunkFunction(program, chunkFile, helper);
+  assert(
+    identifierOccurrenceCount(program, helper) === 2,
+    `${chunkFile} must not alias trusted helper ${helper}`
+  );
+  const owner = topLevelVariableInitializer(program, helper);
+  assertConditions(
+    [
+      nodeType(owner) === 'ArrowFunctionExpression',
+      nodeType(owner.body) === 'NewExpression',
+    ],
+    ownerMessage
+  );
+  assertConditions(
+    [
+      owner.params.map(identifierName).join(':') === 'applicationCompletion',
+      owner.async === false,
+      owner.expression,
+      identifierName(owner.body.callee) === 'Response',
+      owner.body.arguments.length === 2,
+    ],
+    ownerMessage
+  );
+  const [stream, responseOptions] = owner.body.arguments;
+  assert(
+    nodeType(stream) === 'NewExpression',
+    `${chunkFile} Sentry sentinel owner must own one completion stream`
+  );
+  assertConditions(
+    [
+      identifierName(stream.callee) === 'ReadableStream',
+      stream.arguments.length === 1,
+    ],
+    `${chunkFile} Sentry sentinel owner must own one completion stream`
+  );
+  const streamOwner = ownerProperties(
+    stream.arguments[0],
+    chunkFile,
+    'the Sentry sentinel completion stream'
+  );
+  const start = streamOwner.get('start');
+  assert(
+    nodeType(start) === 'FunctionExpression',
+    `${chunkFile} Sentry sentinel owner must own one stream start callback`
+  );
+  assertConditions(
+    [
+      streamOwner.size === 1,
+      start.async === false,
+      start.generator === false,
+      start.params.map(identifierName).join(':') === 'controller',
+      nodeType(start.body) === 'BlockStatement',
+    ],
+    `${chunkFile} Sentry sentinel owner must own one stream start callback`
+  );
+  assert(
+    start.body.body.length === 1,
+    `${chunkFile} Sentry sentinel owner must own one stream start callback`
+  );
+  const completion = start.body.body[0].expression;
+  assert(
+    nodeType(completion) === 'CallExpression',
+    `${chunkFile} Sentry sentinel owner must settle on every application completion`
+  );
+  assertConditions(
+    [
+      identifierMemberSignature(completion.callee) ===
+        'MemberExpression:false:applicationCompletion:then',
+      completion.arguments.length === 2,
+    ],
+    `${chunkFile} Sentry sentinel owner must settle on every application completion`
+  );
+  completion.arguments.forEach((settle) =>
+    assertCloudflareSentinelSettle(settle, chunkFile)
+  );
+  assertCloudflareSentinelMetadata(responseOptions, chunkFile);
+};
+
+const assertCloudflareSentryRequestOptions = (options, chunkFile) => {
+  assert(
+    nodeType(options) === 'ObjectExpression',
+    `${chunkFile} Sentry request owner must pass exact active request options`
+  );
+  assert(
+    options.properties.length === 2,
+    `${chunkFile} Sentry request owner must pass exact active request options`
+  );
+  const [baseOptions, lifecycleRequest] = options.properties;
+  assertConditions(
+    [
+      nodeType(baseOptions) === 'SpreadElement',
+      identifierName(baseOptions.argument) === 'requestOptions',
+      nodeType(lifecycleRequest) === 'Property',
+    ],
+    `${chunkFile} Sentry request owner must pass exact active request options`
+  );
+  const requestCall = lifecycleRequest.value;
+  assertConditions(
+    [
+      lifecycleRequest.computed === false,
+      propertyKeyName(lifecycleRequest) === 'request',
+      nodeType(requestCall) === 'CallExpression',
+    ],
+    `${chunkFile} Sentry request owner must pass exact active request options`
+  );
+  assertConditions(
+    [
+      identifierName(requestCall.callee) === 'sentryLifecycleRequest',
+      requestCall.arguments.length === 1,
+      identifierName(requestCall.arguments[0]) === 'request',
+    ],
+    `${chunkFile} Sentry request owner must pass exact active request options`
+  );
+};
+
+const assertCloudflareSentryRequestHandler = (requestHandler, chunkFile) => {
+  const bodyMessage = `${chunkFile} Sentry request wrapper must own its bounded application body`;
+  assert(nodeType(requestHandler) === 'ArrowFunctionExpression', bodyMessage);
+  assert(nodeType(requestHandler.body) === 'BlockStatement', bodyMessage);
+  assertConditions(
+    [
+      requestHandler.async,
+      requestHandler.params.length === 0,
+      requestHandler.body.body.length === 3,
+    ],
+    bodyMessage
+  );
+  const [capture, failureGuard, sentinelReturn] = requestHandler.body.body;
+  assert(
+    nodeType(capture) === 'ExpressionStatement',
+    `${chunkFile} Sentry request wrapper must directly capture application execution`
+  );
+  const requestExecution = capture.expression;
+  assertConditions(
+    [
+      nodeType(requestExecution) === 'AssignmentExpression',
+      nodeType(requestExecution.right) === 'AwaitExpression',
+    ],
+    `${chunkFile} Sentry request wrapper must directly capture application execution`
+  );
+  const requestExecutionCall = requestExecution.right.argument;
+  assertConditions(
+    [
+      requestExecution.operator === '=',
+      identifierName(requestExecution.left) === 'applicationOutcome',
+      nodeType(requestExecutionCall) === 'CallExpression',
+    ],
+    `${chunkFile} Sentry request wrapper must directly capture application execution`
+  );
+  assertConditions(
+    [
+      identifierName(requestExecutionCall.callee) === 'runApplicationOnce',
+      requestExecutionCall.arguments.length === 0,
+    ],
+    `${chunkFile} Sentry request wrapper must directly capture application execution`
+  );
+  assertApplicationOutcomeGuard(
+    failureGuard,
+    {
+      consequentType: 'ThrowStatement',
+      memberName: 'failure',
+      optional: false,
+      outcomeType: 'failed',
+    },
+    chunkFile
+  );
+  assert(
+    nodeType(sentinelReturn) === 'ReturnStatement',
+    `${chunkFile} Sentry request wrapper must return one bounded sentinel response`
+  );
+  const sentinel = sentinelReturn.argument;
+  assert(
+    nodeType(sentinel) === 'CallExpression',
+    `${chunkFile} Sentry request wrapper must return one bounded sentinel response`
+  );
+  assertConditions(
+    [
+      identifierName(sentinel.callee) === 'sentrySentinelResponse',
+      sentinel.arguments.length === 1,
+    ],
+    `${chunkFile} Sentry request wrapper must return one bounded sentinel response`
+  );
+  const settled = sentinel.arguments[0];
+  assert(
+    nodeType(settled) === 'CallExpression',
+    `${chunkFile} Sentry request wrapper must await bounded request completions`
+  );
+  const [snapshot] = settled.arguments;
+  assert(
+    nodeType(snapshot) === 'CallExpression',
+    `${chunkFile} Sentry request wrapper must await bounded request completions`
+  );
+  assertConditions(
+    [
+      identifierMemberSignature(settled.callee) ===
+        'MemberExpression:false:Promise:allSettled',
+      settled.arguments.length === 1,
+      identifierName(snapshot.callee) === 'snapshotRequestCompletions',
+      snapshot.arguments.length === 1,
+      identifierName(snapshot.arguments[0]) === 'request',
+    ],
+    `${chunkFile} Sentry request wrapper must await bounded request completions`
+  );
+};
+
+const cloudflareSentryCompletionOwner = (statement, chunkFile) => {
+  const completionMessage = `${chunkFile} Sentry request owner must bound its SDK response completion`;
+  assert(nodeType(statement) === 'IfStatement', completionMessage);
+  assertConditions(
+    [
+      statement.alternate === null,
+      identifierMemberSignature(statement.test) ===
+        'MemberExpression:false:sentryResponse:body',
+      nodeType(statement.consequent) === 'BlockStatement',
+    ],
+    completionMessage
+  );
+  assert(statement.consequent.body.length === 2, completionMessage);
+  const [completionDeclaration, registration] = statement.consequent.body;
+  assert(
+    nodeType(completionDeclaration) === 'VariableDeclaration',
+    `${chunkFile} Sentry request owner must own one SDK response completion`
+  );
+  assertConditions(
+    [
+      completionDeclaration.kind === 'const',
+      completionDeclaration.declarations.length === 1,
+    ],
+    `${chunkFile} Sentry request owner must own one SDK response completion`
+  );
+  const [completionDeclarator] = completionDeclaration.declarations;
+  assert(
+    identifierName(completionDeclarator.id) === 'sentryCompletion',
+    `${chunkFile} Sentry request owner must own one SDK response completion`
+  );
+  return { completionDeclarator, registration };
+};
+
+const cloudflareSentryDrainCalls = (completionDeclarator, chunkFile) => {
+  const message = `${chunkFile} Sentry request owner must drain one bounded SDK response`;
+  const catchCall = completionDeclarator.init;
+  assert(nodeType(catchCall) === 'CallExpression', message);
+  assert(nodeType(catchCall.callee) === 'MemberExpression', message);
+  const thenCall = catchCall.callee.object;
+  assert(nodeType(thenCall) === 'CallExpression', message);
+  assert(nodeType(thenCall.callee) === 'MemberExpression', message);
+  const arrayBufferCall = thenCall.callee.object;
+  assert(nodeType(arrayBufferCall) === 'CallExpression', message);
+  assert(nodeType(arrayBufferCall.callee) === 'MemberExpression', message);
+  assertConditions(
+    [
+      catchCall.callee.computed === false,
+      identifierName(catchCall.callee.property) === 'catch',
+      catchCall.arguments.length === 1,
+      thenCall.callee.computed === false,
+      identifierName(thenCall.callee.property) === 'then',
+      thenCall.arguments.length === 1,
+      identifierMemberSignature(arrayBufferCall.callee) ===
+        'MemberExpression:false:sentryResponse:arrayBuffer',
+      arrayBufferCall.arguments.length === 0,
+    ],
+    message
+  );
+  return { catchCall, thenCall };
+};
+
+const assertCloudflareSentryDrainSettle = (settle, chunkFile) => {
+  const message = `${chunkFile} Sentry request owner must settle its SDK response drain`;
+  assert(nodeType(settle) === 'ArrowFunctionExpression', message);
+  assert(nodeType(settle.body) === 'UnaryExpression', message);
+  assertConditions(
+    [
+      settle.params.length === 0,
+      settle.body.operator === 'void',
+      settle.body.argument.value === 0,
+    ],
+    message
+  );
+};
+
+const assertCloudflareSentryDrainIsolation = (isolate, chunkFile) => {
+  const message = `${chunkFile} Sentry request owner must isolate its SDK response drain`;
+  assert(nodeType(isolate) === 'ArrowFunctionExpression', message);
+  assert(nodeType(isolate.body) === 'BlockStatement', message);
+  assertConditions(
+    [
+      isolate.params.map(identifierName).join(':') === 'failure',
+      isolate.body.body.length === 1,
+    ],
+    message
+  );
+  const report = isolate.body.body[0].expression;
+  assert(
+    nodeType(report) === 'CallExpression',
+    `${chunkFile} Sentry request owner must report bounded SDK response diagnostics`
+  );
+  assertConditions(
+    [
+      identifierName(report.callee) === 'reportTelemetryFailure',
+      report.arguments.length === 2,
+      literalString(report.arguments[0]) === 'sentry.cloudflare.request_stream',
+      identifierName(report.arguments[1]) === 'failure',
+    ],
+    `${chunkFile} Sentry request owner must report bounded SDK response diagnostics`
+  );
+};
+
+const assertCloudflareSentryCompletionRegistration = (
+  registration,
+  chunkFile
+) => {
+  assert(
+    nodeType(registration) === 'ExpressionStatement',
+    `${chunkFile} Sentry request owner must register its SDK response completion`
+  );
+  const register = registration.expression;
+  assert(
+    nodeType(register) === 'CallExpression',
+    `${chunkFile} Sentry request owner must register its SDK response completion`
+  );
+  assertConditions(
+    [
+      identifierName(register.callee) === 'registerRequestCompletion',
+      register.arguments.length === 2,
+      identifierName(register.arguments[0]) === 'request',
+      identifierName(register.arguments[1]) === 'sentryCompletion',
+    ],
+    `${chunkFile} Sentry request owner must register its SDK response completion`
+  );
+};
+
+const assertCloudflareSentryStreamCompletion = (statement, chunkFile) => {
+  const { completionDeclarator, registration } =
+    cloudflareSentryCompletionOwner(statement, chunkFile);
+  const { catchCall, thenCall } = cloudflareSentryDrainCalls(
+    completionDeclarator,
+    chunkFile
+  );
+  assertCloudflareSentryDrainSettle(thenCall.arguments[0], chunkFile);
+  assertCloudflareSentryDrainIsolation(catchCall.arguments[0], chunkFile);
+  assertCloudflareSentryCompletionRegistration(registration, chunkFile);
+};
+
+const assertCloudflareSentryScopeExecution = (
+  requestScope,
+  withScope,
+  wrapRequest,
+  chunkFile
+) => {
+  const statements = requestScope.block.body;
+  assert(
+    statements.length === 2,
+    `${chunkFile} Sentry request owner must execute one bounded SDK request scope`
+  );
+  const [entry, completion] = statements;
+  assert(
+    nodeType(entry) === 'VariableDeclaration',
+    `${chunkFile} Sentry request owner must own one SDK response`
+  );
+  assertConditions(
+    [
+      entry.kind === 'const',
+      entry.declarations.length === 1,
+      identifierName(entry.declarations[0].id) === 'sentryResponse',
+    ],
+    `${chunkFile} Sentry request owner must own one SDK response`
+  );
+  const directAwait = entry.declarations[0].init;
+  assertConditions(
+    [
+      nodeType(directAwait) === 'AwaitExpression',
+      nodeType(withScope) === 'CallExpression',
+    ],
+    `${chunkFile} Sentry request owner must enter SDK isolation directly`
+  );
+  assertConditions(
+    [
+      directAwait.argument === withScope,
+      identifierMemberSignature(withScope.callee) ===
+        'MemberExpression:false:api:withScope',
+      withScope.arguments.length === 1,
+    ],
+    `${chunkFile} Sentry request owner must enter SDK isolation directly`
+  );
+  assertCloudflareSentryStreamCompletion(completion, chunkFile);
+  const scopeCallback = withScope.arguments[0];
+  assertConditions(
+    [
+      nodeType(scopeCallback) === 'ArrowFunctionExpression',
+      nodeType(wrapRequest) === 'CallExpression',
+    ],
+    `${chunkFile} Sentry request owner must wrap the request inside isolation scope`
+  );
+  assertConditions(
+    [
+      !scopeCallback.async,
+      scopeCallback.params.length === 0,
+      scopeCallback.expression,
+      scopeCallback.body === wrapRequest,
+      identifierMemberSignature(wrapRequest.callee) ===
+        'MemberExpression:false:api:wrapRequestHandler',
+      wrapRequest.arguments.length === 2,
+    ],
+    `${chunkFile} Sentry request owner must wrap the request inside isolation scope`
+  );
+  assertCloudflareSentryRequestOptions(wrapRequest.arguments[0], chunkFile);
+};
+
+const assertCloudflareSentryTail = (
+  statements,
+  requestScopeIndex,
+  fallbackExecution,
+  chunkFile
+) => {
+  assert(
+    statements.length === requestScopeIndex + 7,
+    `${chunkFile} Sentry request owner must have one bounded post-SDK path`
+  );
+  const tail = statements.slice(requestScopeIndex + 1);
+  assertApplicationOutcomeGuard(
+    tail[0],
+    {
+      consequentType: 'ReturnStatement',
+      memberName: 'response',
+      optional: true,
+      outcomeType: 'responded',
+    },
+    chunkFile
+  );
+  assertApplicationOutcomeGuard(
+    tail[1],
+    {
+      consequentType: 'ThrowStatement',
+      memberName: 'failure',
+      optional: true,
+      outcomeType: 'failed',
+    },
+    chunkFile
+  );
+  assertCloudflareSentrySkippedReport(tail[2], chunkFile);
+  assert(
+    tail[3]?.expression === fallbackExecution,
+    `${chunkFile} Sentry request owner must run one direct fallback execution`
+  );
+  assertApplicationOutcomeGuard(
+    tail[4],
+    {
+      consequentType: 'ThrowStatement',
+      memberName: 'failure',
+      optional: false,
+      outcomeType: 'failed',
+    },
+    chunkFile
+  );
+  assertConditions(
+    [
+      nodeType(tail[5]) === 'ReturnStatement',
+      identifierMemberSignature(tail[5]?.argument) ===
+        'MemberExpression:false:applicationOutcome:response',
+    ],
+    `${chunkFile} Sentry request owner must return the active application response`
+  );
+};
+
 const assertCloudflareSentryRequestChunkOwner = (program, chunkFile) => {
   const owner = topLevelVariableInitializer(program, 'runWithCloudflareSentry');
   assert(
-    shorthandBindingSignature({ id: owner.params[0] }) ===
-      expectedShorthandBindingSignature([
-        'api',
-        'handle',
-        'request',
-        'requestOptions',
-      ]),
+    nodeType(owner) === 'ArrowFunctionExpression',
     `${chunkFile} Sentry request owner must accept exact active request inputs`
+  );
+  assertConditions(
+    [
+      owner.async,
+      owner.params.length === 1,
+      shorthandBindingSignature({ id: owner.params[0] }) ===
+        expectedShorthandBindingSignature([
+          'api',
+          'handle',
+          'request',
+          'requestOptions',
+        ]),
+    ],
+    `${chunkFile} Sentry request owner must accept exact active request inputs`
+  );
+  assert(
+    nodeType(owner.body) === 'BlockStatement',
+    `${chunkFile} Sentry request owner must own its bounded request body`
   );
   const outcomes = directBodyVariableDeclarators(owner, 'applicationOutcome');
   assert(
@@ -2614,6 +3910,7 @@ const assertCloudflareSentryRequestChunkOwner = (program, chunkFile) => {
     requestScope.block.body.length > 0,
     `${chunkFile} Sentry request owner must execute its SDK request scope`
   );
+  assertCloudflareSentryRequestFailure(requestScope, chunkFile);
   const withScope = memberCallsAnywhere(
     owner,
     'MemberExpression:false:api:withScope'
@@ -2626,65 +3923,17 @@ const assertCloudflareSentryRequestChunkOwner = (program, chunkFile) => {
     [withScope.length === 1, wrapRequest.length === 1],
     `${chunkFile} Sentry request owner must use one SDK isolation and request wrapper`
   );
-  const wrapperStatement = requestScope.block.body[0];
-  assert(
-    withScope[0].start >= wrapperStatement.start,
-    `${chunkFile} Sentry request owner must enter SDK isolation directly`
-  );
-  assert(
-    withScope[0].end <= wrapperStatement.end,
-    `${chunkFile} Sentry request owner must enter SDK isolation directly`
-  );
-  const scopeCallback = withScope[0].arguments[0];
-  assert(
-    nodeType(scopeCallback) === 'ArrowFunctionExpression',
-    `${chunkFile} Sentry request owner must wrap the request inside isolation scope`
-  );
-  assert(
-    nodeRangeSignature(scopeCallback.body) ===
-      nodeRangeSignature(wrapRequest[0]),
-    `${chunkFile} Sentry request owner must wrap the request inside isolation scope`
+  assertCloudflareSentryScopeExecution(
+    requestScope,
+    withScope[0],
+    wrapRequest[0],
+    chunkFile
   );
   const requestHandler = wrapRequest[0].arguments[1];
+  assertCloudflareSentryRequestHandler(requestHandler, chunkFile);
   assert(
-    nodeType(requestHandler) === 'ArrowFunctionExpression',
+    namedCallsAnywhere(requestHandler, 'runApplicationOnce').length === 1,
     `${chunkFile} Sentry request wrapper must own the application execution`
-  );
-  assertConditions(
-    [
-      requestHandler.async,
-      namedCallsAnywhere(requestHandler, 'runApplicationOnce').length === 1,
-    ],
-    `${chunkFile} Sentry request wrapper must own the application execution`
-  );
-  assert(
-    requestHandler.body.body.length > 0,
-    `${chunkFile} Sentry request wrapper must directly capture application execution`
-  );
-  const requestExecution = requestHandler.body.body[0].expression;
-  assert(
-    nodeType(requestExecution) === 'AssignmentExpression',
-    `${chunkFile} Sentry request wrapper must directly capture application execution`
-  );
-  assertConditions(
-    [
-      requestExecution.operator === '=',
-      identifierName(requestExecution.left) === 'applicationOutcome',
-      nodeType(requestExecution.right) === 'AwaitExpression',
-    ],
-    `${chunkFile} Sentry request wrapper must directly capture application execution`
-  );
-  const requestExecutionCall = requestExecution.right.argument;
-  assert(
-    nodeType(requestExecutionCall) === 'CallExpression',
-    `${chunkFile} Sentry request wrapper must directly capture application execution`
-  );
-  assertConditions(
-    [
-      identifierName(requestExecutionCall.callee) === 'runApplicationOnce',
-      requestExecutionCall.arguments.length === 0,
-    ],
-    `${chunkFile} Sentry request wrapper must directly capture application execution`
   );
   const fallbackExecutions = directAssignments(owner, 'applicationOutcome');
   assert(
@@ -2695,6 +3944,12 @@ const assertCloudflareSentryRequestChunkOwner = (program, chunkFile) => {
   assert(
     nodeType(fallbackExecution.right) === 'AwaitExpression',
     `${chunkFile} Sentry request owner must use its application runner for fallback execution`
+  );
+  assertCloudflareSentryTail(
+    owner.body.body,
+    requestScopes[0].index,
+    fallbackExecution,
+    chunkFile
   );
   const fallbackCall = fallbackExecution.right.argument;
   assert(
@@ -2721,23 +3976,47 @@ const assertCloudflareSentryRequestChunkOwner = (program, chunkFile) => {
 
 const assertCloudflareApplicationRunner = (runner, chunkFile) => {
   assert(
+    nodeType(runner.body) === 'BlockStatement',
+    `${chunkFile} Sentry request runner must own one parameterless execution body`
+  );
+  assert(
+    runner.params.length === 0,
+    `${chunkFile} Sentry request runner must own one parameterless execution body`
+  );
+  assert(
     runner.body.body.length === 2,
     `${chunkFile} Sentry request runner must own one memoized application execution`
   );
-  const memoize = runner.body.body[0].expression;
+  const memoizeStatement = runner.body.body[0];
+  assert(
+    nodeType(memoizeStatement) === 'ExpressionStatement',
+    `${chunkFile} Sentry request runner must memoize one application execution`
+  );
+  const memoize = memoizeStatement.expression;
+  assert(
+    nodeType(memoize) === 'AssignmentExpression',
+    `${chunkFile} Sentry request runner must memoize one application execution`
+  );
   assertConditions(
     [
-      nodeType(memoize) === 'AssignmentExpression',
       memoize.operator === '??=',
       identifierName(memoize.left) === 'applicationWork',
     ],
     `${chunkFile} Sentry request runner must memoize one application execution`
   );
   const thenCall = memoize.right;
+  assert(
+    nodeType(thenCall) === 'CallExpression',
+    `${chunkFile} Sentry request runner must schedule one application execution`
+  );
+  assert(
+    nodeType(thenCall.callee) === 'MemberExpression',
+    `${chunkFile} Sentry request runner must schedule one application execution`
+  );
   assertConditions(
     [
-      nodeType(thenCall) === 'CallExpression',
-      identifierName(thenCall.callee?.property) === 'then',
+      thenCall.callee.computed === false,
+      identifierName(thenCall.callee.property) === 'then',
       thenCall.arguments.length === 1,
     ],
     `${chunkFile} Sentry request runner must schedule one application execution`
@@ -2756,9 +4035,16 @@ const assertCloudflareApplicationRunner = (runner, chunkFile) => {
     `${chunkFile} Sentry request runner must use zero-argument Promise.resolve`
   );
   const executeApplication = thenCall.arguments[0];
+  assert(
+    nodeType(executeApplication) === 'ArrowFunctionExpression',
+    `${chunkFile} Sentry request runner must own its bounded async execution body`
+  );
+  assert(
+    nodeType(executeApplication.body) === 'BlockStatement',
+    `${chunkFile} Sentry request runner must own its bounded async execution body`
+  );
   assertConditions(
     [
-      nodeType(executeApplication) === 'ArrowFunctionExpression',
       executeApplication.async,
       executeApplication.params.length === 0,
       executeApplication.body.body.length === 1,
@@ -2767,6 +4053,10 @@ const assertCloudflareApplicationRunner = (runner, chunkFile) => {
     `${chunkFile} Sentry request runner must isolate one async application execution`
   );
   const executionScope = executeApplication.body.body[0];
+  assert(
+    executionScope.finalizer === null,
+    `${chunkFile} Sentry request runner must return one application outcome`
+  );
   assert(
     executionScope.block.body.length === 1,
     `${chunkFile} Sentry request runner must return one application outcome`
@@ -2790,20 +4080,27 @@ const assertCloudflareApplicationRunner = (runner, chunkFile) => {
     nodeType(response) === 'AwaitExpression',
     `${chunkFile} Sentry request runner must await the active application handler`
   );
+  assert(
+    nodeType(response.argument) === 'CallExpression',
+    `${chunkFile} Sentry request runner must return the active application response`
+  );
   assertConditions(
     [
-      identifierName(response.argument?.callee) === 'handle',
-      response.argument?.arguments.length === 0,
+      identifierName(response.argument.callee) === 'handle',
+      response.argument.arguments.length === 0,
       literalString(outcome.get('type')) === 'responded',
     ],
     `${chunkFile} Sentry request runner must return the active application response`
   );
   const failureHandler = executionScope.handler;
+  assert(
+    nodeType(failureHandler) === 'CatchClause',
+    `${chunkFile} Sentry request runner must preserve application failures`
+  );
   assertConditions(
     [
-      nodeType(failureHandler) === 'CatchClause',
-      identifierName(failureHandler?.param) === 'failure',
-      failureHandler?.body.body.length === 1,
+      identifierName(failureHandler.param) === 'failure',
+      failureHandler.body.body.length === 1,
     ],
     `${chunkFile} Sentry request runner must preserve application failures`
   );
@@ -2839,6 +4136,36 @@ const assertCloudflareSentryRequestChunk = (program, chunkFile) => {
   assertCloudflareIsolationInitializer(program, chunkFile);
   assertCloudflareSentryApplicationChunkOwner(program, chunkFile);
   assertCloudflareSentryRequestChunkOwner(program, chunkFile);
+  assertExactStaticChunkHelper(
+    program,
+    chunkFile,
+    'reportTelemetryFailure',
+    /^\.\/telemetry(?:-[\w-]+)?\.js$/
+  );
+  for (const helper of [
+    'registerRequestCompletion',
+    'snapshotRequestCompletions',
+  ]) {
+    assertExactStaticChunkHelper(
+      program,
+      chunkFile,
+      helper,
+      /^\.\/request-completion(?:-[\w-]+)?\.js$/
+    );
+    assert(
+      identifierOccurrenceCount(program, helper) === 2,
+      `${chunkFile} must not alias trusted helper ${helper}`
+    );
+  }
+  assertCloudflareSentrySentinelHelper(program, chunkFile);
+  assertCloudflareSentryLifecycleRequestHelper(program, chunkFile);
+  assertTrustedChunkBuiltIns(program, chunkFile, {
+    Error: 1,
+    Promise: 2,
+    ReadableStream: 1,
+    Request: 1,
+    Response: 1,
+  });
 };
 
 const assertCloudflareRuntimeOwnerImports = (
@@ -2929,6 +4256,12 @@ const assertCloudflareRuntimeOwnerImports = (
       runWithCloudflareSentry: ['withScope', 'wrapRequestHandler'],
     },
   });
+  assertCloudflareChunkProvenance(
+    filePath,
+    sentryImport.chunkFile,
+    'src/runtime/cloudflare/sentry-request.ts',
+    'Sentry request owner'
+  );
   assertCloudflareSentryRequestChunk(
     sentryImport.program,
     sentryImport.chunkFile
@@ -2965,6 +4298,12 @@ const assertCloudflareRuntimeOwnerImports = (
       [lifecycleOwner]: ['forceFlushRequestTelemetry', 'getTelemetry'],
     },
   });
+  assertCloudflareChunkProvenance(
+    filePath,
+    lifecycleImport.chunkFile,
+    'src/runtime/cloudflare/request-lifecycle.ts',
+    'request lifecycle owner'
+  );
   assertCloudflareLifecycleChunk(
     lifecycleImport.program,
     lifecycleImport.chunkFile
@@ -3223,6 +4562,10 @@ const assertCloudflareSentryOwner = (program, filePath) => {
     identifierName(sentryCall.callee) === 'runWithCloudflareSentry',
     `${filePath} Cloudflare Sentry owner must invoke runWithCloudflareSentry`
   );
+  assert(
+    sentryCall.arguments.length === 1,
+    `${filePath} Cloudflare Sentry owner must invoke runWithCloudflareSentry`
+  );
   const [options = {}] = sentryCall.arguments;
   assertCloudflareSentryCallOptions(options, filePath);
   const fallback = unwrapAwaitExpression(choice.alternate);
@@ -3265,8 +4608,27 @@ const assertCloudflareApplicationHandler = (fetchFunction, filePath) => {
     `${filePath} active application handler must invoke application.fetch`
   );
   assert(
+    applicationCall.arguments.length === 2,
+    `${filePath} active application handler must invoke application.fetch with the active request`
+  );
+  assert(
     identifierName(applicationCall.arguments[0]) === 'request',
     `${filePath} active application handler must invoke application.fetch with the active request`
+  );
+  const applicationOptions = ownerProperties(
+    applicationCall.arguments[1],
+    filePath,
+    'the active application request options'
+  );
+  const applicationContext = applicationOptions.get('context');
+  assertConditions(
+    [
+      applicationOptions.size === 1,
+      nodeType(applicationContext) === 'UnaryExpression',
+      applicationContext.operator === 'void',
+      applicationContext.argument?.value === 0,
+    ],
+    `${filePath} active application handler must preserve its exact request options`
   );
 };
 
@@ -3295,6 +4657,10 @@ const cloudflareDatabaseOwnerProperties = (fetchFunction, filePath) => {
   const [call] = calls;
   assert(
     nodeRangeSignature(handleDatabase.body) === nodeRangeSignature(call),
+    `${filePath} active database handler must return its database-owned response`
+  );
+  assert(
+    call.arguments.length === 1,
     `${filePath} active database handler must return its database-owned response`
   );
   const [options = {}] = call.arguments;
@@ -3395,7 +4761,15 @@ const cloudflareOuterOwnerProperties = (fetchFunction, filePath) => {
   );
   const sentryCall = ownerReturn.argument.argument;
   assert(
+    nodeType(sentryCall) === 'CallExpression',
+    `${filePath} Worker fetch must return or await its Sentry-owned response`
+  );
+  assert(
     identifierName(sentryCall.callee) === 'fetchCloudflareApplication',
+    `${filePath} Worker fetch must return or await its Sentry-owned response`
+  );
+  assert(
+    sentryCall.arguments.length === 1,
     `${filePath} Worker fetch must return or await its Sentry-owned response`
   );
   const [sentryOptions = {}] = sentryCall.arguments;
@@ -3403,6 +4777,26 @@ const cloudflareOuterOwnerProperties = (fetchFunction, filePath) => {
     sentryOptions,
     filePath,
     'the active Cloudflare Sentry request owner'
+  );
+};
+
+const assertCloudflareFetchStatementSequence = (fetchFunction, filePath) => {
+  const statements = fetchFunction.body.body;
+  const owners = [
+    directBodyVariableDeclarators(fetchFunction, 'nativeTelemetry')[0],
+    directBodyVariableDeclarators(fetchFunction, 'sentryOptions')[0],
+    directBodyVariableDeclarators(fetchFunction, 'handleApplication')[0],
+    directBodyVariableDeclarators(fetchFunction, 'handleDatabase')[0],
+  ];
+  assertConditions(
+    [
+      statements.length === 6,
+      owners.map(({ index }) => index).join(':') === '0:2:3:4',
+      owners.every(({ declaration }) => declaration.declarations.length === 1),
+      nodeType(statements[1]) === 'TryStatement',
+      nodeType(statements[5]) === 'TryStatement',
+    ],
+    `${filePath} Worker fetch must contain only its bounded runtime ownership sequence`
   );
 };
 
@@ -3422,6 +4816,7 @@ const assertCloudflareDatabaseOwner = (filePath) => {
   assertCloudflareApplicationHandler(fetchFunction, filePath);
   const options = cloudflareDatabaseOwnerProperties(fetchFunction, filePath);
   const sentryOptions = cloudflareOuterOwnerProperties(fetchFunction, filePath);
+  assertCloudflareFetchStatementSequence(fetchFunction, filePath);
   assert(
     identifierName(sentryOptions.get('handle')) === 'handleDatabase',
     `${filePath} Sentry request owner must invoke the active database handler`
@@ -3588,6 +4983,10 @@ const assertExactStaticChunkHelper = (
   assert(
     hasSingleFunctionBinding(helperOwners, helperBindings),
     `${helperChunk} must define trusted helper ${localName} exactly once`
+  );
+  assert(
+    !mutatedNames(helperProgram).has(localName),
+    `${helperChunk} must not mutate trusted helper ${localName}`
   );
   const localFunctions = program.body
     .flatMap(topLevelFunctionEntries)

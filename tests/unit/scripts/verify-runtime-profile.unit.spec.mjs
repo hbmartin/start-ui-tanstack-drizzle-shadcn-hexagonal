@@ -140,6 +140,24 @@ const createCloudflareArtifact = (root) => {
       name: 'database-request',
       src: 'src/runtime/cloudflare/database-request.ts',
     },
+    'src/runtime/cloudflare/request-lifecycle.ts': {
+      file: 'assets/request-lifecycle-fixture.js',
+      isDynamicEntry: true,
+      name: 'request-lifecycle',
+      src: 'src/runtime/cloudflare/request-lifecycle.ts',
+    },
+    'src/runtime/cloudflare/request-telemetry.ts': {
+      file: 'assets/request-telemetry-fixture.js',
+      isDynamicEntry: true,
+      name: 'request-telemetry',
+      src: 'src/runtime/cloudflare/request-telemetry.ts',
+    },
+    'src/runtime/cloudflare/sentry-request.ts': {
+      file: 'assets/sentry-request-fixture.js',
+      isDynamicEntry: true,
+      name: 'sentry-request',
+      src: 'src/runtime/cloudflare/sentry-request.ts',
+    },
     'src/runtime/cloudflare/telemetry-adapter.ts': {
       file: 'assets/telemetry-adapter-fixture.js',
       isDynamicEntry: true,
@@ -150,7 +168,7 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/index.js',
-    `${cloudflareRuntimeOwners}var worker_entry_default={async fetch(request,environment,context){${cloudflareNativeTelemetrySetup}${cloudflareSentryOptionsDeclaration}const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{${cloudflareRequestFlush}}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
+    `${cloudflareRuntimeOwners}var worker_entry_default={async fetch(request,environment,context){${cloudflareNativeTelemetrySetup}${cloudflareSentryOptionsDeclaration}const handleApplication=()=>application.fetch(request,{context:void 0});const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{${cloudflareRequestFlush}}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
   );
   write(
     root,
@@ -160,12 +178,12 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/assets/sentry-request-fixture.js',
-    'import{reportTelemetryFailure}from"./telemetry-fixture.js";const initializeCloudflareSentryIsolation=(api)=>{try{api.setAsyncLocalStorageAsyncContextStrategy();return true}catch(failure){reportTelemetryFailure("sentry.cloudflare.async_context",failure);return false}};const initializeCloudflareSentryApplication=async(api,loadApplication)=>{const sentryRequestIsolationReady=initializeCloudflareSentryIsolation(api);return{application:await loadApplication(),sentryRequestIsolationReady}};const runWithCloudflareSentry=async({api,handle,request,requestOptions})=>{let applicationOutcome;let applicationWork;const runApplicationOnce=()=>{applicationWork??=Promise.resolve().then(async()=>{try{return{response:await handle(),type:"responded"}}catch(failure){return{failure,type:"failed"}}});return applicationWork};try{await api.withScope(()=>api.wrapRequestHandler(requestOptions,async()=>{applicationOutcome=await runApplicationOnce();if(applicationOutcome.type==="failed")throw applicationOutcome.failure;return new Response()}))}catch(failure){if(applicationOutcome?.type==="failed")throw applicationOutcome.failure;reportTelemetryFailure("sentry.cloudflare.request",failure)}if(applicationOutcome?.type==="responded")return applicationOutcome.response;if(applicationOutcome?.type==="failed")throw applicationOutcome.failure;reportTelemetryFailure("sentry.cloudflare.request",new Error("skipped"));applicationOutcome=await runApplicationOnce();if(applicationOutcome.type==="failed")throw applicationOutcome.failure;return applicationOutcome.response};export{initializeCloudflareSentryApplication,runWithCloudflareSentry};'
+    'import{reportTelemetryFailure}from"./telemetry-fixture.js";import{n as registerRequestCompletion,r as snapshotRequestCompletions}from"./request-completion-fixture.js";const sentrySentinelResponse=(applicationCompletion)=>new Response(new ReadableStream({start(controller){applicationCompletion.then(()=>controller.close(),()=>controller.close())}}),{headers:{"content-type":"text/plain; charset=utf-8"},status:200});const sentryLifecycleRequest=(request)=>{if(request.method!=="HEAD"&&request.method!=="OPTIONS")return request;return new Request(request.url,{headers:request.headers,method:"GET"})};const initializeCloudflareSentryIsolation=(api)=>{try{api.setAsyncLocalStorageAsyncContextStrategy();return true}catch(failure){reportTelemetryFailure("sentry.cloudflare.async_context",failure);return false}};const initializeCloudflareSentryApplication=async(api,loadApplication)=>{const sentryRequestIsolationReady=initializeCloudflareSentryIsolation(api);return{application:await loadApplication(),sentryRequestIsolationReady}};const runWithCloudflareSentry=async({api,handle,request,requestOptions})=>{let applicationOutcome;let applicationWork;const runApplicationOnce=()=>{applicationWork??=Promise.resolve().then(async()=>{try{return{response:await handle(),type:"responded"}}catch(failure){return{failure,type:"failed"}}});return applicationWork};try{const sentryResponse=await api.withScope(()=>api.wrapRequestHandler({...requestOptions,request:sentryLifecycleRequest(request)},async()=>{applicationOutcome=await runApplicationOnce();if(applicationOutcome.type==="failed")throw applicationOutcome.failure;return sentrySentinelResponse(Promise.allSettled(snapshotRequestCompletions(request)))}));if(sentryResponse.body){const sentryCompletion=sentryResponse.arrayBuffer().then(()=>void 0).catch((failure)=>{reportTelemetryFailure("sentry.cloudflare.request_stream",failure)});registerRequestCompletion(request,sentryCompletion)}}catch(failure){if(applicationOutcome?.type==="failed")throw applicationOutcome.failure;reportTelemetryFailure("sentry.cloudflare.request",failure)}if(applicationOutcome?.type==="responded")return applicationOutcome.response;if(applicationOutcome?.type==="failed")throw applicationOutcome.failure;reportTelemetryFailure("sentry.cloudflare.request",new Error("Sentry request wrapper skipped application handler"));applicationOutcome=await runApplicationOnce();if(applicationOutcome.type==="failed")throw applicationOutcome.failure;return applicationOutcome.response};export{initializeCloudflareSentryApplication,runWithCloudflareSentry};'
   );
   write(
     root,
     'dist/server/assets/database-request-fixture.js',
-    'import{createHyperdriveDbClient,runWithRuntimeDatabaseClient}from"./client-fixture.js";import{validateServerConfig}from"./backend-fixture.js";import{reportTelemetryFailure}from"./telemetry-fixture.js";const closeDatabase=async(database)=>{try{await database.$close()}catch(failure){reportTelemetryFailure("database.cloudflare.close",failure)}};const captureDatabaseConnectionFailure=()=>{};const bindCloudflareDatabaseToResponse=({database,request,response})=>{if(!response.body){closeDatabase(database);return response}if(response.bodyUsed||response.body.locked)throw new TypeError("locked");const{readable,writable}=new TransformStream();response.body.pipeTo(writable,{signal:request.signal}).catch(()=>void 0).then(()=>closeDatabase(database));return new Response(readable,response)};const runWithCloudflareDatabase=async({binding,handle,request})=>{let database;try{database=await createHyperdriveDbClient(binding)}catch(failure){captureDatabaseConnectionFailure(failure);throw failure}return runWithRuntimeDatabaseClient(database,async()=>{try{validateServerConfig("cloudflare");const response=await handle();return bindCloudflareDatabaseToResponse({database,request,response})}catch(failure){await closeDatabase(database);throw failure}})};export{runWithCloudflareDatabase};'
+    'import{createHyperdriveDbClient,runWithRuntimeDatabaseClient}from"./client-fixture.js";import{validateServerConfig}from"./backend-fixture.js";import{reportTelemetryFailure}from"./telemetry-fixture.js";const closeDatabase=async(database)=>{try{await database.$close()}catch(failure){reportTelemetryFailure("database.cloudflare.close",failure)}};const captureDatabaseConnectionFailure=()=>{};const bindCloudflareDatabaseToResponse=({database,request,response})=>{if(!response.body){closeDatabase(database);return response}if(response.bodyUsed||response.body.locked)throw new TypeError("locked");const{readable,writable}=new TransformStream();response.body.pipeTo(writable,{signal:request.signal}).catch(()=>void 0).then(()=>closeDatabase(database));return new Response(readable,response)};const runWithCloudflareDatabase=async({binding,handle,request})=>{let database;try{database=await createHyperdriveDbClient(binding)}catch(failure){captureDatabaseConnectionFailure(failure);throw failure}return runWithRuntimeDatabaseClient(database,async()=>{try{validateServerConfig("cloudflare",{databaseAdapter:database.$adapter});const response=await handle();return bindCloudflareDatabaseToResponse({database,request,response})}catch(failure){await closeDatabase(database);throw failure}})};export{runWithCloudflareDatabase};'
   );
   write(
     root,
@@ -190,7 +208,7 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/assets/create-application-server-entry-fixture.js',
-    'const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-fixture.js");const tanstack=await import("./entry-server-fixture.js");return tanstack.createServerEntry({async fetch(request){try{return await tanstack.default.fetch(request,{context:{runtimeProfile,requestScope,telemetryProxy}})}finally{lifecycle?.onRequestSettled(request)}}})};export{createApplicationServerEntry};'
+    'const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-fixture.js");const tanstack=await import("./entry-server-fixture.js");return tanstack.createServerEntry({async fetch(request){const handleRequest=async()=>{const telemetryCaptureState=createRequestExceptionCaptureState();bindRequestExceptionState(request,telemetryCaptureState);const context={requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState};try{return await tanstack.default.fetch(request,{context})}catch(error){if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{});throw error}finally{try{lifecycle?.onRequestSettled(request)}catch{}}};if(!requestScope)return handleRequest();let applicationResult;const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult};try{return requestScope(runApplicationOnce)}catch(failure){reportTelemetryFailure("sentry.request_scope",failure);return applicationResult??runApplicationOnce()}}})};export{createApplicationServerEntry};'
   );
   write(
     root,
@@ -210,7 +228,7 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/assets/request-completion-fixture.js',
-    'const forceFlushRequestTelemetry=()=>Promise.resolve();export{forceFlushRequestTelemetry};'
+    'const forceFlushRequestTelemetry=()=>Promise.resolve();const registerRequestCompletion=()=>{};const snapshotRequestCompletions=()=>[];export{forceFlushRequestTelemetry,registerRequestCompletion as n,snapshotRequestCompletions as r};'
   );
   write(
     root,
@@ -306,7 +324,7 @@ describe('runtime artifact verifier', () => {
         .readFileSync(chunkPath, 'utf8')
         .replace(
           /const runWithCloudflareSentry=.*?;export\{initializeCloudflareSentryApplication/u,
-          'const runWithCloudflareSentry=async({api,handle,request,requestOptions})=>(api.withScope,api.wrapRequestHandler,handle());export{initializeCloudflareSentryApplication'
+          'const runWithCloudflareSentry=async({api,handle,request,requestOptions})=>(Error,Promise,Response,api.withScope,api.wrapRequestHandler,handle());export{initializeCloudflareSentryApplication'
         )
     );
 
@@ -314,8 +332,99 @@ describe('runtime artifact verifier', () => {
       verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'acme-app',
       })
-    ).toThrow('must declare one application outcome');
+    ).toThrow('must own its bounded request body');
   });
+
+  it.each([
+    [
+      'database response owner',
+      'dist/server/assets/database-request-fixture.js',
+      '({database,request,response})=>',
+      '({database,request,response},leak=exfiltrate(request,response))=>',
+      'database response owner must accept exact active inputs',
+    ],
+    [
+      'request telemetry owner',
+      'dist/server/assets/request-telemetry-fixture.js',
+      '({environment,nativeTelemetry,request,sentry,sentryRequestIsolationReady})=>',
+      '({environment,nativeTelemetry,request,sentry,sentryRequestIsolationReady},leak=exfiltrate(request))=>',
+      'request telemetry owner must accept exact active inputs',
+    ],
+    [
+      'Sentry request owner',
+      'dist/server/assets/sentry-request-fixture.js',
+      'async({api,handle,request,requestOptions})=>',
+      'async({api,handle,request,requestOptions},leak=exfiltrate(request))=>',
+      'Sentry request owner must accept exact active request inputs',
+    ],
+    [
+      'application execution owner',
+      'dist/server/assets/sentry-request-fixture.js',
+      'const runApplicationOnce=()=>',
+      'const runApplicationOnce=(leak=exfiltrate(request))=>',
+      'Sentry request runner must own one parameterless execution body',
+    ],
+  ])(
+    'rejects a side-effecting extra parameter on the %s',
+    (_label, relativePath, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const chunkPath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(error);
+    }
+  );
+
+  it.each([
+    [
+      'request telemetry owner',
+      'dist/server/assets/request-telemetry-fixture.js',
+      /const configureCloudflareRequestTelemetry=.*?;export\{configureCloudflareRequestTelemetry/u,
+      'const configureCloudflareRequestTelemetry=({environment,nativeTelemetry,request,sentry,sentryRequestIsolationReady})=>(setTelemetry(nativeTelemetry),createCloudflareSentryOptions(sentry,request,environment),{});export{configureCloudflareRequestTelemetry',
+      'request telemetry owner must own its configuration body',
+    ],
+    [
+      'Sentry application owner',
+      'dist/server/assets/sentry-request-fixture.js',
+      /const initializeCloudflareSentryApplication=.*?;const runWithCloudflareSentry/u,
+      'const initializeCloudflareSentryApplication=async(api,loadApplication)=>initializeCloudflareSentryIsolation(api);const runWithCloudflareSentry',
+      'Sentry application owner must own its initialization body',
+    ],
+    [
+      'application runner',
+      'dist/server/assets/sentry-request-fixture.js',
+      /const runApplicationOnce=.*?;try\{/u,
+      'const runApplicationOnce=()=>(Promise,applicationWork);try{',
+      'Sentry request runner must own one parameterless execution body',
+    ],
+  ])(
+    'rejects an expression-bodied %s cleanly',
+    (_label, relativePath, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const chunkPath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(error);
+    }
+  );
 
   it.each([
     [
@@ -342,6 +451,33 @@ describe('runtime artifact verifier', () => {
         source.replace(
           ';export{worker_entry_default as default};',
           ';var worker_entry_default={fetch:()=>new Response("bypassed")};export{worker_entry_default as default};'
+        ),
+      'must export one default Worker object',
+    ],
+    [
+      'a later Worker object assignment',
+      (source) =>
+        source.replace(
+          ';export{worker_entry_default as default};',
+          ';worker_entry_default={fetch:()=>new Response("bypassed")};export{worker_entry_default as default};'
+        ),
+      'must not mutate or alias the default Worker object',
+    ],
+    [
+      'a call-based Worker fetch mutation',
+      (source) =>
+        source.replace(
+          ';export{worker_entry_default as default};',
+          ';Object.assign(worker_entry_default,{fetch:()=>new Response("bypassed")});export{worker_entry_default as default};'
+        ),
+      'must not mutate or alias the default Worker object',
+    ],
+    [
+      'a re-exported default Worker decoy',
+      (source) =>
+        source.replace(
+          'export{worker_entry_default as default};',
+          'export{worker_entry_default as default}from"./assets/evil.js";'
         ),
       'must export one default Worker object',
     ],
@@ -489,7 +625,7 @@ describe('runtime artifact verifier', () => {
     write(
       root,
       'dist/server/index.js',
-      `${cloudflareRuntimeOwners}const worker_entry_default={async fetch(request,environment,context){${cloudflareNativeTelemetrySetup}${cloudflareSentryOptionsDeclaration}const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.MISSING_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{${cloudflareRequestFlush}}}};export{worker_entry_default as default};"cloudflare:workers";"START_UI_DATABASE";START_UI_TELEMETRY_METRICS`
+      `${cloudflareRuntimeOwners}const worker_entry_default={async fetch(request,environment,context){${cloudflareNativeTelemetrySetup}${cloudflareSentryOptionsDeclaration}const handleApplication=()=>application.fetch(request,{context:void 0});const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.MISSING_DATABASE,handle:handleApplication,request});try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{${cloudflareRequestFlush}}}};export{worker_entry_default as default};"cloudflare:workers";"START_UI_DATABASE";START_UI_TELEMETRY_METRICS`
     );
 
     expect(() =>
@@ -572,6 +708,31 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow('must perform one direct client assignment');
+  });
+
+  it('rejects a database declaration that substitutes an active input', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/database-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/database-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'let database;try{',
+          'let database,pwn=(handle=async()=>({body:null}));try{'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must declare one request-local database client');
   });
 
   it('rejects a decoy database response lifetime binding', () => {
@@ -827,13 +988,125 @@ describe('runtime artifact verifier', () => {
     ).toThrow('must use the trusted TransformStream built-in');
   });
 
+  it.each([
+    ['a default import', 'import Response from"./evil.js";', 'Response'],
+    [
+      'a namespace import',
+      'import*as TransformStream from"./evil.js";',
+      'TransformStream',
+    ],
+  ])('rejects %s built-in shadowing', (_label, declaration, builtIn) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/database-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/database-request-fixture.js',
+      `${declaration}${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(`must use the trusted ${builtIn} built-in`);
+  });
+
+  it.each(['globalThis', 'self'])(
+    'rejects %s built-in mutation in the database owner chunk',
+    (globalAlias) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const chunkPath = path.join(
+        root,
+        'dist/server/assets/database-request-fixture.js'
+      );
+      write(
+        root,
+        'dist/server/assets/database-request-fixture.js',
+        `${globalAlias}.Response=class{};${fs.readFileSync(chunkPath, 'utf8')}`
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('must not access alternate global built-ins');
+    }
+  );
+
+  it('rejects call-based poisoning of a database stream built-in', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/database-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/database-request-fixture.js',
+      `Object.assign(Response.prototype,{body:null});${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must use the trusted Response built-in');
+  });
+
+  it.each([
+    [
+      'then',
+      '.then(()=>closeDatabase(database))',
+      '[then](()=>closeDatabase(database))',
+      'must close after stream completion',
+    ],
+    [
+      'catch',
+      '.catch(()=>void 0)',
+      '["catch"](()=>void 0)',
+      'must isolate producer termination',
+    ],
+    [
+      'pipeTo',
+      '.pipeTo(writable,{signal:request.signal})',
+      '[pipeTo](writable,{signal:request.signal})',
+      'must pipe the active body',
+    ],
+  ])(
+    'rejects a computed database pipeline %s member',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const chunkPath = path.join(
+        root,
+        'dist/server/assets/database-request-fixture.js'
+      );
+      write(
+        root,
+        'dist/server/assets/database-request-fixture.js',
+        fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(error);
+    }
+  );
+
   it('rejects a Cloudflare database owner after an unwrapped response path', () => {
     const root = fixture();
     createCloudflareArtifact(root);
     write(
       root,
       'dist/server/index.js',
-      `${cloudflareRuntimeOwners}const worker_entry_default={async fetch(request,environment,context){${cloudflareNativeTelemetrySetup}${cloudflareSentryOptionsDeclaration}const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});if(true)return new Response();try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{${cloudflareRequestFlush}}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
+      `${cloudflareRuntimeOwners}const worker_entry_default={async fetch(request,environment,context){${cloudflareNativeTelemetrySetup}${cloudflareSentryOptionsDeclaration}const handleApplication=()=>application.fetch(request,{context:void 0});const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});if(true)return new Response();try{return await fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})}finally{${cloudflareRequestFlush}}}};export{worker_entry_default as default};"cloudflare:workers";START_UI_TELEMETRY_METRICS`
     );
 
     expect(() =>
@@ -841,6 +1114,56 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow('must have exactly one Sentry-owned return path');
+  });
+
+  it('rejects request-body consumption before the owned request path', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try{',
+          'const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});void request.arrayBuffer();try{'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must contain only its bounded runtime ownership sequence');
+  });
+
+  it.each([
+    [
+      'native telemetry declaration',
+      'let nativeTelemetry=lastKnownNativeTelemetry;',
+      'let nativeTelemetry=lastKnownNativeTelemetry,pwn=request.arrayBuffer();',
+    ],
+    [
+      'application handler declaration',
+      'const handleApplication=()=>application.fetch(request,{context:void 0});',
+      'const handleApplication=()=>application.fetch(request,{context:void 0}),pwn=request.arrayBuffer();',
+    ],
+  ])('rejects side-effect work in the %s', (_label, search, replacement) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs.readFileSync(entryPath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must contain only its bounded runtime ownership sequence');
   });
 
   it('rejects a Cloudflare artifact with a bypassed Sentry owner', () => {
@@ -875,7 +1198,7 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const handleApplication=()=>application.fetch(request)',
+          'const handleApplication=()=>application.fetch(request,{context:void 0})',
           'const handleApplication=()=>new Response("bypassed")'
         )
     );
@@ -944,8 +1267,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const handleApplication=()=>application.fetch(request);const handleDatabase=',
-          'var handleApplication=()=>application.fetch(request);var handleApplication=()=>new Response("bypassed");const handleDatabase='
+          'const handleApplication=()=>application.fetch(request,{context:void 0});const handleDatabase=',
+          'var handleApplication=()=>application.fetch(request,{context:void 0});var handleApplication=()=>new Response("bypassed");const handleDatabase='
         )
     );
 
@@ -966,8 +1289,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const handleApplication=()=>application.fetch(request);const handleDatabase=',
-          'var handleApplication=()=>application.fetch(request);var {replacement:handleApplication}={replacement:()=>new Response("bypassed")};const handleDatabase='
+          'const handleApplication=()=>application.fetch(request,{context:void 0});const handleDatabase=',
+          'var handleApplication=()=>application.fetch(request,{context:void 0});var {replacement:handleApplication}={replacement:()=>new Response("bypassed")};const handleDatabase='
         )
     );
 
@@ -988,8 +1311,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const handleApplication=()=>application.fetch(request);',
-          'const handleApplication=(request=new Request("https://bypassed.test"))=>application.fetch(request);'
+          'const handleApplication=()=>application.fetch(request,{context:void 0});',
+          'const handleApplication=(request=new Request("https://bypassed.test"))=>application.fetch(request,{context:void 0});'
         )
     );
 
@@ -1085,8 +1408,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const handleApplication=()=>application.fetch(request);',
-          'try{throw new Request("https://bypassed.test")}catch(request){var handleApplication=()=>application.fetch(request)}'
+          'const handleApplication=()=>application.fetch(request,{context:void 0});',
+          'try{throw new Request("https://bypassed.test")}catch(request){var handleApplication=()=>application.fetch(request,{context:void 0})}'
         )
     );
 
@@ -1107,8 +1430,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const handleApplication=()=>application.fetch(request);',
-          'try{throw {request:new Request("https://bypassed.test")}}catch({request}){var handleApplication=()=>application.fetch(request)}'
+          'const handleApplication=()=>application.fetch(request,{context:void 0});',
+          'try{throw {request:new Request("https://bypassed.test")}}catch({request}){var handleApplication=()=>application.fetch(request,{context:void 0})}'
         )
     );
 
@@ -1151,8 +1474,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          cloudflareSentryOptionsDeclaration,
-          `const unrelated=()=>{try{throw 1}catch(request){return request}};${cloudflareSentryOptionsDeclaration}`
+          'var worker_entry_default=',
+          'const unrelated=()=>{try{throw 1}catch(request){return request}};var worker_entry_default='
         )
     );
 
@@ -1623,6 +1946,21 @@ describe('runtime artifact verifier', () => {
       'assets/database-request-fixture.js',
       'src/runtime/cloudflare/database-request.ts',
     ],
+    [
+      'request lifecycle owner',
+      'assets/request-lifecycle-fixture.js',
+      'src/runtime/cloudflare/request-lifecycle.ts',
+    ],
+    [
+      'request telemetry owner',
+      'assets/request-telemetry-fixture.js',
+      'src/runtime/cloudflare/request-telemetry.ts',
+    ],
+    [
+      'Sentry request owner',
+      'assets/sentry-request-fixture.js',
+      'src/runtime/cloudflare/sentry-request.ts',
+    ],
   ])('rejects forged %s provenance', (_label, file, expectedSource) => {
     const root = fixture();
     createCloudflareArtifact(root);
@@ -1928,6 +2266,181 @@ describe('runtime artifact verifier', () => {
     ).toThrow('must return the active application failure');
   });
 
+  it('rejects an injected early return after the Sentry request scope', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'if(applicationOutcome?.type==="responded")',
+          'if(request.headers.get("x-bypass"))return new Response("bypassed");if(applicationOutcome?.type==="responded")'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must have one bounded post-SDK path');
+  });
+
+  it('rejects an injected early return inside the Sentry request scope', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          ';if(sentryResponse.body)',
+          ';if(request.headers.get("x-bypass"))return new Response("bypassed");if(sentryResponse.body)'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must execute one bounded SDK request scope');
+  });
+
+  it('rejects a conditional Sentry request-scope initializer', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'const sentryResponse=await api.withScope(',
+          'const sentryResponse=request.headers.get("x-bypass")?new Response("bypassed"):await api.withScope('
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must enter SDK isolation directly');
+  });
+
+  it('rejects extra Sentry request-wrapper options', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          '{...requestOptions,request:sentryLifecycleRequest(request)}',
+          '{...requestOptions,captureErrors:true,request:sentryLifecycleRequest(request)}'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must pass exact active request options');
+  });
+
+  it('rejects a side-effecting Sentry request-handler parameter', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'async()=>{applicationOutcome=await runApplicationOnce()',
+          'async(leak=exfiltrate(request))=>{applicationOutcome=await runApplicationOnce()'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must own its bounded application body');
+  });
+
+  it('rejects a second application outcome inside the Sentry wrapper', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          ';if(applicationOutcome.type==="failed")',
+          ';applicationOutcome={response:new Response("bypassed"),type:"responded"};if(applicationOutcome.type==="failed")'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must own its bounded application body');
+  });
+
+  it('rejects a finalizer that overrides the Sentry application outcome', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'catch(failure){return{failure,type:"failed"}}});',
+          'catch(failure){return{failure,type:"failed"}}finally{return undefined}});'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must return one application outcome');
+  });
+
   it('rejects duplicate Sentry isolation owners', () => {
     const root = fixture();
     createCloudflareArtifact(root);
@@ -1982,6 +2495,276 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow('must use the trusted Promise owner');
+  });
+
+  it.each([
+    ['a default import', 'import Promise from"./evil.js";', 'Promise'],
+    [
+      'call-based poisoning',
+      'Object.assign(Promise,{resolve:()=>({then:()=>Promise.resolve()})});',
+      'Promise',
+    ],
+  ])('rejects %s of a Sentry built-in', (_label, injection, builtIn) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      `${injection}${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(`must use the trusted ${builtIn} built-in`);
+  });
+
+  it('rejects alternate-global mutation of a Sentry built-in', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      `self.Promise=class{};${fs.readFileSync(chunkPath, 'utf8')}`
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not access alternate global built-ins');
+  });
+
+  it('rejects a substituted Sentry lifecycle request helper', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          /const sentryLifecycleRequest=.*?;const initializeCloudflareSentryIsolation/u,
+          'const sentryLifecycleRequest=(request)=>(Request,request);const initializeCloudflareSentryIsolation'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must bound request normalization');
+  });
+
+  it('rejects a substituted Sentry sentinel helper', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          /const sentrySentinelResponse=.*?;const sentryLifecycleRequest/u,
+          'const sentrySentinelResponse=(applicationCompletion)=>(ReadableStream,new Response());const sentryLifecycleRequest'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must create one bounded streaming response');
+  });
+
+  it('rejects a generator Sentry sentinel stream callback', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace('{start(controller){', '{*start(controller){')
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must own one stream start callback');
+  });
+
+  it.each([
+    ['registerRequestCompletion', 'n', '{}'],
+    ['snapshotRequestCompletions', 'r', '[]'],
+  ])('rejects a substituted %s import', (helper, importedName, fallback) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    const importEntry = `${importedName} as ${helper}`;
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(importEntry, `${importedName} as real${helper}`)
+        .replace(
+          ';const sentrySentinelResponse=',
+          `;const ${helper}=()=>${fallback};const sentrySentinelResponse=`
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(`must import trusted helper ${helper} exactly once`);
+  });
+
+  it('rejects a substituted Sentry telemetry reporter import', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          'import{reportTelemetryFailure}from"./telemetry-fixture.js";',
+          'import{reportTelemetryFailure as realReportTelemetryFailure}from"./telemetry-fixture.js";const reportTelemetryFailure=()=>{};'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must import trusted helper reportTelemetryFailure exactly once');
+  });
+
+  it.each([
+    [
+      'async Sentry isolation owner',
+      'const initializeCloudflareSentryIsolation=(api)=>',
+      'const initializeCloudflareSentryIsolation=async(api)=>',
+      'must define Sentry async-context isolation',
+    ],
+    [
+      'async lifecycle request owner',
+      'const sentryLifecycleRequest=(request)=>',
+      'const sentryLifecycleRequest=async(request)=>',
+      'must bound request normalization',
+    ],
+    [
+      'generator application owner',
+      'const initializeCloudflareSentryApplication=async(api,loadApplication)=>',
+      'const initializeCloudflareSentryApplication=async function*(api,loadApplication)',
+      'must accept exact initialization inputs',
+    ],
+    [
+      'generator Sentry request owner',
+      'const runWithCloudflareSentry=async({api,handle,request,requestOptions})=>',
+      'const runWithCloudflareSentry=async function*({api,handle,request,requestOptions})',
+      'must accept exact active request inputs',
+    ],
+  ])('rejects an %s', (_label, search, replacement, error) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(error);
+  });
+
+  it.each([
+    [
+      'non-function sentinel start callback',
+      '{start(controller){applicationCompletion.then(()=>controller.close(),()=>controller.close())}}',
+      '{start:0}',
+      'must own one stream start callback',
+    ],
+    [
+      'non-function sentinel settlement callback',
+      'applicationCompletion.then(()=>controller.close(),()=>controller.close())',
+      'applicationCompletion.then(null,()=>controller.close())',
+      'must close its stream on completion',
+    ],
+    [
+      'expression-bodied Sentry request wrapper',
+      'async()=>{applicationOutcome=await runApplicationOnce();if(applicationOutcome.type==="failed")throw applicationOutcome.failure;return sentrySentinelResponse(Promise.allSettled(snapshotRequestCompletions(request)))}',
+      'async()=>runApplicationOnce()',
+      'must own its bounded application body',
+    ],
+    [
+      'non-function SDK drain settlement callback',
+      '.then(()=>void 0).catch(',
+      '.then(null).catch(',
+      'must settle its SDK response drain',
+    ],
+    [
+      'expression-bodied SDK drain failure callback',
+      '.catch((failure)=>{reportTelemetryFailure("sentry.cloudflare.request_stream",failure)})',
+      '.catch((failure)=>reportTelemetryFailure("sentry.cloudflare.request_stream",failure))',
+      'must isolate its SDK response drain',
+    ],
+  ])('rejects a %s cleanly', (_label, search, replacement, error) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/sentry-request-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(error);
   });
 
   it('rejects Cloudflare owners initialized out of dependency order', () => {
@@ -2119,6 +2902,28 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow('must only retain the verified native telemetry adapter');
+  });
+
+  it('rejects a destructured native telemetry fallback owner', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const entryPath = path.join(root, 'dist/server/index.js');
+    write(
+      root,
+      'dist/server/index.js',
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'var lastKnownNativeTelemetry=createNoOpTelemetry();',
+          'var {captureException:lastKnownNativeTelemetry}=createNoOpTelemetry();'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must bind its native telemetry fallback directly');
   });
 
   it('rejects local substitution of the native telemetry adapter', () => {
@@ -2267,6 +3072,53 @@ describe('runtime artifact verifier', () => {
     ).toThrow('must settle after bounded completion');
   });
 
+  it('rejects a computed request lifecycle completion member', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/request-lifecycle-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/request-lifecycle-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace('.then(()=>void 0)', '[then](()=>void 0)')
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must bound its flush completion');
+  });
+
+  it('rejects an expression-bodied request lifecycle owner cleanly', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const chunkPath = path.join(
+      root,
+      'dist/server/assets/request-lifecycle-fixture.js'
+    );
+    write(
+      root,
+      'dist/server/assets/request-lifecycle-fixture.js',
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          /const scheduleCloudflareRequestFlush=.*?;export\{scheduleCloudflareRequestFlush/u,
+          'const scheduleCloudflareRequestFlush=(request,waitUntil)=>(forceFlushRequestTelemetry(request,getTelemetry()),waitUntil(Promise.resolve()));export{scheduleCloudflareRequestFlush'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must own its bounded lifecycle body');
+  });
+
   it('rejects a request lifecycle flush declaration with sabotage work', () => {
     const root = fixture();
     createCloudflareArtifact(root);
@@ -2354,7 +3206,7 @@ describe('runtime artifact verifier', () => {
     write(
       root,
       'dist/server/assets/request-completion-fixture.js',
-      'const forceFlushTelemetry=()=>Promise.resolve();const forceFlushRequestTelemetry=()=>Promise.resolve();export{forceFlushTelemetry,forceFlushRequestTelemetry};'
+      'const forceFlushTelemetry=()=>Promise.resolve();const forceFlushRequestTelemetry=()=>Promise.resolve();const registerRequestCompletion=()=>{};const snapshotRequestCompletions=()=>[];export{forceFlushTelemetry,forceFlushRequestTelemetry,registerRequestCompletion as n,snapshotRequestCompletions as r};'
     );
     write(
       root,
@@ -2408,8 +3260,8 @@ describe('runtime artifact verifier', () => {
       fs
         .readFileSync(entryPath, 'utf8')
         .replace(
-          'const handleApplication=()=>application.fetch(request);const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try',
-          'let handleApplication=()=>application.fetch(request);let handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});handleApplication=()=>new Response("application bypassed");handleDatabase=()=>new Response("database bypassed");try'
+          'const handleApplication=()=>application.fetch(request,{context:void 0});const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try',
+          'let handleApplication=()=>application.fetch(request,{context:void 0});let handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});handleApplication=()=>new Response("application bypassed");handleDatabase=()=>new Response("database bypassed");try'
         )
     );
 
@@ -2819,6 +3671,299 @@ describe('runtime artifact verifier', () => {
       'forbidden vercel runtime token telemetry_summary'
     );
   });
+
+  it('rejects malformed Vite manifest entries with a bounded diagnostic', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    writeJson(root, 'dist/server/.vite/manifest.json', { malformed: null });
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must contain valid Vite manifest entries');
+  });
+
+  it.each([
+    [
+      'an unreachable framework fetch',
+      'try{return await tanstack.default.fetch(request,{context})}',
+      'try{if(false)return await tanstack.default.fetch(request,{context});return new Response("bypassed")}',
+      'must execute the live TanStack application request path',
+    ],
+    [
+      'an application owner return before its imports',
+      'const tanstack=await import("./entry-server-fixture.js");',
+      'return new Response("bypassed");const tanstack=await import("./entry-server-fixture.js");',
+      'must import owners before returning one TanStack server entry',
+    ],
+    [
+      'request-body consumption in the request-state prelude',
+      'bindRequestExceptionState(request,telemetryCaptureState);',
+      'void request.arrayBuffer();',
+      'universal request owner must establish exact request state',
+    ],
+    [
+      'a substituted runtime profile in the request context',
+      'requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState',
+      'requestId:crypto.randomUUID(),runtimeProfile:"substituted",telemetryCaptureState',
+      'universal request owner must establish exact request state',
+    ],
+    [
+      'a framework-failure catch that returns before rethrowing',
+      'if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{});',
+      'return {bypassed:true};',
+      'universal request owner must preserve framework failures',
+    ],
+    [
+      'a malformed application execution memoizer',
+      'applicationResult??=handleRequest();',
+      'return handleRequest();',
+      'universal request owner must memoize one application execution',
+    ],
+  ])(
+    'rejects %s in the universal application chunk',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const relativePath =
+        'dist/server/assets/create-application-server-entry-fixture.js';
+      const chunkPath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(error);
+    }
+  );
+
+  it('rejects mutation of a trusted helper in its owner chunk', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/request-completion-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs
+        .readFileSync(chunkPath, 'utf8')
+        .replace(
+          ';export{forceFlushRequestTelemetry,',
+          ';forceFlushRequestTelemetry=()=>Promise.resolve();export{forceFlushRequestTelemetry,'
+        )
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not mutate trusted helper forceFlushRequestTelemetry');
+  });
+
+  it.each([
+    [
+      'a sabotaging response declarator',
+      'const response=await handle();',
+      'const response=await handle(),sabotage=response.body?.cancel();',
+      'database owner must isolate one application response',
+    ],
+    [
+      'a malformed body guard',
+      'if(!response.body){closeDatabase(database);return response}',
+      ';',
+      'database response owner must close bodyless responses',
+    ],
+    [
+      'a malformed response pipeline',
+      'response.body.pipeTo(writable,{signal:request.signal}).catch(()=>void 0).then(()=>closeDatabase(database));',
+      'pipeline;',
+      'database response owner must close after stream completion',
+    ],
+    [
+      'a connection-failure reporter that substitutes the failure',
+      'captureDatabaseConnectionFailure(failure);throw failure',
+      'captureDatabaseConnectionFailure(failure,failure={substituted:true});throw failure',
+      'database owner must report connection failures',
+    ],
+    [
+      'a request-failure cleanup that substitutes the failure',
+      'await closeDatabase(database);throw failure',
+      'await closeDatabase(database,failure={substituted:true});throw failure',
+      'database owner must close the active client after request failure',
+    ],
+  ])('rejects %s cleanly', (_label, search, replacement, error) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const relativePath = 'dist/server/assets/database-request-fixture.js';
+    const chunkPath = path.join(root, relativePath);
+    write(
+      root,
+      relativePath,
+      fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(error);
+  });
+
+  it.each([
+    [
+      'a readiness declaration with application substitution',
+      'const sentryRequestIsolationReady=initializeCloudflareSentryIsolation(api);',
+      'const sentryRequestIsolationReady=initializeCloudflareSentryIsolation(api),substitute=(loadApplication=async()=>({fetch:()=>new Response("bypassed")}));',
+      'Sentry application owner must isolate its readiness state',
+    ],
+    [
+      'an isolation initializer with a side-effecting extra argument',
+      'initializeCloudflareSentryIsolation(api);',
+      'initializeCloudflareSentryIsolation(api,loadApplication=async()=>({fetch:()=>new Response("bypassed")}));',
+      'Sentry application owner must initialize the active SDK isolation',
+    ],
+    [
+      'sentinel metadata without a status',
+      ',status:200',
+      '',
+      'Sentry sentinel owner must emit exact bounded response metadata',
+    ],
+    [
+      'a malformed SDK response drain',
+      'sentryResponse.arrayBuffer().then',
+      'sentryResponse.then',
+      'Sentry request owner must drain one bounded SDK response',
+    ],
+    [
+      'a malformed application memoizer',
+      'applicationWork??=Promise.resolve().then(async()=>',
+      'return Promise.resolve();Promise.resolve().then(async()=>',
+      'Sentry request runner must own one memoized application execution',
+    ],
+  ])(
+    'rejects %s with a bounded diagnostic',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const relativePath = 'dist/server/assets/sentry-request-fixture.js';
+      const chunkPath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(error);
+    }
+  );
+
+  it.each([
+    [
+      'application.fetch',
+      'dist/server/index.js',
+      'application.fetch(request,{context:void 0})',
+      'application.fetch(request,{context:void 0},request.arrayBuffer())',
+      'active application handler must invoke application.fetch with the active request',
+    ],
+    [
+      'the outer Sentry request owner',
+      'dist/server/index.js',
+      'fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions})',
+      'fetchCloudflareApplication({context,handle:handleDatabase,request,sentryOptions},request.arrayBuffer())',
+      'Worker fetch must return or await its Sentry-owned response',
+    ],
+    [
+      'the Sentry request wrapper',
+      'dist/server/index.js',
+      'runWithCloudflareSentry({api:Sentry,handle,request,requestOptions:{captureErrors:false,context,options:sentryOptions,request}})',
+      'runWithCloudflareSentry({api:Sentry,handle,request,requestOptions:{captureErrors:false,context,options:sentryOptions,request}},request.arrayBuffer())',
+      'Cloudflare Sentry owner must invoke runWithCloudflareSentry',
+    ],
+    [
+      'the Worker database owner',
+      'dist/server/index.js',
+      'runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request})',
+      'runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request},request.arrayBuffer())',
+      'active database handler must return its database-owned response',
+    ],
+    [
+      'the Hyperdrive client factory',
+      'dist/server/assets/database-request-fixture.js',
+      'createHyperdriveDbClient(binding)',
+      'createHyperdriveDbClient(binding,handle=async()=>new Response("bypassed"))',
+      'database owner must create its client from Hyperdrive',
+    ],
+    [
+      'the runtime database scope',
+      'dist/server/assets/database-request-fixture.js',
+      '}})};export{runWithCloudflareDatabase};',
+      '}},request={signal:void 0})};export{runWithCloudflareDatabase};',
+      'database owner must return its runtime database scope',
+    ],
+    [
+      'the database response binder',
+      'dist/server/assets/database-request-fixture.js',
+      'bindCloudflareDatabaseToResponse({database,request,response})',
+      'bindCloudflareDatabaseToResponse({database,request,response},response.body?.cancel())',
+      'database owner must return its response lifetime binding',
+    ],
+  ])(
+    'rejects a side-effecting extra argument at %s',
+    (_label, relativePath, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const chunkPath = path.join(root, relativePath);
+      const source = fs.readFileSync(chunkPath, 'utf8');
+      const mutated = source.replace(search, replacement);
+      write(root, relativePath, mutated);
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(error);
+    }
+  );
+
+  it.each([
+    [
+      'validateServerConfig("cloudflare",{databaseAdapter:database.$adapter})',
+      'validateServerConfig("cloudflare")',
+    ],
+    [
+      'validateServerConfig("cloudflare",{databaseAdapter:database.$adapter})',
+      'validateServerConfig("cloudflare",{})',
+    ],
+  ])(
+    'rejects an incomplete Cloudflare database validation payload',
+    (search, replacement) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      const relativePath = 'dist/server/assets/database-request-fixture.js';
+      const chunkPath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        fs.readFileSync(chunkPath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow('database owner must validate the Cloudflare adapter in scope');
+    }
+  );
 
   it('rejects unknown profiles', () => {
     expect(() => verifyRuntimeProfile('auto', fixture())).toThrow(
