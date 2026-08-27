@@ -88,6 +88,7 @@ export function getDatabaseConfig(): DatabaseConfig {
   const env = parseEnv(databaseEnvSchema);
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy: env.DATABASE_TLS_POLICY,
+    policyName: 'DATABASE_TLS_POLICY',
     url: env.DATABASE_URL,
   });
   assertDatabaseUrlTls({
@@ -96,6 +97,7 @@ export function getDatabaseConfig(): DatabaseConfig {
     driver: env.DATABASE_DRIVER,
     env,
     policy: tlsPolicy,
+    policyName: 'DATABASE_TLS_POLICY',
   });
   cachedDatabaseConfig = {
     databaseUrl: env.DATABASE_URL,
@@ -128,23 +130,31 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
   assertMigrationDriver(driver);
 
   const databaseUrl = env.DATABASE_MIGRATION_URL ?? env.DATABASE_URL;
+  const databaseUrlName = env.DATABASE_MIGRATION_URL
+    ? 'DATABASE_MIGRATION_URL'
+    : 'DATABASE_URL';
+  const tlsPolicyName = env.DATABASE_MIGRATION_TLS_POLICY
+    ? 'DATABASE_MIGRATION_TLS_POLICY'
+    : env.DATABASE_TLS_POLICY
+      ? 'DATABASE_TLS_POLICY'
+      : 'DATABASE_MIGRATION_TLS_POLICY';
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy:
       env.DATABASE_MIGRATION_TLS_POLICY ?? env.DATABASE_TLS_POLICY,
+    policyName: tlsPolicyName,
     url: databaseUrl,
   });
   assertDatabaseUrlTls({
-    name: env.DATABASE_MIGRATION_URL
-      ? 'DATABASE_MIGRATION_URL'
-      : 'DATABASE_URL',
+    name: databaseUrlName,
     url: databaseUrl,
     driver,
     env,
     policy: tlsPolicy,
+    policyName: tlsPolicyName,
   });
   if (isLikelyTransactionPooledDatabaseUrl(databaseUrl)) {
     throw new ConfigurationError(
-      'DATABASE_MIGRATION_URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+      `${databaseUrlName} must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.`
     );
   }
 

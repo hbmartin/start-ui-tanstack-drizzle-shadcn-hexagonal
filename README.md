@@ -242,7 +242,9 @@ DB-backed Vercel request, supply a remote Neon-compatible `DATABASE_URL`; the
 Neon HTTP driver cannot serve requests against the local Docker PostgreSQL
 endpoint. Use the Node build/preview commands for that local driver.
 
-Migrations may use `node-pg` or `neon-websocket`; `neon-http` is rejected. The
+Set `DATABASE_MIGRATION_URL` when migrations need a connection distinct from
+`DATABASE_URL`; transaction-pooled migration URLs are rejected. Migrations may
+use `node-pg` or `neon-websocket`; `neon-http` is rejected. The
 default follows the request driver: `node-pg` for a Node request runtime and
 `neon-websocket` for Vercel's `neon-http` runtime. Set
 `DATABASE_MIGRATION_DRIVER=node-pg` explicitly when the maintenance URL is a
@@ -251,6 +253,8 @@ conventional direct PostgreSQL endpoint, and set
 otherwise inherit a non-`off` request policy. When neither policy is configured,
 the migration URL independently defaults to `off` for loopback and `verify` for
 remote endpoints.
+Conversely, a remote maintenance URL that would inherit
+`DATABASE_TLS_POLICY=off` must set `DATABASE_MIGRATION_TLS_POLICY=verify`.
 
 The v5 runtime work is intentionally incremental. The artifact commands prove
 isolated output shapes and trusted profile injection. `pnpm verify:node` also

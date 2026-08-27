@@ -16,16 +16,18 @@ export type DatabaseTlsPolicy = (typeof DATABASE_TLS_POLICIES)[number];
  */
 export const resolveDatabaseTlsPolicy = ({
   configuredPolicy,
+  policyName = 'DATABASE_TLS_POLICY',
   url,
 }: {
   configuredPolicy: DatabaseTlsPolicy | undefined;
+  policyName?: string;
   url: string;
 }): DatabaseTlsPolicy => {
   const policy = configuredPolicy ?? (isLocalhostUrl(url) ? 'off' : 'verify');
 
   if (policy === 'off' && !isLocalhostUrl(url)) {
     throw new ConfigurationError(
-      'DATABASE_TLS_POLICY=off is allowed only for a loopback database endpoint.'
+      `${policyName}=off is allowed only for a loopback database endpoint.`
     );
   }
 

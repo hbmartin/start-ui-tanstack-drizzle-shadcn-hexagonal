@@ -48,4 +48,14 @@ describe('resolveDatabaseTlsPolicy', () => {
       })
     ).toBe('off');
   });
+
+  it('attributes a rejected policy to its configured source', () => {
+    expect(() =>
+      resolveDatabaseTlsPolicy({
+        configuredPolicy: 'off',
+        policyName: 'DATABASE_MIGRATION_TLS_POLICY',
+        url: remote,
+      })
+    ).toThrow('DATABASE_MIGRATION_TLS_POLICY=off');
+  });
 });

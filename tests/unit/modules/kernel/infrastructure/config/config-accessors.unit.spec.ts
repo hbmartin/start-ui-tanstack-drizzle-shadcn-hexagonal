@@ -202,6 +202,44 @@ describe('server config accessors', () => {
     });
   });
 
+  it('requires a remote migration URL to override an inherited off policy', async () => {
+    const migrationDatabaseUrl = makeTestDatabaseUrl({
+      host: 'db.example.com',
+    });
+
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    vi.stubEnv('DATABASE_MIGRATION_URL', migrationDatabaseUrl);
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_TLS_POLICY=off'
+    );
+
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'verify');
+    expect(getMigrationDatabaseConfig()).toEqual({
+      databaseUrl: migrationDatabaseUrl,
+      driver: 'node-pg',
+      tlsPolicy: 'verify',
+    });
+  });
+
+  it('attributes an explicit remote migration opt-out to the migration policy', async () => {
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv(
+      'DATABASE_MIGRATION_URL',
+      makeTestDatabaseUrl({ host: 'db.example.com' })
+    );
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'off');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_TLS_POLICY=off'
+    );
+  });
+
   it('rejects Neon HTTP as a migration driver', async () => {
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
     vi.stubEnv('DATABASE_MIGRATION_DRIVER', 'neon-http');
@@ -228,6 +266,23 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/domain/errors/configuration-error');
 
     expect(() => getMigrationDatabaseConfig()).toThrow(ConfigurationError);
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_URL must use'
+    );
+  });
+
+  it('attributes a transaction-pooled runtime fallback to DATABASE_URL', async () => {
+    vi.stubEnv(
+      'DATABASE_URL',
+      makeTestDatabaseUrl({
+        host: 'ep-example-pooler.us-east-1.aws.neon.tech',
+        port: null,
+      })
+    );
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow('DATABASE_URL must use');
   });
 
   it('detects likely transaction-pooled database URLs', async () => {
