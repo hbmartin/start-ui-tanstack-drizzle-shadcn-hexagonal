@@ -2,7 +2,7 @@ import { drizzle as drizzleNeonHttp } from 'drizzle-orm/neon-http';
 import { drizzle as drizzleNeonWebsocket } from 'drizzle-orm/neon-serverless';
 import { drizzle as drizzleNodePg } from 'drizzle-orm/node-postgres';
 import { createRequire } from 'node:module';
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 
 import type { TransactionRunner } from '@/modules/kernel/application/ports/transaction-runner';
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
@@ -19,6 +19,7 @@ import { assertDatabaseUrlTls } from '@/modules/kernel/infrastructure/config/url
 
 import * as schema from './schema';
 import { nodePostgresSslForPolicy } from './node-postgres-tls';
+import { getRuntimeDatabaseClient } from './runtime-database-scope';
 import {
   type Database,
   type DbLike,
@@ -31,6 +32,7 @@ const require = createRequire(import.meta.url);
 function withDatabaseMetadata<TDb extends object>(
   db: TDb,
   metadata: {
+    adapter?: Database['$adapter'];
     driver: DatabaseDriver;
     transactionCapable: boolean;
     runInTransaction?: RunInTransaction;
@@ -38,6 +40,7 @@ function withDatabaseMetadata<TDb extends object>(
   }
 ): Database {
   return Object.assign(db, {
+    $adapter: metadata.adapter,
     $driver: metadata.driver,
     $transactionCapable: metadata.transactionCapable,
     $runInTransaction: metadata.runInTransaction,
@@ -100,6 +103,7 @@ export function createDbClient(options?: {
     };
 
     return withDatabaseMetadata(database, {
+      adapter: 'postgres-fetch',
       driver,
       transactionCapable: false,
       runInTransaction: (work, options) => {
@@ -130,11 +134,82 @@ export function createDbClient(options?: {
   const database = drizzleNodePg(pool, { schema, casing: 'camelCase' });
 
   return withDatabaseMetadata(database, {
+    adapter: 'postgres-node',
     driver,
     transactionCapable: true,
     runInTransaction: (work, options) =>
       database.transaction((tx) => work(tx), options),
     close: () => pool.end(),
+  });
+}
+
+export type HyperdriveBinding = Readonly<{
+  connectionString: string;
+}>;
+
+const parseHyperdriveBinding = (binding: unknown): HyperdriveBinding => {
+  if (typeof binding !== 'object' || binding === null) {
+    throw new ConfigurationError(
+      'The Cloudflare runtime requires a START_UI_DATABASE Hyperdrive binding.'
+    );
+  }
+
+  const { connectionString } = binding as { connectionString?: unknown };
+  if (typeof connectionString !== 'string' || connectionString.length === 0) {
+    throw new ConfigurationError(
+      'The START_UI_DATABASE Hyperdrive binding must provide a PostgreSQL connection string.'
+    );
+  }
+
+  try {
+    const parsed = new URL(connectionString);
+    if (
+      (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') ||
+      parsed.hostname.length === 0
+    ) {
+      throw new Error('not a PostgreSQL URL');
+    }
+  } catch {
+    throw new ConfigurationError(
+      'The START_UI_DATABASE Hyperdrive binding must provide a valid PostgreSQL connection string.'
+    );
+  }
+
+  return { connectionString };
+};
+
+/**
+ * Creates the request-owned node-postgres client recommended by Hyperdrive.
+ * Hyperdrive owns origin TLS and pooling; its generated URL must not be folded
+ * into the process-owned DATABASE_URL/TLS configuration path.
+ */
+export async function createHyperdriveDbClient(
+  binding: unknown
+): Promise<Database> {
+  const { connectionString } = parseHyperdriveBinding(binding);
+  const client = new Client({ connectionString });
+
+  try {
+    await client.connect();
+  } catch (error) {
+    await client.end().catch(() => undefined);
+    throw error;
+  }
+
+  const database = drizzleNodePg(client, { schema, casing: 'camelCase' });
+  let closed = false;
+
+  return withDatabaseMetadata(database, {
+    adapter: 'hyperdrive',
+    driver: 'node-pg',
+    transactionCapable: true,
+    runInTransaction: (work, options) =>
+      database.transaction((tx) => work(tx), options),
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      await client.end();
+    },
   });
 }
 
@@ -146,12 +221,51 @@ const globalForDb = globalThis as unknown as {
 
 let defaultDb = globalForDb.db;
 
-export function getDefaultDbClient(): Database {
+const getProcessDefaultDbClient = (): Database => {
   if (!defaultDb) {
     defaultDb = createDbClient();
     if (isDevRuntimeEnvironment()) globalForDb.db = defaultDb;
   }
   return defaultDb;
+};
+
+const createDatabaseProxy = (resolveDatabase: () => Database): Database =>
+  new Proxy({} as Database, {
+    get(_target, prop) {
+      const database = resolveDatabase();
+      const value = Reflect.get(database, prop, database);
+      return typeof value === 'function' ? value.bind(database) : value;
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(
+        resolveDatabase(),
+        prop
+      );
+      return descriptor ? { ...descriptor, configurable: true } : undefined;
+    },
+    getPrototypeOf() {
+      return Reflect.getPrototypeOf(resolveDatabase());
+    },
+    has(_target, prop) {
+      return Reflect.has(resolveDatabase(), prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(resolveDatabase());
+    },
+  });
+
+const requestDatabase = createDatabaseProxy(() => {
+  const database = getRuntimeDatabaseClient();
+  if (database) return database;
+  throw new ConfigurationError(
+    'The request-scoped runtime database is unavailable outside its owning request.'
+  );
+});
+
+export function getDefaultDbClient(): Database {
+  return getRuntimeDatabaseClient()
+    ? requestDatabase
+    : getProcessDefaultDbClient();
 }
 
 export { schema };
@@ -181,13 +295,9 @@ export function getDefaultTransactionRunner() {
   return defaultTransactionRunner;
 }
 
-export const db = new Proxy({} as Database, {
-  get(_target, prop) {
-    const database = getDefaultDbClient();
-    const value = Reflect.get(database, prop, database);
-    return typeof value === 'function' ? value.bind(database) : value;
-  },
-});
+export const db = createDatabaseProxy(
+  () => getRuntimeDatabaseClient() ?? getProcessDefaultDbClient()
+);
 
 export const transactionRunner = new Proxy(
   {} as TransactionRunner<DbTransaction>,

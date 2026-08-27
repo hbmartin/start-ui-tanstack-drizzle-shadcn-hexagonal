@@ -2,6 +2,7 @@ import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 
 import type { TransactionOptions } from '@/modules/kernel/application/ports/transaction-runner';
 import type { DatabaseDriver } from '@/modules/kernel/infrastructure/config/database';
+import type { DatabaseAdapterKind } from '@/platform/runtime/runtime-profile';
 
 import type * as schema from './schema';
 
@@ -27,6 +28,7 @@ export type DatabaseClientHandle = {
 
 export type DatabaseMetadata = {
   $client: DatabaseClientHandle;
+  $adapter?: DatabaseAdapterKind;
   $driver: DatabaseDriver;
   $transactionCapable: boolean;
   $runInTransaction?: RunInTransaction;

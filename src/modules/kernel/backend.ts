@@ -26,10 +26,13 @@ export {
 } from './infrastructure/config/server';
 export type { DatabaseTlsPolicy } from './infrastructure/config/database-tls';
 export {
+  createHyperdriveDbClient,
   createTransactionRunner,
   getDefaultDbClient,
 } from './infrastructure/db/client';
+export type { HyperdriveBinding } from './infrastructure/db/client';
 export type { DbTransaction } from './infrastructure/db/client';
+export { runWithRuntimeDatabaseClient } from './infrastructure/db/runtime-database-scope';
 export { createResultTransactionRunner } from './infrastructure/db/result-transaction-runner';
 export { book, genre, user } from './infrastructure/db/schema';
 export { isRootDatabase } from './infrastructure/db/types';
