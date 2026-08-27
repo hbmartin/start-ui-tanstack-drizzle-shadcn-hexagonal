@@ -15,7 +15,10 @@ import {
   type DatabaseTlsPolicy,
 } from '@/modules/kernel/infrastructure/config/database-tls';
 import { isDevRuntimeEnvironment } from '@/modules/kernel/infrastructure/config/env-schema';
-import { assertDatabaseUrlTls } from '@/modules/kernel/infrastructure/config/url-security';
+import {
+  assertDatabaseUrlTls,
+  findForbiddenDatabaseUrlParameters,
+} from '@/modules/kernel/infrastructure/config/url-security';
 
 import * as schema from './schema';
 import { nodePostgresSslForPolicy } from './node-postgres-tls';
@@ -169,6 +172,9 @@ const parseHyperdriveBinding = (binding: unknown): HyperdriveBinding => {
     ) {
       throw new Error('not a PostgreSQL URL');
     }
+    if (findForbiddenDatabaseUrlParameters(parsed).length > 0) {
+      throw new Error('contains an endpoint or TLS override');
+    }
   } catch {
     throw new ConfigurationError(
       'The START_UI_DATABASE Hyperdrive binding must provide a valid PostgreSQL connection string.'
@@ -184,10 +190,19 @@ const parseHyperdriveBinding = (binding: unknown): HyperdriveBinding => {
  * into the process-owned DATABASE_URL/TLS configuration path.
  */
 export async function createHyperdriveDbClient(
-  binding: unknown
+  binding: unknown,
+  options: { onError: (error: unknown) => void }
 ): Promise<Database> {
   const { connectionString } = parseHyperdriveBinding(binding);
   const client = new Client({ connectionString });
+  client.on('error', (error) => {
+    try {
+      options.onError(error);
+    } catch {
+      // A diagnostic callback must not turn one client failure into an
+      // uncaught EventEmitter exception that aborts sibling Worker requests.
+    }
+  });
 
   try {
     await client.connect();
@@ -198,6 +213,7 @@ export async function createHyperdriveDbClient(
 
   const database = drizzleNodePg(client, { schema, casing: 'camelCase' });
   let closed = false;
+  let closing: Promise<void> | undefined;
 
   return withDatabaseMetadata(database, {
     adapter: 'hyperdrive',
@@ -205,10 +221,18 @@ export async function createHyperdriveDbClient(
     transactionCapable: true,
     runInTransaction: (work, options) =>
       database.transaction((tx) => work(tx), options),
-    close: async () => {
-      if (closed) return;
-      closed = true;
-      await client.end();
+    close: () => {
+      if (closed) return Promise.resolve();
+      closing ??= client
+        .end()
+        .then(() => {
+          closed = true;
+          return undefined;
+        })
+        .finally(() => {
+          closing = undefined;
+        });
+      return closing;
     },
   });
 }
@@ -254,18 +278,12 @@ const createDatabaseProxy = (resolveDatabase: () => Database): Database =>
     },
   });
 
-const requestDatabase = createDatabaseProxy(() => {
-  const database = getRuntimeDatabaseClient();
-  if (database) return database;
-  throw new ConfigurationError(
-    'The request-scoped runtime database is unavailable outside its owning request.'
-  );
-});
+const runtimeOrProcessDatabase = createDatabaseProxy(
+  () => getRuntimeDatabaseClient() ?? getProcessDefaultDbClient()
+);
 
 export function getDefaultDbClient(): Database {
-  return getRuntimeDatabaseClient()
-    ? requestDatabase
-    : getProcessDefaultDbClient();
+  return runtimeOrProcessDatabase;
 }
 
 export { schema };
@@ -295,9 +313,7 @@ export function getDefaultTransactionRunner() {
   return defaultTransactionRunner;
 }
 
-export const db = createDatabaseProxy(
-  () => getRuntimeDatabaseClient() ?? getProcessDefaultDbClient()
-);
+export const db = runtimeOrProcessDatabase;
 
 export const transactionRunner = new Proxy(
   {} as TransactionRunner<DbTransaction>,

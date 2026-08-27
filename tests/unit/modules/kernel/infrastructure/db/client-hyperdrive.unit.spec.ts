@@ -5,6 +5,7 @@ import type { Database } from '@/modules/kernel/infrastructure/db/client';
 const mocks = vi.hoisted(() => ({
   clientConnect: vi.fn(),
   clientEnd: vi.fn(),
+  clientOn: vi.fn(),
   clientOptions: [] as unknown[],
   databaseTransaction: vi.fn(),
   drizzleNodePg: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock('pg', () => ({
   Client: class {
     connect = mocks.clientConnect;
     end = mocks.clientEnd;
+    on = mocks.clientOn;
 
     constructor(options: unknown) {
       mocks.clientOptions.push(options);
@@ -53,10 +55,15 @@ describe('Cloudflare Hyperdrive database client', () => {
     const { createHyperdriveDbClient, createTransactionRunner } =
       await import('@/modules/kernel/infrastructure/db/client');
 
-    const database = await createHyperdriveDbClient({ connectionString });
+    const onError = vi.fn();
+    const database = await createHyperdriveDbClient(
+      { connectionString },
+      { onError }
+    );
 
     expect(mocks.clientOptions).toEqual([{ connectionString }]);
     expect(mocks.clientConnect).toHaveBeenCalledOnce();
+    expect(mocks.clientOn).toHaveBeenCalledWith('error', expect.any(Function));
     expect(mocks.drizzleNodePg).toHaveBeenCalledWith(expect.anything(), {
       casing: 'camelCase',
       schema: expect.any(Object),
@@ -73,6 +80,22 @@ describe('Cloudflare Hyperdrive database client', () => {
     expect(mocks.clientEnd).toHaveBeenCalledOnce();
   });
 
+  it('isolates client error diagnostics from EventEmitter failure handling', async () => {
+    const onError = vi.fn(() => {
+      throw new Error('diagnostic failed');
+    });
+    const { createHyperdriveDbClient } =
+      await import('@/modules/kernel/infrastructure/db/client');
+    await createHyperdriveDbClient({ connectionString }, { onError });
+    const errorListener = mocks.clientOn.mock.calls.find(
+      ([eventName]) => eventName === 'error'
+    )?.[1] as ((error: unknown) => void) | undefined;
+    const clientFailure = new Error('socket failed');
+
+    expect(() => errorListener?.(clientFailure)).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(clientFailure);
+  });
+
   it.each([
     undefined,
     {},
@@ -85,9 +108,27 @@ describe('Cloudflare Hyperdrive database client', () => {
       const { createHyperdriveDbClient } =
         await import('@/modules/kernel/infrastructure/db/client');
 
-      await expect(createHyperdriveDbClient(binding)).rejects.toThrow(
-        /START_UI_DATABASE Hyperdrive binding/u
-      );
+      await expect(
+        createHyperdriveDbClient(binding, { onError: vi.fn() })
+      ).rejects.toThrow(/START_UI_DATABASE Hyperdrive binding/u);
+      expect(mocks.clientOptions).toEqual([]);
+    }
+  );
+
+  it.each(['host', 'HOST', 'hostaddr', 'port', 'sslmode', 'ssl_future'])(
+    'rejects the %s connection-string override from a trusted binding',
+    async (parameterName) => {
+      const { createHyperdriveDbClient } =
+        await import('@/modules/kernel/infrastructure/db/client');
+      const overriddenUrl = new URL(connectionString);
+      overriddenUrl.searchParams.set(parameterName, 'attacker.example');
+
+      await expect(
+        createHyperdriveDbClient(
+          { connectionString: overriddenUrl.toString() },
+          { onError: vi.fn() }
+        )
+      ).rejects.toThrow(/valid PostgreSQL connection string/u);
       expect(mocks.clientOptions).toEqual([]);
     }
   );
@@ -98,10 +139,31 @@ describe('Cloudflare Hyperdrive database client', () => {
     const { createHyperdriveDbClient } =
       await import('@/modules/kernel/infrastructure/db/client');
 
-    await expect(createHyperdriveDbClient({ connectionString })).rejects.toBe(
-      connectionFailure
-    );
+    await expect(
+      createHyperdriveDbClient({ connectionString }, { onError: vi.fn() })
+    ).rejects.toBe(connectionFailure);
     expect(mocks.clientEnd).toHaveBeenCalledOnce();
+  });
+
+  it('deduplicates concurrent close and permits a retry after failure', async () => {
+    const closeFailure = new Error('close failed');
+    mocks.clientEnd
+      .mockRejectedValueOnce(closeFailure)
+      .mockResolvedValueOnce(undefined);
+    const { createHyperdriveDbClient } =
+      await import('@/modules/kernel/infrastructure/db/client');
+    const database = await createHyperdriveDbClient(
+      { connectionString },
+      { onError: vi.fn() }
+    );
+
+    const firstClose = database.$close();
+    const concurrentClose = database.$close();
+    expect(firstClose).toBe(concurrentClose);
+    await expect(firstClose).rejects.toBe(closeFailure);
+    await expect(database.$close()).resolves.toBeUndefined();
+    await expect(database.$close()).resolves.toBeUndefined();
+    expect(mocks.clientEnd).toHaveBeenCalledTimes(2);
   });
 
   it('keeps cached default-client proxies isolated across concurrent requests', async () => {
@@ -123,16 +185,15 @@ describe('Cloudflare Hyperdrive database client', () => {
     const databaseB = {
       marker: 'database-b',
     } as unknown as Database;
+    const cachedProxy = getDefaultDbClient() as Database & { marker: string };
 
     const first = runWithRuntimeDatabaseClient(databaseA, async () => {
-      const cachedProxy = getDefaultDbClient() as Database & { marker: string };
       firstStarted();
       await firstMayFinish;
       return cachedProxy.marker;
     });
     await firstHasStarted;
     const second = runWithRuntimeDatabaseClient(databaseB, async () => {
-      const cachedProxy = getDefaultDbClient() as Database & { marker: string };
       await Promise.resolve();
       return cachedProxy.marker;
     });

@@ -31,6 +31,18 @@ const FORBIDDEN_DATABASE_URL_PARAMETERS = new Set([
   'uselibpqcompat',
 ]);
 
+export const findForbiddenDatabaseUrlParameters = (parsed: URL): string[] => [
+  ...new Set(
+    [...parsed.searchParams.keys()]
+      .map((parameterName) => parameterName.toLowerCase())
+      .filter(
+        (parameterName) =>
+          parameterName.startsWith('ssl') ||
+          FORBIDDEN_DATABASE_URL_PARAMETERS.has(parameterName)
+      )
+  ),
+];
+
 const stripIpv6Brackets = (value: string) =>
   value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
 
@@ -158,17 +170,7 @@ export const assertDatabaseUrlTls = ({
     );
   }
 
-  const forbiddenParameters = [
-    ...new Set(
-      [...parsed.searchParams.keys()]
-        .map((parameterName) => parameterName.toLowerCase())
-        .filter(
-          (parameterName) =>
-            parameterName.startsWith('ssl') ||
-            FORBIDDEN_DATABASE_URL_PARAMETERS.has(parameterName)
-        )
-    ),
-  ];
+  const forbiddenParameters = findForbiddenDatabaseUrlParameters(parsed);
   if (forbiddenParameters.length > 0) {
     const tlsPolicyRemedy = describeDatabaseUrlTlsRemedy({
       policyOwners: urlPolicyOwners,
