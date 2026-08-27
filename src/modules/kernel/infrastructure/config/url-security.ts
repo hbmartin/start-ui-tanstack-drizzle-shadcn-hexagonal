@@ -105,14 +105,16 @@ export const assertDatabaseUrlTls = ({
   driver,
   env,
   policy,
-  policyName = 'DATABASE_TLS_POLICY',
+  policyOverrideName = 'database TLS policy',
+  policySourceName = 'database TLS policy',
 }: {
   name: string;
   url: string;
   driver: string;
   env?: RuntimeEnv;
   policy: DatabaseTlsPolicy;
-  policyName?: string;
+  policyOverrideName?: string;
+  policySourceName?: string;
 }): void => {
   let parsed: URL;
   try {
@@ -144,13 +146,13 @@ export const assertDatabaseUrlTls = ({
     throw new ConfigurationError(
       `${name} must not configure endpoint or TLS parameters in the URL (${forbiddenParameters.join(
         ', '
-      )}); use ${policyName} and the URL authority instead.`
+      )}); use ${policyOverrideName} and the URL authority instead.`
     );
   }
 
   if (policy === 'off' && !isLocalhostUrl(url)) {
     throw new ConfigurationError(
-      `${name} must not use ${policyName}=off for a remote database.`
+      `${name} must not use ${policySourceName}=off for a remote database.`
     );
   }
 
@@ -160,7 +162,7 @@ export const assertDatabaseUrlTls = ({
     isProdRuntimeEnvironment(env)
   ) {
     throw new ConfigurationError(
-      `${name} uses a Neon adapter that owns secure transport; production requires ${policyName}=verify.`
+      `${name} uses a Neon adapter that owns secure transport; production requires ${policyOverrideName}=verify.`
     );
   }
 };

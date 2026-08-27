@@ -282,7 +282,9 @@ describe('server config accessors', () => {
     const { getMigrationDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
 
-    expect(() => getMigrationDatabaseConfig()).toThrow('DATABASE_URL must use');
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'set DATABASE_MIGRATION_URL'
+    );
   });
 
   it('detects likely transaction-pooled database URLs', async () => {

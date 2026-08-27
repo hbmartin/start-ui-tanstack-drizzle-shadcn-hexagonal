@@ -53,7 +53,7 @@ describe('resolveDatabaseTlsPolicy', () => {
     expect(() =>
       resolveDatabaseTlsPolicy({
         configuredPolicy: 'off',
-        policyName: 'DATABASE_MIGRATION_TLS_POLICY',
+        policySourceName: 'DATABASE_MIGRATION_TLS_POLICY',
         url: remote,
       })
     ).toThrow('DATABASE_MIGRATION_TLS_POLICY=off');

@@ -222,6 +222,20 @@ describe('createMigrationDbClient', () => {
     expect(mocks.nodePgClientConfig).toBeUndefined();
   });
 
+  it('uses a neutral policy name for programmatic migration config', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl({ host: 'db.example.com' }),
+        driver: 'node-pg',
+        tlsPolicy: 'off',
+      })
+    ).rejects.toThrow('database TLS policy=off');
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+  });
+
   it('rejects malformed migration URLs before constructing a client', async () => {
     const { createMigrationDbClient } =
       await import('@/modules/kernel/infrastructure/db/migrate');

@@ -88,7 +88,7 @@ export function getDatabaseConfig(): DatabaseConfig {
   const env = parseEnv(databaseEnvSchema);
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy: env.DATABASE_TLS_POLICY,
-    policyName: 'DATABASE_TLS_POLICY',
+    policySourceName: 'DATABASE_TLS_POLICY',
     url: env.DATABASE_URL,
   });
   assertDatabaseUrlTls({
@@ -97,7 +97,8 @@ export function getDatabaseConfig(): DatabaseConfig {
     driver: env.DATABASE_DRIVER,
     env,
     policy: tlsPolicy,
-    policyName: 'DATABASE_TLS_POLICY',
+    policyOverrideName: 'DATABASE_TLS_POLICY',
+    policySourceName: 'DATABASE_TLS_POLICY',
   });
   cachedDatabaseConfig = {
     databaseUrl: env.DATABASE_URL,
@@ -120,6 +121,23 @@ export function isLikelyTransactionPooledDatabaseUrl(url: string): boolean {
   }
 }
 
+function assertMigrationUrlSupportsMigrations(
+  databaseUrl: string,
+  databaseUrlName: 'DATABASE_MIGRATION_URL' | 'DATABASE_URL'
+): void {
+  if (!isLikelyTransactionPooledDatabaseUrl(databaseUrl)) return;
+
+  if (databaseUrlName === 'DATABASE_URL') {
+    throw new ConfigurationError(
+      'DATABASE_URL is transaction-pooled and cannot be used for migrations; set DATABASE_MIGRATION_URL to a direct or session-sticky PostgreSQL endpoint.'
+    );
+  }
+
+  throw new ConfigurationError(
+    'DATABASE_MIGRATION_URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+  );
+}
+
 export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
   if (cachedMigrationDatabaseConfig) return cachedMigrationDatabaseConfig;
 
@@ -133,15 +151,15 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
   const databaseUrlName = env.DATABASE_MIGRATION_URL
     ? 'DATABASE_MIGRATION_URL'
     : 'DATABASE_URL';
-  const tlsPolicyName = env.DATABASE_MIGRATION_TLS_POLICY
-    ? 'DATABASE_MIGRATION_TLS_POLICY'
-    : env.DATABASE_TLS_POLICY
+  const tlsPolicySourceName =
+    env.DATABASE_TLS_POLICY !== undefined &&
+    env.DATABASE_MIGRATION_TLS_POLICY === undefined
       ? 'DATABASE_TLS_POLICY'
       : 'DATABASE_MIGRATION_TLS_POLICY';
   const tlsPolicy = resolveDatabaseTlsPolicy({
     configuredPolicy:
       env.DATABASE_MIGRATION_TLS_POLICY ?? env.DATABASE_TLS_POLICY,
-    policyName: tlsPolicyName,
+    policySourceName: tlsPolicySourceName,
     url: databaseUrl,
   });
   assertDatabaseUrlTls({
@@ -150,13 +168,10 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
     driver,
     env,
     policy: tlsPolicy,
-    policyName: tlsPolicyName,
+    policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+    policySourceName: tlsPolicySourceName,
   });
-  if (isLikelyTransactionPooledDatabaseUrl(databaseUrl)) {
-    throw new ConfigurationError(
-      `${databaseUrlName} must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.`
-    );
-  }
+  assertMigrationUrlSupportsMigrations(databaseUrl, databaseUrlName);
 
   cachedMigrationDatabaseConfig = {
     databaseUrl,

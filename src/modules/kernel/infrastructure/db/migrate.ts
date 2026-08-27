@@ -102,7 +102,6 @@ export async function createMigrationDbClient(
     driver: config.driver,
     name: 'migration database client URL',
     policy: config.tlsPolicy,
-    policyName: 'DATABASE_MIGRATION_TLS_POLICY',
     url: config.databaseUrl,
   });
   const db =

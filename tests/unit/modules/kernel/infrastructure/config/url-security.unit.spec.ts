@@ -120,6 +120,34 @@ describe('assertDatabaseUrlTls', () => {
     ).toThrow(ConfigurationError);
   });
 
+  it('attributes off to its source and keeps the override scoped', () => {
+    expect(() =>
+      assertDatabaseUrlTls({
+        name: 'DATABASE_MIGRATION_URL',
+        url: remote(),
+        driver: 'node-pg',
+        env: PROD,
+        policy: 'off',
+        policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+        policySourceName: 'DATABASE_TLS_POLICY',
+      })
+    ).toThrow('DATABASE_TLS_POLICY=off');
+  });
+
+  it('recommends the migration policy for migration URL parameters', () => {
+    expect(() =>
+      assertDatabaseUrlTls({
+        name: 'DATABASE_MIGRATION_URL',
+        url: remote('sslmode=require'),
+        driver: 'node-pg',
+        env: PROD,
+        policy: 'verify',
+        policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+        policySourceName: 'DATABASE_TLS_POLICY',
+      })
+    ).toThrow('use DATABASE_MIGRATION_TLS_POLICY');
+  });
+
   describe('Neon owns its production transport', () => {
     it.each(['neon-http', 'neon-websocket'])(
       'requires verify policy for %s in production',
@@ -144,6 +172,20 @@ describe('assertDatabaseUrlTls', () => {
         ).toThrow(ConfigurationError);
       }
     );
+
+    it('recommends the migration policy for an inherited Neon policy', () => {
+      expect(() =>
+        assertDatabaseUrlTls({
+          name: 'DATABASE_MIGRATION_URL',
+          url: remote(),
+          driver: 'neon-websocket',
+          env: PROD,
+          policy: 'encrypt',
+          policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+          policySourceName: 'DATABASE_TLS_POLICY',
+        })
+      ).toThrow('requires DATABASE_MIGRATION_TLS_POLICY=verify');
+    });
   });
 
   it('rejects cleartext http:// / ws:// schemes for node-pg too', () => {
