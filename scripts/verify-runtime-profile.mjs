@@ -236,6 +236,10 @@ const directDeclaredNames = (functionNode) => {
   const names = new Set();
   const nestedRanges = nestedFunctionRanges(functionNode);
   new Visitor({
+    CatchClause(node) {
+      if (isInsideNestedFunction(node, nestedRanges)) return;
+      for (const name of bindingNames(node.param)) names.add(name);
+    },
     ClassDeclaration(node) {
       if (isInsideContainingFunction(node, nestedRanges)) return;
       if (node.id) names.add(node.id.name);
