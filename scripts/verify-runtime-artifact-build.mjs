@@ -13,6 +13,7 @@ import {
   formatRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
   waitForSuccessfulChild,
+  writeRuntimeVerificationStderr,
 } from './runtime-verification-child.mjs';
 import { verifyRuntimeProfile } from './verify-runtime-profile.mjs';
 
@@ -89,13 +90,30 @@ export const createArtifactChildRegistry = (
       shutdownRequested = true;
       terminationPromise ??= (async () => {
         const active = [...children];
-        const outcomes = await Promise.all(
+        const results = await Promise.allSettled(
           active.map((child) => terminate(child, signal))
         );
-        const survivors = active.filter((_child, index) => !outcomes[index]);
-        if (survivors.length > 0) {
-          throw new Error(
-            `${String(survivors.length)} artifact verification child process(es) survived SIGKILL`
+        const terminationErrors = results.flatMap((result) =>
+          result.status === 'rejected' ? [result.reason] : []
+        );
+        const survivors = active.filter(
+          (_child, index) =>
+            results[index].status === 'fulfilled' && !results[index].value
+        );
+        const failures = [
+          ...terminationErrors,
+          ...(survivors.length > 0
+            ? [
+                new Error(
+                  `${String(survivors.length)} artifact verification child process(es) survived SIGKILL`
+                ),
+              ]
+            : []),
+        ];
+        if (failures.length > 0) {
+          throw new AggregateError(
+            failures,
+            'artifact verification child cleanup was incomplete'
           );
         }
       })();
@@ -161,6 +179,26 @@ export const createArtifactShutdownCoordinator = (registry) => {
 };
 
 const artifactShutdown = createArtifactShutdownCoordinator(artifactChildren);
+
+export const completeArtifactSignalShutdown = async ({
+  exit = process.exit,
+  shutdown,
+  signal,
+  write = writeRuntimeVerificationStderr,
+}) => {
+  let failure;
+  try {
+    await shutdown.request(signal);
+  } catch (error) {
+    failure = error;
+    try {
+      await write(formatRuntimeVerificationError(error));
+    } catch {
+      // A broken diagnostic sink must not prevent the authoritative signal exit.
+    }
+  }
+  exit(shutdown.exitCodeFor(failure));
+};
 
 export const createCloudflareArtifactProvenanceKey = () =>
   randomBytes(32).toString('base64url');
@@ -294,17 +332,20 @@ const isEntryPoint =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isEntryPoint) {
+  let signalShutdownStarted = false;
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, () => {
-      const shutdown = artifactShutdown.request(signal);
-      process.exitCode = artifactShutdown.exitCodeFor();
-      void shutdown.catch((error) => {
-        console.error(formatRuntimeVerificationError(error));
+      if (signalShutdownStarted) return;
+      signalShutdownStarted = true;
+      void completeArtifactSignalShutdown({
+        shutdown: artifactShutdown,
+        signal,
       });
     });
   }
-  verifyRuntimeArtifactBuild(process.argv[2]).catch((error) => {
-    console.error(formatRuntimeVerificationError(error));
+  verifyRuntimeArtifactBuild(process.argv[2]).catch(async (error) => {
+    if (signalShutdownStarted) return;
+    await writeRuntimeVerificationStderr(formatRuntimeVerificationError(error));
     process.exitCode = artifactShutdown.exitCodeFor(error);
   });
 }

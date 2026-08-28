@@ -30,7 +30,7 @@ const runtimeVerificationErrorMessages = (error, seen) => {
   const message = error instanceof Error ? error.message : String(error);
   const nested =
     error instanceof AggregateError
-      ? error.errors
+      ? [...error.errors, ...(error.cause === undefined ? [] : [error.cause])]
       : error instanceof Error && error.cause !== undefined
         ? [error.cause]
         : [];
@@ -41,11 +41,31 @@ const runtimeVerificationErrorMessages = (error, seen) => {
 };
 
 export const formatRuntimeVerificationError = (error) =>
-  [
-    ...new Set(
-      runtimeVerificationErrorMessages(error, new Set()).filter(Boolean)
-    ),
-  ].join('\n');
+  runtimeVerificationErrorMessages(error, new Set()).filter(Boolean).join('\n');
+
+export const writeRuntimeVerificationStderr = (
+  message,
+  { stream = process.stderr, timeoutMs = 1_000 } = {}
+) =>
+  new Promise((resolve) => {
+    let settled = false;
+    const finish = (written) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      stream.off('error', onError);
+      // oxlint-disable-next-line promise/no-multiple-resolved -- The settled guard arbitrates callback, error, and timeout completion.
+      resolve(written);
+    };
+    const onError = () => finish(false);
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    stream.once('error', onError);
+    try {
+      stream.write(`${message}\n`, (error) => finish(error === undefined));
+    } catch {
+      finish(false);
+    }
+  });
 
 export const exitedVerificationChildError = (child, message) => {
   if (child.exitCode === null && child.signalCode === null) return undefined;

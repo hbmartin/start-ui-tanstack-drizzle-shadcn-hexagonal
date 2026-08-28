@@ -21,6 +21,7 @@ import {
   formatRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
   waitForSuccessfulChild,
+  writeRuntimeVerificationStderr,
 } from './runtime-verification-child.mjs';
 import { verifyRuntimeProfile } from './verify-runtime-profile.mjs';
 
@@ -1084,16 +1085,11 @@ const renderDiagnostic = async ({ child, name, readOutput }) => {
   return output ? `${name} output:\n${output}` : '';
 };
 
-const writeStderr = (message) =>
-  new Promise((resolve) => {
-    process.stderr.write(`${message}\n`, resolve);
-  });
-
 const printDiagnostics = async (diagnostics) => {
   const logs = (await Promise.all(diagnostics.map(renderDiagnostic)))
     .filter(Boolean)
     .join('\n');
-  if (logs) await writeStderr(logs);
+  if (logs) await writeRuntimeVerificationStderr(logs);
 };
 
 export const cleanupNodeVerificationOnSignal = async ({
@@ -1222,6 +1218,8 @@ const isEntryPoint =
 
 if (isEntryPoint) {
   let signalShutdownStarted = false;
+  let signalVerificationError;
+  let verificationCompletion;
   const handleSignal = async (signal) => {
     if (signalShutdownStarted) return;
     signalShutdownStarted = true;
@@ -1234,7 +1232,19 @@ if (isEntryPoint) {
       });
     } catch (error) {
       try {
-        await writeStderr(formatRuntimeVerificationError(error));
+        await writeRuntimeVerificationStderr(
+          formatRuntimeVerificationError(error)
+        );
+      } catch {
+        // The original signal remains authoritative if stderr itself failed.
+      }
+    }
+    await Promise.race([verificationCompletion, delay(1_000)]);
+    if (signalVerificationError) {
+      try {
+        await writeRuntimeVerificationStderr(
+          formatRuntimeVerificationError(signalVerificationError)
+        );
       } catch {
         // The original signal remains authoritative if stderr itself failed.
       }
@@ -1243,8 +1253,12 @@ if (isEntryPoint) {
   };
   process.once('SIGINT', () => void handleSignal('SIGINT'));
   process.once('SIGTERM', () => void handleSignal('SIGTERM'));
-  verifyNodeRuntime().catch((error) => {
-    console.error(formatRuntimeVerificationError(error));
+  verificationCompletion = verifyNodeRuntime().catch(async (error) => {
+    if (signalShutdownStarted) {
+      signalVerificationError = error;
+      return;
+    }
+    await writeRuntimeVerificationStderr(formatRuntimeVerificationError(error));
     process.exitCode = runtimeVerificationFailureExitCode(error);
   });
 }

@@ -1,12 +1,13 @@
 import { EventEmitter } from 'node:events';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   exitedVerificationChildError,
   formatRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
   waitForSuccessfulChild,
+  writeRuntimeVerificationStderr,
 } from '../../../scripts/runtime-verification-child.mjs';
 
 describe('runtime verification child process', () => {
@@ -85,6 +86,52 @@ describe('runtime verification child process', () => {
         'cleanup failed',
       ].join('\n')
     );
+  });
+
+  it('retains distinct failures that share the same message', () => {
+    const combined = new AggregateError(
+      [new Error('kill failed'), new Error('kill failed')],
+      'both attempts failed'
+    );
+
+    expect(formatRuntimeVerificationError(combined)).toBe(
+      ['both attempts failed', 'kill failed', 'kill failed'].join('\n')
+    );
+  });
+
+  it('renders an AggregateError cause and terminates cause cycles', () => {
+    const first = new Error('first');
+    const second = new Error('second', { cause: first });
+    first.cause = second;
+    const combined = new AggregateError([first], 'aggregate', {
+      cause: new Error('aggregate cause'),
+    });
+
+    expect(formatRuntimeVerificationError(combined)).toBe(
+      ['aggregate', 'first', 'second', 'aggregate cause'].join('\n')
+    );
+  });
+
+  it('bounds stderr drains and reports write failures as incomplete', async () => {
+    const stalled = Object.assign(new EventEmitter(), {
+      write: vi.fn(),
+    });
+    const failed = Object.assign(new EventEmitter(), {
+      write: vi.fn((_message, callback) => callback(new Error('EPIPE'))),
+    });
+
+    await expect(
+      writeRuntimeVerificationStderr('diagnostic', {
+        stream: stalled,
+        timeoutMs: 1,
+      })
+    ).resolves.toBe(false);
+    await expect(
+      writeRuntimeVerificationStderr('diagnostic', {
+        stream: failed,
+        timeoutMs: 10,
+      })
+    ).resolves.toBe(false);
   });
 
   it('does not report a still-running long-lived child as failed', () => {

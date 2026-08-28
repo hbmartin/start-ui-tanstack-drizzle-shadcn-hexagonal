@@ -10,6 +10,7 @@ import {
   runtimeArtifactOutputDirectory,
 } from '../../../scripts/runtime-artifact-output.mjs';
 import {
+  completeArtifactSignalShutdown,
   createArtifactBuildEnvironment,
   createArtifactChildRegistry,
   createArtifactShutdownCoordinator,
@@ -173,7 +174,7 @@ describe('runtime artifact build verification', () => {
     registry.track(child);
 
     await expect(registry.terminateAll('SIGTERM')).rejects.toThrow(
-      'survived SIGKILL'
+      'child cleanup was incomplete'
     );
 
     expect(() => registry.assertCanSpawn()).toThrow(
@@ -193,7 +194,7 @@ describe('runtime artifact build verification', () => {
     registry.track(child);
 
     await expect(registry.terminateAll('SIGTERM')).rejects.toThrow(
-      'survived SIGKILL'
+      'child cleanup was incomplete'
     );
 
     child.kill.mockImplementation((signal) => {
@@ -265,6 +266,86 @@ describe('runtime artifact build verification', () => {
       permanent: true,
     });
     expect(shutdown.exitCodeFor(initialError)).toBe(143);
+  });
+
+  it('aggregates both failures after exactly one signal cleanup retry', async () => {
+    const initialError = new Error('first cleanup failed');
+    const retryError = new Error('retry cleanup failed');
+    const terminateAll = vi
+      .fn()
+      .mockRejectedValueOnce(initialError)
+      .mockRejectedValueOnce(retryError);
+    const shutdown = createArtifactShutdownCoordinator({ terminateAll });
+
+    const failure = await shutdown.request('SIGINT').catch((error) => error);
+
+    expect(terminateAll).toHaveBeenCalledTimes(2);
+    expect(failure).toMatchObject({
+      errors: [initialError, retryError],
+      message: 'artifact signal cleanup failed after a bounded retry',
+    });
+    expect(shutdown.exitCodeFor(failure)).toBe(130);
+  });
+
+  it('drains signal cleanup errors before forcing the authoritative exit', async () => {
+    const events = [];
+    const failure = new AggregateError(
+      [new Error('child survived')],
+      'cleanup failed'
+    );
+    const shutdown = {
+      exitCodeFor: vi.fn(() => 143),
+      request: vi.fn().mockRejectedValue(failure),
+    };
+
+    await completeArtifactSignalShutdown({
+      exit: (code) => events.push(`exit:${String(code)}`),
+      shutdown,
+      signal: 'SIGTERM',
+      write: async (message) => {
+        events.push(`write:${message}`);
+      },
+    });
+
+    expect(events).toEqual([
+      'write:cleanup failed\nchild survived',
+      'exit:143',
+    ]);
+    expect(shutdown.request).toHaveBeenCalledWith('SIGTERM');
+    expect(shutdown.exitCodeFor).toHaveBeenCalledWith(failure);
+  });
+
+  it('settles every child termination when one child signal throws', async () => {
+    const registry = createArtifactChildRegistry(10);
+    const signalError = new Error('kill threw');
+    const throwing = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(() => {
+        throw signalError;
+      }),
+      signalCode: null,
+    });
+    const sibling = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn((signal) => {
+        queueMicrotask(() => {
+          sibling.signalCode = signal;
+          sibling.emit('exit', null, signal);
+        });
+      }),
+      signalCode: null,
+    });
+    registry.track(throwing);
+    registry.track(sibling);
+
+    const failure = await registry
+      .terminateAll('SIGTERM')
+      .catch((error) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure.errors).toContain(signalError);
+    expect(sibling.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(registry.size).toBe(1);
   });
 
   it('deduplicates concurrent registry termination and permits reuse after ordinary cleanup', async () => {
