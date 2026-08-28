@@ -325,12 +325,6 @@ export const formatCurrentDate = (format = DEFAULT_DATE_FORMAT) => {
   );
 };
 
-export const formatCurrentLocalIsoDateTime = () =>
-  Temporal.Now.zonedDateTimeISO(getCurrentTimeZoneId()).toString({
-    smallestUnit: 'second',
-    timeZoneName: 'never',
-  });
-
 export const formatRelativeDate = (
   date: Date,
   options: {
