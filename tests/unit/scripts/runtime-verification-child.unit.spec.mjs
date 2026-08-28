@@ -220,6 +220,24 @@ describe('runtime verification child process', () => {
     expect(remaining()).toBe(0);
   });
 
+  it('uses a monotonic default clock independent of wall-clock jumps', () => {
+    const wallClock = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const remaining = createRuntimeVerificationDeadline(10_000);
+    wallClock.mockReturnValue(Number.MAX_SAFE_INTEGER);
+
+    expect(remaining()).toBeGreaterThan(0);
+    wallClock.mockRestore();
+  });
+
+  it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a non-finite deadline: %s',
+    (timeoutMs) => {
+      expect(() => createRuntimeVerificationDeadline(timeoutMs)).toThrow(
+        'runtime verification deadline must be finite'
+      );
+    }
+  );
+
   it('normalizes falsy failures and identifies only signal collateral', () => {
     expect(
       normalizeRuntimeVerificationError(undefined, 'cleanup failed')
@@ -261,6 +279,31 @@ describe('runtime verification child process', () => {
         'SIGTERM'
       )
     ).toBe(false);
+    const collateral = () =>
+      Object.assign(new Error('child stopped'), { signal: 'SIGTERM' });
+    expect(
+      runtimeVerificationErrorIsSignalCollateral(
+        new AggregateError([collateral(), collateral()], 'combined'),
+        'SIGTERM'
+      )
+    ).toBe(true);
+    expect(
+      runtimeVerificationErrorIsSignalCollateral(
+        new Error('wrapper', { cause: collateral() }),
+        'SIGTERM'
+      )
+    ).toBe(true);
+    expect(
+      runtimeVerificationErrorIsSignalCollateral(
+        new Error('wrapper', { cause: new Error('cleanup failed') }),
+        'SIGTERM'
+      )
+    ).toBe(false);
+    const cyclic = collateral();
+    cyclic.cause = cyclic;
+    expect(runtimeVerificationErrorIsSignalCollateral(cyclic, 'SIGTERM')).toBe(
+      false
+    );
   });
 
   it('does not report a still-running long-lived child as failed', () => {

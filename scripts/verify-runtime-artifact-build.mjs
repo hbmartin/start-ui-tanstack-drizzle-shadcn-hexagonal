@@ -188,17 +188,20 @@ const artifactShutdown = createArtifactShutdownCoordinator(artifactChildren);
 export const completeArtifactSignalShutdown = async ({
   exit = process.exit,
   finalizationTimeoutMs = artifactSignalFinalizationTimeoutMs,
+  now,
   readVerificationError = () => undefined,
+  settleWithin = settleRuntimeVerificationWithin,
   shutdown,
   signal,
   verificationCompletion = Promise.resolve(),
   write = writeRuntimeVerificationStderr,
 }) => {
   const remainingFinalizationTime = createRuntimeVerificationDeadline(
-    finalizationTimeoutMs
+    finalizationTimeoutMs,
+    now
   );
   const settle = (completion) =>
-    settleRuntimeVerificationWithin(completion, remainingFinalizationTime());
+    settleWithin(completion, remainingFinalizationTime());
   const writeDiagnostic = async (error) => {
     if (runtimeVerificationErrorIsSignalCollateral(error, signal)) return;
     await settle(

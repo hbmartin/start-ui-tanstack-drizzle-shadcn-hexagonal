@@ -94,6 +94,9 @@ export const createRuntimeVerificationDeadline = (
   timeoutMs,
   now = () => performance.now()
 ) => {
+  if (!Number.isFinite(timeoutMs)) {
+    throw new TypeError('runtime verification deadline must be finite');
+  }
   let lastObservedTime = now();
   const deadline = lastObservedTime + Math.max(0, timeoutMs);
   return () => {

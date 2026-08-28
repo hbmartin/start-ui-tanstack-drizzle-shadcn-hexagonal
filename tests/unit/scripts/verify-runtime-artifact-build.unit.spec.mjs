@@ -429,6 +429,33 @@ describe('runtime artifact build verification', () => {
     expect(exit).toHaveBeenCalledWith(130);
   });
 
+  it('shares one shrinking deadline across signal finalization stages', async () => {
+    const readings = [0, 4, 9];
+    const observedTimeouts = [];
+    const settleWithin = async (completion, timeoutMs) => {
+      observedTimeouts.push(timeoutMs);
+      try {
+        return { status: 'fulfilled', value: await completion };
+      } catch (reason) {
+        return { reason, status: 'rejected' };
+      }
+    };
+
+    await completeArtifactSignalShutdown({
+      exit: vi.fn(),
+      finalizationTimeoutMs: 10,
+      now: () => readings.shift(),
+      settleWithin,
+      shutdown: {
+        exitCodeFor: vi.fn(() => 143),
+        request: vi.fn().mockResolvedValue(undefined),
+      },
+      signal: 'SIGTERM',
+    });
+
+    expect(observedTimeouts).toEqual([6, 1]);
+  });
+
   it('suppresses child failures caused by the requested signal', async () => {
     const exit = vi.fn();
     const write = vi.fn();
