@@ -16,6 +16,10 @@ import {
   readGeneratedCapabilityPreset,
 } from './runtime-verification-environment.mjs';
 import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
+import {
+  runtimeVerificationFailureExitCode,
+  waitForSuccessfulChild,
+} from './runtime-verification-child.mjs';
 import { verifyRuntimeProfile } from './verify-runtime-profile.mjs';
 
 export { createVerificationEnvironment, parseGeneratedCapabilityPreset };
@@ -204,28 +208,14 @@ const captureOutput = (child) => {
   return () => output;
 };
 
-const runCommand = (command, args, options = {}) =>
-  new Promise((resolve, reject) => {
-    const child = spawnManaged(command, args, {
-      cwd: root,
-      env: options.env,
-      stdio: options.stdio ?? 'inherit',
-    });
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          `${command} ${args.join(' ')} exited with ${
-            code === null ? `signal ${signal}` : `code ${code}`
-          }`
-        )
-      );
-    });
+const runCommand = (command, args, options = {}) => {
+  const child = spawnManaged(command, args, {
+    cwd: root,
+    env: options.env,
+    stdio: options.stdio ?? 'inherit',
   });
+  return waitForSuccessfulChild(child, command, args);
+};
 
 const hasChildExited = (child) =>
   child.exitCode !== null || child.signalCode !== null;
@@ -1159,6 +1149,6 @@ if (isEntryPoint) {
   process.once('SIGTERM', () => void handleSignal('SIGTERM'));
   verifyNodeRuntime().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
+    process.exitCode = runtimeVerificationFailureExitCode(error);
   });
 }

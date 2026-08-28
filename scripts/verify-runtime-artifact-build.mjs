@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -8,10 +9,39 @@ import {
   readGeneratedCapabilityPreset,
 } from './runtime-verification-environment.mjs';
 import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
+import {
+  runtimeVerificationFailureExitCode,
+  waitForSuccessfulChild,
+} from './runtime-verification-child.mjs';
 import { verifyRuntimeProfile } from './verify-runtime-profile.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const profiles = new Set(['node', 'vercel', 'cloudflare']);
+const cloudflareProvenanceKeyEnvironment = 'START_UI_CLOUDFLARE_PROVENANCE_KEY';
+const cloudflareProvenanceArtifact =
+  'dist/server/start-ui-app-chunk-provenance.json';
+
+export const createCloudflareArtifactProvenanceKey = () =>
+  randomBytes(32).toString('base64url');
+
+export const createArtifactBuildEnvironment = (
+  profile,
+  environment,
+  cloudflareProvenanceKey
+) =>
+  profile === 'cloudflare'
+    ? {
+        ...environment,
+        [cloudflareProvenanceKeyEnvironment]: cloudflareProvenanceKey,
+      }
+    : environment;
+
+export const removeVerifiedCloudflareProvenance = (profile, projectRoot) => {
+  if (profile !== 'cloudflare') return;
+  fs.rmSync(path.join(projectRoot, cloudflareProvenanceArtifact), {
+    force: true,
+  });
+};
 
 const fail = (message) => {
   throw new Error(`Runtime artifact build verification failed: ${message}`);
@@ -35,24 +65,10 @@ export const createArtifactVerificationEnvironment = (profile) => ({
   ).name,
 });
 
-const runCommand = (command, args, env) =>
-  new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: root, env, stdio: 'inherit' });
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          `${command} ${args.join(' ')} exited with ${
-            code === null ? `signal ${signal}` : `code ${code}`
-          }`
-        )
-      );
-    });
-  });
+const runCommand = (command, args, env) => {
+  const child = spawn(command, args, { cwd: root, env, stdio: 'inherit' });
+  return waitForSuccessfulChild(child, command, args);
+};
 
 const validateAndGenerate = (env) =>
   Promise.all([
@@ -88,11 +104,29 @@ export const verifyRuntimeArtifactBuild = async (profile) => {
   }
   removeRuntimeArtifactOutput(selectedProfile, root);
   await validateAndGenerate(env);
-  await runCommand(path.join(root, 'node_modules/.bin/vite'), ['build'], env);
+  const cloudflareProvenanceKey =
+    selectedProfile === 'cloudflare'
+      ? createCloudflareArtifactProvenanceKey()
+      : undefined;
+  const buildEnvironment = createArtifactBuildEnvironment(
+    selectedProfile,
+    env,
+    cloudflareProvenanceKey
+  );
+  await runCommand(
+    path.join(root, 'node_modules/.bin/vite'),
+    ['build'],
+    buildEnvironment
+  );
   verifyRuntimeProfile(selectedProfile, root, {
+    cloudflareAppChunkProvenanceKey: cloudflareProvenanceKey,
     expectedAppSlug: env.APP_SLUG,
+    forbiddenArtifactSecrets: cloudflareProvenanceKey
+      ? [cloudflareProvenanceKey]
+      : [],
     forbiddenBuildTokens: [env.VITE_BASE_URL],
   });
+  removeVerifiedCloudflareProvenance(selectedProfile, root);
   console.log(`Verified ${selectedProfile} runtime artifact build contract.`);
 };
 
@@ -102,6 +136,6 @@ const isEntryPoint =
 if (isEntryPoint) {
   verifyRuntimeArtifactBuild(process.argv[2]).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
+    process.exitCode = runtimeVerificationFailureExitCode(error);
   });
 }

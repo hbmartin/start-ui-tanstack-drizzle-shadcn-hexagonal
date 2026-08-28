@@ -1,15 +1,5 @@
 {
   "finding_counts": {
-    "drizzle/seed/book.ts": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "drizzle/seed/user.ts": {
-      "crap_high": {
-        "count": 1
-      }
-    },
     "scripts/affected-tests.ts": {
       "complexity_moderate": {
         "count": 1
@@ -54,11 +44,6 @@
     "src/composition/email.ts": {
       "crap_moderate": {
         "count": 1
-      }
-    },
-    "src/composition/telemetry/otel-adapter.ts": {
-      "crap_moderate": {
-        "count": 2
       }
     },
     "src/composition/telemetry/transport.ts": {
@@ -137,24 +122,6 @@
         "count": 1
       }
     },
-    "src/modules/kernel/infrastructure/config/telemetry.ts": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/kernel/infrastructure/logger/telemetry.ts": {
-      "complexity_critical": {
-        "count": 1
-      },
-      "crap_critical": {
-        "count": 1
-      }
-    },
-    "src/modules/profile/presentation/user-card.tsx": {
-      "crap_high": {
-        "count": 1
-      }
-    },
     "src/platform/components/ui/calendar.tsx": {
       "complexity_moderate": {
         "count": 1
@@ -209,6 +176,11 @@
         "count": 3
       }
     },
+    "tests/unit/scripts/verify-runtime-profile.unit.spec.mjs": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
     "vite.config.ts": {
       "crap_high": {
         "count": 2
@@ -216,16 +188,6 @@
     }
   },
   "identity_finding_counts": {
-    "drizzle/seed/book.ts\u0000createBooks": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "drizzle/seed/user.ts\u0000createUsers": {
-      "crap_high": {
-        "count": 1
-      }
-    },
     "scripts/affected-tests.ts\u0000findAffectedTests": {
       "complexity_moderate": {
         "count": 1
@@ -275,16 +237,6 @@
       }
     },
     "src/composition/email.ts\u0000buildEmailServices": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/composition/telemetry/otel-adapter.ts\u0000captureAttributes": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/composition/telemetry/otel-adapter.ts\u0000emitLog": {
       "crap_moderate": {
         "count": 1
       }
@@ -393,24 +345,6 @@
         "count": 1
       }
     },
-    "src/modules/kernel/infrastructure/config/telemetry.ts\u0000getTelemetryConfig": {
-      "complexity_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/kernel/infrastructure/logger/telemetry.ts\u0000write": {
-      "complexity_critical": {
-        "count": 1
-      },
-      "crap_critical": {
-        "count": 1
-      }
-    },
-    "src/modules/profile/presentation/user-card.tsx\u0000UserCard": {
-      "crap_high": {
-        "count": 1
-      }
-    },
     "src/platform/components/ui/calendar.tsx\u0000Calendar": {
       "complexity_moderate": {
         "count": 1
@@ -477,6 +411,11 @@
         "count": 1
       }
     },
+    "tests/unit/scripts/verify-runtime-profile.unit.spec.mjs\u0000fixtureCloudflareChunk": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
     "vite.config.ts\u0000<arrow>": {
       "crap_high": {
         "count": 1
@@ -490,7 +429,9 @@
   },
   "runtime_coverage_findings": [],
   "target_keys": [
-    "src/modules/kernel/infrastructure/logger/telemetry.ts:complexity",
-    "src/platform/hooks/use-clipboard.ts:high impact"
+    "src/platform/http/get-client-ip.ts:high impact",
+    "src/platform/hooks/use-clipboard.ts:high impact",
+    "src/composition/telemetry/provider-cleanup.ts:high impact",
+    "src/platform/env/runtime.ts:high impact"
   ]
 }

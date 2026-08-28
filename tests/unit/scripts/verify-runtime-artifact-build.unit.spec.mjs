@@ -9,8 +9,11 @@ import {
   runtimeArtifactOutputDirectory,
 } from '../../../scripts/runtime-artifact-output.mjs';
 import {
+  createArtifactBuildEnvironment,
   createArtifactVerificationEnvironment,
+  createCloudflareArtifactProvenanceKey,
   parseArtifactProfile,
+  removeVerifiedCloudflareProvenance,
 } from '../../../scripts/verify-runtime-artifact-build.mjs';
 
 const temporaryDirectories = [];
@@ -65,6 +68,39 @@ describe('runtime artifact build verification', () => {
     expect(environment.DATABASE_MIGRATION_URL).toBeUndefined();
     expect(environment.DATABASE_MIGRATION_DRIVER).toBeUndefined();
     expect(environment.DATABASE_MIGRATION_TLS_POLICY).toBeUndefined();
+  });
+
+  it('scopes an ephemeral provenance key to the Cloudflare Vite build', () => {
+    const key = createCloudflareArtifactProvenanceKey();
+    const base = { NODE_ENV: 'production' };
+    const cloudflare = createArtifactBuildEnvironment('cloudflare', base, key);
+
+    expect(Buffer.from(key, 'base64url')).toHaveLength(32);
+    expect(cloudflare).toEqual({
+      ...base,
+      START_UI_CLOUDFLARE_PROVENANCE_KEY: key,
+    });
+    expect(createArtifactBuildEnvironment('node', base, undefined)).toBe(base);
+    expect(base).not.toHaveProperty('START_UI_CLOUDFLARE_PROVENANCE_KEY');
+  });
+
+  it('removes only the authenticated Cloudflare provenance after verification', () => {
+    const repository = createTemporaryRepository();
+    const provenance = path.join(
+      repository,
+      'dist/server/start-ui-app-chunk-provenance.json'
+    );
+    const serverEntry = path.join(repository, 'dist/server/index.js');
+    fs.mkdirSync(path.dirname(provenance), { recursive: true });
+    fs.writeFileSync(provenance, '{"signature":"ephemeral"}');
+    fs.writeFileSync(serverEntry, 'export default {};');
+
+    removeVerifiedCloudflareProvenance('cloudflare', repository);
+
+    expect(fs.existsSync(provenance)).toBe(false);
+    expect(fs.existsSync(serverEntry)).toBe(true);
+    removeVerifiedCloudflareProvenance('node', repository);
+    expect(fs.existsSync(serverEntry)).toBe(true);
   });
 
   it('rejects implicit and unknown profiles', () => {

@@ -11,6 +11,8 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 
 import {
   cloudflareVitePluginOptions,
+  cloudflareAppChunkProvenanceKeyEnvironment,
+  createCloudflareAppChunkProvenancePlugin,
   createCanonicalOriginVitePlugin,
   resolveViteRuntimeProfile,
   RUNTIME_PROFILE_ENV_KEY,
@@ -196,6 +198,14 @@ export default defineConfig(({ command, mode }) => {
       viteReact(),
       babel({ presets: [reactCompilerPreset()] }),
       ...sentryPlugins,
+      ...(runtimeProfile === 'cloudflare'
+        ? [
+            createCloudflareAppChunkProvenancePlugin(
+              root,
+              process.env[cloudflareAppChunkProvenanceKeyEnvironment]
+            ),
+          ]
+        : []),
     ],
   };
 });

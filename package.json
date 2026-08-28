@@ -63,7 +63,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "quality:dead-code": "fallow dead-code --quiet --baseline fallow-baselines/dead-code.json",
     "quality:dupes": "fallow dupes --quiet --baseline fallow-baselines/dupes.json",
-    "quality:health": "fallow health --quiet --summary --baseline fallow-baselines/health.json --baseline-mode identity",
+    "quality:health": "vitest run --project=unit tests/unit/scripts/verify-runtime-profile.unit.spec.mjs tests/unit/scripts/runtime-verification-child.unit.spec.mjs --coverage.enabled --coverage.provider=v8 --coverage.include='scripts/{runtime-verification-child,verify-runtime-profile}.mjs' --coverage.reporter=json --coverage.reportsDirectory=test-results/fallow-verifier-coverage && fallow health --quiet --summary --coverage test-results/fallow-verifier-coverage/coverage-final.json --baseline fallow-baselines/health.json --baseline-mode identity",
     "quality:fallow": "run-s -n quality:dead-code quality:dupes quality:health",
     "quality:audit": "fallow audit",
     "check:test-layering": "node scripts/check-test-layering.mjs",

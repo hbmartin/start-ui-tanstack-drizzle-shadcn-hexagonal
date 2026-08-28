@@ -4,6 +4,9 @@ export type RuntimeEnv = Record<string, unknown>;
 
 const isTruthy = (value: unknown) => value === true || value === 'true';
 
+const normalizeNodeEnvironment = (value: string) =>
+  String.prototype.toLowerCase.call(String.prototype.trim.call(value));
+
 /**
  * Read runtime configuration with deploy-time values taking precedence over
  * Vite's build-time snapshot. This keeps build-once/deploy-many artifacts from
@@ -23,7 +26,7 @@ export const isProdRuntimeEnvironment = (source?: RuntimeEnv) => {
   const env = readRuntimeEnv(source);
   const nodeEnv =
     typeof env.NODE_ENV === 'string'
-      ? env.NODE_ENV.trim().toLowerCase()
+      ? normalizeNodeEnvironment(env.NODE_ENV)
       : undefined;
 
   if (nodeEnv === 'development' || nodeEnv === 'test') return false;
@@ -35,7 +38,7 @@ export const isDevRuntimeEnvironment = (source?: RuntimeEnv) => {
   const env = readRuntimeEnv(source);
   const nodeEnv =
     typeof env.NODE_ENV === 'string'
-      ? env.NODE_ENV.trim().toLowerCase()
+      ? normalizeNodeEnvironment(env.NODE_ENV)
       : undefined;
 
   if (nodeEnv) return nodeEnv === 'development';
