@@ -181,6 +181,22 @@ describe('terminateChild', () => {
     expect(child.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
     expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
   });
+
+  it('accepts close as proof that a child terminated', async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(() => {
+        queueMicrotask(() => child.emit('close', null, 'SIGTERM'));
+      }),
+      signalCode: null,
+    });
+
+    await expect(
+      terminateChild(child, { gracefulTimeoutMs: 10, killTimeoutMs: 10 })
+    ).resolves.toBe(true);
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+  });
 });
 
 describe('createShutdownGuard', () => {

@@ -132,7 +132,7 @@ describe('runtime artifact build verification', () => {
     registry.track(child);
     registry.track(sibling);
 
-    await registry.terminateAll('SIGTERM');
+    await registry.terminateAll('SIGTERM', { permanent: true });
 
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     expect(sibling.kill).toHaveBeenCalledWith('SIGTERM');
@@ -207,9 +207,32 @@ describe('runtime artifact build verification', () => {
     expect(second).toBe(first);
     await first;
     expect(terminateAll).toHaveBeenCalledTimes(1);
-    expect(terminateAll).toHaveBeenCalledWith('SIGINT');
+    expect(terminateAll).toHaveBeenCalledWith('SIGINT', { permanent: true });
     expect(shutdown.signal).toBe('SIGINT');
     expect(shutdown.exitCodeFor(new Error('later failure'))).toBe(130);
+  });
+
+  it('deduplicates concurrent registry termination and permits reuse after ordinary cleanup', async () => {
+    const registry = createArtifactChildRegistry(10);
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(() => {
+        queueMicrotask(() => {
+          child.signalCode = 'SIGTERM';
+          child.emit('exit', null, 'SIGTERM');
+        });
+      }),
+      signalCode: null,
+    });
+    registry.track(child);
+
+    await Promise.all([
+      registry.terminateAll('SIGTERM'),
+      registry.terminateAll('SIGTERM'),
+    ]);
+
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(() => registry.assertCanSpawn()).not.toThrow();
   });
 
   it.each([

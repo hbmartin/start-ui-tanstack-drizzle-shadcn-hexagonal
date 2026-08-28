@@ -229,12 +229,14 @@ const waitForChildExit = (child, timeoutMs) => {
       settled = true;
       clearTimeout(timeout);
       child.off('exit', onExit);
+      child.off('close', onExit);
       // oxlint-disable-next-line promise/no-multiple-resolved -- The settled guard arbitrates the exit/timeout race.
       resolve(exited);
     };
     const onExit = () => finish(true);
     const timeout = setTimeout(() => finish(false), timeoutMs);
     child.once('exit', onExit);
+    child.once('close', onExit);
     if (hasChildExited(child)) finish(true);
   });
 };
@@ -1133,7 +1135,18 @@ export const verifyNodeRuntime = async () => {
     assertChildRunning(pglite, 'PGlite');
   } catch (error) {
     verificationError = error;
-    await printDiagnostics(diagnostics);
+    try {
+      await printDiagnostics(diagnostics);
+    } catch (diagnosticError) {
+      const combined = new AggregateError(
+        [verificationError, diagnosticError],
+        'Node runtime verification failed and diagnostics were incomplete'
+      );
+      combined.exitCode = verificationError?.exitCode;
+      combined.signal = verificationError?.signal;
+      combined.status = verificationError?.status;
+      verificationError = combined;
+    }
   }
   let cleanupError;
   try {
@@ -1170,8 +1183,12 @@ if (isEntryPoint) {
       if (activeCleanup) {
         await activeCleanup();
       } else {
-        await Promise.all(
+        const outcomes = await Promise.all(
           [...activeChildren].map((child) => terminateChild(child))
+        );
+        assert(
+          outcomes.every(Boolean),
+          'a Node runtime verification child survived SIGKILL'
         );
       }
       await printDiagnostics(activeDiagnostics);

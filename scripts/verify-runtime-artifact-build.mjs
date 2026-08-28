@@ -50,6 +50,7 @@ export const createArtifactChildRegistry = (
   shutdownTimeoutMs = artifactChildShutdownTimeoutMs
 ) => {
   const children = new Set();
+  let permanentShutdownRequested = false;
   let shutdownRequested = false;
   let terminationPromise;
   const track = (child) => {
@@ -82,7 +83,8 @@ export const createArtifactChildRegistry = (
     get size() {
       return children.size;
     },
-    async terminateAll(signal = 'SIGTERM') {
+    async terminateAll(signal = 'SIGTERM', { permanent = false } = {}) {
+      if (permanent) permanentShutdownRequested = true;
       shutdownRequested = true;
       terminationPromise ??= (async () => {
         const active = [...children];
@@ -96,7 +98,16 @@ export const createArtifactChildRegistry = (
           );
         }
       })();
-      return terminationPromise;
+      let completed = false;
+      try {
+        await terminationPromise;
+        completed = true;
+      } finally {
+        if (completed && !permanentShutdownRequested) {
+          shutdownRequested = false;
+          terminationPromise = undefined;
+        }
+      }
     },
     track,
   };
@@ -119,7 +130,7 @@ export const createArtifactShutdownCoordinator = (registry) => {
     request(signal) {
       if (!requestedSignal) {
         requestedSignal = signal;
-        shutdownPromise = registry.terminateAll(signal);
+        shutdownPromise = registry.terminateAll(signal, { permanent: true });
       }
       return shutdownPromise;
     },

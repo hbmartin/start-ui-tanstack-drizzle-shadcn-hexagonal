@@ -68,4 +68,13 @@ describe('runtime verification child process', () => {
   it('preserves the status exposed by a synchronous child-process failure', () => {
     expect(runtimeVerificationFailureExitCode({ status: 7 })).toBe(7);
   });
+
+  it('does not report a still-running long-lived child as failed', () => {
+    expect(
+      exitedVerificationChildError(
+        { exitCode: null, signalCode: null },
+        'application stopped'
+      )
+    ).toBeUndefined();
+  });
 });
