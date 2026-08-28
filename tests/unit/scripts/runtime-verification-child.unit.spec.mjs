@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
 
 import {
+  exitedVerificationChildError,
   runtimeVerificationFailureExitCode,
   waitForSuccessfulChild,
 } from '../../../scripts/runtime-verification-child.mjs';
@@ -44,5 +45,27 @@ describe('runtime verification child process', () => {
     const error = await completion.catch((failure) => failure);
     expect(error).toEqual(new Error('spawn failed'));
     expect(runtimeVerificationFailureExitCode(error)).toBe(1);
+  });
+
+  it.each([
+    [7, null, 7, 'exit 7'],
+    [0, null, 1, 'exit 0'],
+    [null, 'SIGTERM', 143, 'signal SIGTERM'],
+  ])(
+    'preserves an already-exited long-lived child outcome',
+    (exitCode, signalCode, expectedExitCode, expectedMessage) => {
+      const error = exitedVerificationChildError(
+        { exitCode, signalCode },
+        'PGlite exited before listening'
+      );
+
+      expect(error).toMatchObject({ exitCode, signal: signalCode });
+      expect(error.message).toContain(expectedMessage);
+      expect(runtimeVerificationFailureExitCode(error)).toBe(expectedExitCode);
+    }
+  );
+
+  it('preserves the status exposed by a synchronous child-process failure', () => {
+    expect(runtimeVerificationFailureExitCode({ status: 7 })).toBe(7);
   });
 });

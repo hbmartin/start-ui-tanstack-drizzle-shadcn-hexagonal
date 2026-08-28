@@ -17,6 +17,7 @@ import {
 } from './runtime-verification-environment.mjs';
 import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
 import {
+  exitedVerificationChildError,
   runtimeVerificationFailureExitCode,
   waitForSuccessfulChild,
 } from './runtime-verification-child.mjs';
@@ -162,22 +163,19 @@ const canConnect = (port) =>
 
 const childStartupFailure = (child, name) => {
   if (child.verificationSpawnError) {
-    return `${name} could not start: ${child.verificationSpawnError.message}`;
+    return new Error(
+      `${name} could not start: ${child.verificationSpawnError.message}`,
+      { cause: child.verificationSpawnError }
+    );
   }
-  if (child.exitCode !== null) {
-    return `${name} exited before listening (exit ${child.exitCode})`;
-  }
-  if (child.signalCode !== null) {
-    return `${name} exited before listening (signal ${child.signalCode})`;
-  }
-  return undefined;
+  return exitedVerificationChildError(child, `${name} exited before listening`);
 };
 
 const waitForPort = async (port, child, name) => {
   const deadline = Date.now() + startupTimeoutMs;
   while (Date.now() < deadline) {
     const startupFailure = childStartupFailure(child, name);
-    if (startupFailure) fail(startupFailure);
+    if (startupFailure) throw startupFailure;
     if (await canConnect(port)) return;
     await delay(100);
   }
@@ -192,9 +190,9 @@ const spawnManaged = (command, args, options) => {
   activeChildren.add(child);
   child.once('error', (error) => {
     child.verificationSpawnError = error;
-    activeChildren.delete(child);
   });
   child.once('exit', () => activeChildren.delete(child));
+  child.once('close', () => activeChildren.delete(child));
   return child;
 };
 
@@ -389,7 +387,7 @@ const createRuntimeResources = () => {
   let cleanupPromise;
   const cleanup = () => {
     cleanupPromise ??= (async () => {
-      await Promise.all(
+      const outcomes = await Promise.allSettled(
         [...activeChildren].map((child) => terminateChild(child))
       );
       await Promise.all([
@@ -397,6 +395,21 @@ const createRuntimeResources = () => {
         closeServer(applicationReservation),
         closeServer(databaseReservation),
       ]);
+      const failures = outcomes
+        .filter((outcome) => outcome.status === 'rejected')
+        .map((outcome) => outcome.reason);
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          'Node runtime verification child cleanup failed'
+        );
+      }
+      assert(
+        outcomes.every(
+          (outcome) => outcome.status === 'fulfilled' && outcome.value
+        ),
+        'a Node runtime verification child survived SIGKILL'
+      );
     })();
     return cleanupPromise;
   };
@@ -496,10 +509,11 @@ const assertChildRunning = (child, name) => {
   if (child.verificationSpawnError) {
     fail(`${name} failed to start: ${child.verificationSpawnError.message}`);
   }
-  assert(
-    !hasChildExited(child),
+  const exitError = exitedVerificationChildError(
+    child,
     `${name} exited before the runtime contract completed`
   );
+  if (exitError) throw exitError;
 };
 
 const startPglite = async ({
@@ -1077,6 +1091,7 @@ const printDiagnostics = async (diagnostics) => {
 export const verifyNodeRuntime = async () => {
   const resources = createRuntimeResources();
   const diagnostics = [];
+  let verificationError;
   activeCleanup = resources.cleanup;
   activeDiagnostics = diagnostics;
 
@@ -1110,17 +1125,36 @@ export const verifyNodeRuntime = async () => {
     await verifyStrictCspBrowserHydration(appPort);
     assertChildRunning(application, 'Node application');
     assertChildRunning(pglite, 'PGlite');
-    await terminateChild(application);
+    assert(
+      await terminateChild(application),
+      'the Node application survived SIGKILL after verification'
+    );
     await verifyBuiltNodeFatalLifecycle(env);
     assertChildRunning(pglite, 'PGlite');
   } catch (error) {
+    verificationError = error;
     await printDiagnostics(diagnostics);
-    throw error;
-  } finally {
-    await resources.cleanup();
-    if (activeCleanup === resources.cleanup) activeCleanup = undefined;
-    if (activeDiagnostics === diagnostics) activeDiagnostics = [];
   }
+  let cleanupError;
+  try {
+    await resources.cleanup();
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (activeCleanup === resources.cleanup) activeCleanup = undefined;
+  if (activeDiagnostics === diagnostics) activeDiagnostics = [];
+  if (verificationError && cleanupError) {
+    const combined = new AggregateError(
+      [verificationError, cleanupError],
+      'Node runtime verification failed and child cleanup was incomplete'
+    );
+    combined.exitCode = verificationError?.exitCode;
+    combined.signal = verificationError?.signal;
+    combined.status = verificationError?.status;
+    throw combined;
+  }
+  if (cleanupError) throw cleanupError;
+  if (verificationError) throw verificationError;
 };
 
 const isEntryPoint =
@@ -1141,9 +1175,10 @@ if (isEntryPoint) {
         );
       }
       await printDiagnostics(activeDiagnostics);
-    } finally {
-      process.exit(signal === 'SIGINT' ? 130 : 143);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
     }
+    process.exit(signal === 'SIGINT' ? 130 : 143);
   };
   process.once('SIGINT', () => void handleSignal('SIGINT'));
   process.once('SIGTERM', () => void handleSignal('SIGTERM'));

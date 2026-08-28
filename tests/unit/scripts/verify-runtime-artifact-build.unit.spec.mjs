@@ -1,8 +1,9 @@
 import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   removeRuntimeArtifactOutput,
@@ -10,6 +11,8 @@ import {
 } from '../../../scripts/runtime-artifact-output.mjs';
 import {
   createArtifactBuildEnvironment,
+  createArtifactChildRegistry,
+  createArtifactShutdownCoordinator,
   createArtifactVerificationEnvironment,
   createCloudflareArtifactProvenanceKey,
   parseArtifactProfile,
@@ -106,6 +109,107 @@ describe('runtime artifact build verification', () => {
   it('rejects implicit and unknown profiles', () => {
     expect(() => parseArtifactProfile(undefined)).toThrow('unknown profile');
     expect(() => parseArtifactProfile('auto')).toThrow('unknown profile auto');
+  });
+
+  it('terminates every active artifact child and rejects later spawns', async () => {
+    const registry = createArtifactChildRegistry(10);
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn((signal) => {
+        child.signalCode = signal;
+        child.emit('exit', null, signal);
+      }),
+      signalCode: null,
+    });
+    const sibling = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn((signal) => {
+        sibling.signalCode = signal;
+        sibling.emit('exit', null, signal);
+      }),
+      signalCode: null,
+    });
+    registry.track(child);
+    registry.track(sibling);
+
+    await registry.terminateAll('SIGTERM');
+
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(sibling.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(registry.size).toBe(0);
+    expect(() => registry.assertCanSpawn()).toThrow(
+      'shutdown began before child spawn'
+    );
+  });
+
+  it('escalates an unresponsive artifact child to SIGKILL', async () => {
+    const registry = createArtifactChildRegistry(5);
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    });
+    child.kill
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce((signal) => {
+        child.signalCode = signal;
+        child.emit('exit', null, signal);
+      });
+    registry.track(child);
+
+    await registry.terminateAll('SIGTERM');
+
+    expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(registry.size).toBe(0);
+  });
+
+  it('fails cleanup when an artifact child survives SIGKILL', async () => {
+    const registry = createArtifactChildRegistry(1);
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    });
+    registry.track(child);
+
+    await expect(registry.terminateAll('SIGTERM')).rejects.toThrow(
+      'survived SIGKILL'
+    );
+
+    expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+    expect(registry.size).toBe(1);
+  });
+
+  it('keeps a child registered after an error until it closes', () => {
+    const registry = createArtifactChildRegistry(1);
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    });
+    registry.track(child);
+    child.on('error', () => undefined);
+
+    child.emit('error', new Error('kill failed'));
+    expect(registry.size).toBe(1);
+
+    child.emit('close', null, null);
+    expect(registry.size).toBe(0);
+  });
+
+  it('makes the first shutdown signal authoritative and idempotent', async () => {
+    const terminateAll = vi.fn().mockResolvedValue(undefined);
+    const shutdown = createArtifactShutdownCoordinator({ terminateAll });
+
+    const first = shutdown.request('SIGINT');
+    const second = shutdown.request('SIGTERM');
+
+    expect(second).toBe(first);
+    await first;
+    expect(terminateAll).toHaveBeenCalledTimes(1);
+    expect(terminateAll).toHaveBeenCalledWith('SIGINT');
+    expect(shutdown.signal).toBe('SIGINT');
+    expect(shutdown.exitCodeFor(new Error('later failure'))).toBe(130);
   });
 
   it.each([
