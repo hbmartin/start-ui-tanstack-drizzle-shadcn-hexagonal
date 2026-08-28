@@ -180,6 +180,17 @@ const fixtureCloudflareModuleIds = (explicitModules, source, file) => {
   return [fixtureCloudflareManifestModuleId(source, file)];
 };
 
+const sortedFixtureCloudflareEdges = (source, field) =>
+  [...(source?.[field] ?? [])].sort(compareCodePointStrings);
+
+const fixtureCloudflareChunkRecord = (source, modules, chunkFile) => ({
+  dynamicImports: sortedFixtureCloudflareEdges(source, 'dynamicImports'),
+  imports: sortedFixtureCloudflareEdges(source, 'imports'),
+  modules,
+  ownership: fixtureCloudflareOwnership(modules),
+  sha256: createHash('sha256').update(fs.readFileSync(chunkFile)).digest('hex'),
+});
+
 const fixtureCloudflareChunk = (
   artifactRoot,
   explicitModules,
@@ -194,20 +205,7 @@ const fixtureCloudflareChunk = (
       owner: id.startsWith('src/') ? 'app' : 'non-app',
     }))
     .sort((left, right) => compareCodePointStrings(left.id, right.id));
-  return [
-    file,
-    {
-      dynamicImports: [...(source?.dynamicImports ?? [])].sort(
-        compareCodePointStrings
-      ),
-      imports: [...(source?.imports ?? [])].sort(compareCodePointStrings),
-      modules,
-      ownership: fixtureCloudflareOwnership(modules),
-      sha256: createHash('sha256')
-        .update(fs.readFileSync(chunkFile))
-        .digest('hex'),
-    },
-  ];
+  return [file, fixtureCloudflareChunkRecord(source, modules, chunkFile)];
 };
 
 const writeFixtureCloudflareProvenance = (
@@ -434,7 +432,22 @@ const createVercelArtifact = (root) => {
   write(
     root,
     '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
-    'createApplicationServerEntry("vercel", vercelRequestLifecycle, runWithVercelSentryRequestIsolation);"@vercel/functions";"@vercel/otel"'
+    'var {initVercelTelemetry,runWithVercelSentryRequestIsolation}=await import("../_libs/telemetry-owner.mjs");initVercelTelemetry();var {vercelRequestLifecycle}=await import("./request-lifecycle-fixture.mjs");var {createApplicationServerEntry}=await import("./create-application-server-entry-fixture.mjs");await createApplicationServerEntry("vercel",vercelRequestLifecycle,runWithVercelSentryRequestIsolation);'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_libs/telemetry-owner.mjs',
+    'export const initVercelTelemetry=()=>{};export const runWithVercelSentryRequestIsolation=(run)=>run();"@vercel/otel"'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs',
+    'export const vercelRequestLifecycle={onRequestSettled(){}};"@vercel/functions"'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+    'export const createApplicationServerEntry=()=>({fetch(){}})'
   );
   fs.mkdirSync(path.join(root, '.vercel/output/static'));
 };
@@ -1138,6 +1151,15 @@ describe('runtime artifact verifier', () => {
     ).toEqual(expected);
   });
 
+  it('keeps delegated imports outside the local function dependency closure', () => {
+    expect(
+      inspectCloudflareInvokedParameterProjectionsForTesting(
+        'import{__toESM}from"./runtime.js";import{require_react}from"./react.js";const import_react=__toESM(require_react(),1);const wrapper=value=>import_react.forwardRef(value);',
+        'wrapper'
+      )
+    ).toEqual([{ name: 'value', path: [] }]);
+  });
+
   it.each([
     [
       'rest array',
@@ -1570,6 +1592,18 @@ describe('runtime artifact verifier', () => {
       'Reflect.apply',
       'const target={};Reflect.apply(Object.assign,null,[target,{run:()=>fetch("https://invalid.example")}]);target.run();',
     ],
+    [
+      'nested Function.prototype.call',
+      'const target={};Object.assign.call.call(Object.assign,null,target,{run:()=>fetch("https://invalid.example")});target.run();',
+    ],
+    [
+      'bound Function.prototype.apply arguments',
+      'const target={};const args=[target,{run:()=>fetch("https://invalid.example")}];Object.assign.apply(null,args);target.run();',
+    ],
+    [
+      'nested Reflect.apply',
+      'const target={};Reflect.apply(Reflect.apply,null,[Object.assign,null,[target,{run:()=>fetch("https://invalid.example")}]]);target.run();',
+    ],
   ])('models Object.assign %s semantics', (_label, source) => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
       'fetch("https://invalid.example")',
@@ -1639,6 +1673,14 @@ describe('runtime artifact verifier', () => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
       'fetch("https://invalid.example")'
     );
+  });
+
+  it('rejects opaque intrinsic mutation apply arguments', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={};Object.defineProperty.apply(null,getArguments());target.run();'
+      )
+    ).toThrow('statically analyzable Function.prototype.apply arguments');
   });
 
   it('keeps a same-parameter defineProperty mutation precise', () => {
@@ -1847,6 +1889,33 @@ describe('runtime artifact verifier', () => {
     );
   });
 
+  it.each(['Map', 'Set'])(
+    'allows an opaque ambient %s spread when no element reaches a callable position',
+    (collection) => {
+      expect(
+        inspectCloudflareLoadEffectsForTesting(
+          `const values=new ${collection}();const copied=[...values];copied.filter(Boolean);`
+        )
+      ).toEqual([]);
+    }
+  );
+
+  it('rejects an opaque ambient collection element that reaches a callable position', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const values=new Map();const copied=[...values];copied[0][0]();'
+      )
+    ).toThrow('statically analyzable aggregate spreads');
+  });
+
+  it('rejects an opaque custom iterable spread', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'class Values{*[Symbol.iterator](){yield 1}}const values=new Values();const copied=[...values];'
+      )
+    ).toThrow('statically analyzable aggregate spreads');
+  });
+
   it.each([
     [
       'Object.defineProperty',
@@ -2008,6 +2077,36 @@ describe('runtime artifact verifier', () => {
       ['createFileRoute', 'route'],
     ],
     [
+      'called parameter alias mutation',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");function install(value){value.handler=()=>1}install(route);route({loader:()=>1});',
+      false,
+      ['createFileRoute', 'route'],
+    ],
+    [
+      'nested lexical alias mutation',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");{const alias=route;alias.handler=()=>1}route({loader:()=>1});',
+      false,
+      ['createFileRoute', 'route'],
+    ],
+    [
+      'bound intrinsic mutation arguments',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");const args=[route,{handler:()=>1}];Object.assign.apply(null,args);route({loader:()=>1});',
+      false,
+      ['args', 'createFileRoute', 'route'],
+    ],
+    [
+      'nested Function.prototype.call intrinsic mutation',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");Object.assign.call.call(Object.assign,null,route,{handler:()=>1});route({loader:()=>1});',
+      false,
+      ['createFileRoute', 'route'],
+    ],
+    [
+      'nested Reflect.apply intrinsic mutation',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");Reflect.apply(Reflect.apply,null,[Object.defineProperty,null,[route,"handler",{value:()=>1}]]);route({loader:()=>1});',
+      false,
+      ['createFileRoute', 'route'],
+    ],
+    [
       'unrelated closure capture mutation',
       'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");const describe=()=>route;Object.assign(describe,{metadata:true});route({loader:()=>1});',
       true,
@@ -2104,6 +2203,36 @@ describe('runtime artifact verifier', () => {
     ).toBe('cloudflare');
   });
 
+  it('explains how to verify a Cloudflare artifact without provenance', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+
+    expect(() =>
+      verifyRuntimeProfileImplementation('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      'Cloudflare artifact verification requires a canonical 32-byte base64url build-time provenance key; run pnpm verify:artifact:cloudflare to build, sign, and verify atomically; advanced callers verifying the same signed build may pass cloudflareAppChunkProvenanceKey or START_UI_CLOUDFLARE_PROVENANCE_KEY'
+    );
+  });
+
+  it.each(['not base64url!', 'c2hvcnQ'])(
+    'rejects a malformed Cloudflare provenance key before reading an artifact: %s',
+    (cloudflareAppChunkProvenanceKey) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+
+      expect(() =>
+        verifyRuntimeProfileImplementation('cloudflare', root, {
+          cloudflareAppChunkProvenanceKey,
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(
+        'Cloudflare artifact verification requires a canonical 32-byte base64url build-time provenance key'
+      );
+    }
+  );
+
   it('drains a long cyclic Cloudflare load-effect graph without recursive stack growth', () => {
     const root = fixture();
     createCloudflareArtifact(root);
@@ -2117,7 +2246,6 @@ describe('runtime artifact verifier', () => {
   }, 30_000);
 
   it.each([
-    ['missing key', (envelope) => envelope, ''],
     [
       'altered signature',
       (envelope) => ({ ...envelope, signature: 'A'.repeat(43) }),
@@ -2880,7 +3008,7 @@ describe('runtime artifact verifier', () => {
     ).toThrow('exceeded bounded parameter projection depth');
   });
 
-  it('bounds recursive factory resolution', () => {
+  it('detects a load effect through a recursive factory cycle', () => {
     const root = fixture();
     createCloudflareArtifact(root);
     const clientFile = 'dist/server/assets/client-fixture.js';
@@ -2896,7 +3024,15 @@ describe('runtime artifact verifier', () => {
       verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'acme-app',
       })
-    ).toThrow('exceeded bounded factory resolution');
+    ).toThrow('must not execute fetch');
+  });
+
+  it('terminates a recursive factory cycle without a load effect', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const callNext=value=>value.done?value:callNext(value);callNext({done:true});'
+      )
+    ).toEqual([]);
   });
 
   it('bounds branching recursive parameter projections by count', () => {
@@ -5922,16 +6058,18 @@ describe('runtime artifact verifier', () => {
       createNodeArtifact,
       '.output/node/server/_ssr/ssr.mjs',
       'runWithNodeSentryRequestIsolation',
+      'node server entry owner runWithNodeSentryRequestIsolation',
     ],
     [
       'vercel',
       createVercelArtifact,
       '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
       'runWithVercelSentryRequestIsolation',
+      'must import Vercel owners initVercelTelemetry, runWithVercelSentryRequestIsolation together exactly once',
     ],
   ])(
     'rejects a %s artifact with detached Sentry request isolation',
-    (profile, createArtifact, entry, owner) => {
+    (profile, createArtifact, entry, owner, expected) => {
       const root = fixture();
       createArtifact(root);
       const entryPath = path.join(root, entry);
@@ -5942,11 +6080,44 @@ describe('runtime artifact verifier', () => {
           .readFileSync(entryPath, 'utf8')
           .replace(owner, 'undefined')};const detachedOwner = "${owner}"`
       );
-      expect(() => verifyRuntimeProfile(profile, root)).toThrow(
-        `${profile} server entry owner ${owner}`
-      );
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(expected);
     }
   );
+
+  it.each([
+    [
+      'missing lifecycle owner',
+      (source) =>
+        source.replace(
+          '"vercel",vercelRequestLifecycle,runWithVercelSentryRequestIsolation',
+          '"vercel",undefined,runWithVercelSentryRequestIsolation'
+        ),
+      'must bind active Vercel lifecycle and request-isolation owners',
+    ],
+    [
+      'missing telemetry initialization',
+      (source) => source.replace('initVercelTelemetry();', ''),
+      'must initialize Vercel telemetry exactly once',
+    ],
+    [
+      'same-name local isolation no-op',
+      (source) =>
+        source.replace(
+          'runWithVercelSentryRequestIsolation}=await import',
+          'runWithVercelSentryRequestIsolation:trustedIsolation}=await import'
+        ) +
+        'const runWithVercelSentryRequestIsolation=(run)=>run();void trustedIsolation;',
+      'must import Vercel owners initVercelTelemetry, runWithVercelSentryRequestIsolation together exactly once',
+    ],
+  ])('rejects Vercel %s', (_label, mutate, error) => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const entry = '.vercel/output/functions/__server.func/_ssr/ssr.mjs';
+    const entryPath = path.join(root, entry);
+    write(root, entry, mutate(fs.readFileSync(entryPath, 'utf8')));
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(error);
+  });
 
   it('rejects a Node artifact without its async-context owner', () => {
     const root = fixture();
@@ -9342,6 +9513,38 @@ describe('runtime artifact verifier', () => {
     ).not.toThrow();
   });
 
+  it('keeps a callback dormant through a destructured cross-chunk factory owner', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{withForm}from"./router-effect-AAAAAAAA.js";withForm({render:()=>fetch("https://invalid.example"),props:{}});',
+      'const useField=()=>{const field=getUnknown();return{...field}};function createFactory({components}){function withForm({render,props}){return function Render(inner){return render({...props,...inner})}}return{withForm,components}}const{withForm}=createFactory({components:{useField}});export{withForm};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects a callback invoked by a destructured cross-chunk factory owner', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{consume}from"./router-effect-AAAAAAAA.js";consume({render:()=>fetch("https://invalid.example")});',
+      'const useField=()=>{const field=getUnknown();return{...field}};function createFactory({components}){function consume({render}){return render()}return{consume,components}}const{consume}=createFactory({components:{useField}});export{consume};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not execute fetch');
+  });
+
   it.each([
     [
       'a direct imported consumer',
@@ -11545,12 +11748,78 @@ describe('runtime artifact verifier', () => {
   });
 
   it.each([
+    'const target={run:()=>0};const api={mutate(){target.run=()=>fetch("https://invalid.example")}};if(flag)api.mutate=()=>{};api.mutate();target.run();',
+    'const target={run:()=>0};const api={mutate(){target.run=()=>fetch("https://invalid.example")}};if(false)api.mutate=()=>{};api.mutate();target.run();',
+    'const target={run:()=>0};const api={mutate(){target.run=()=>fetch("https://invalid.example")}};flag&&(api.mutate=()=>{});api.mutate();target.run();',
+  ])('does not let a conditional write erase a callable owner', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
     'const key="run";const api={[key](){fetch("https://invalid.example")}};api.run();',
     'const key="run";class API{[key](){fetch("https://invalid.example")}};new API().run();',
   ])('resolves an immutable computed callable definition', (source) => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
       'fetch("https://invalid.example")'
     );
+  });
+
+  it.each([
+    'const target={run:()=>0};const api={mutate(){target.run=()=>fetch("https://invalid.example")}};const key="mutate";api[key]();target.run();',
+    'const target={run:()=>0};function mutate(){target.run=()=>fetch("https://invalid.example")}const key="apply";Reflect[key](mutate,null,[]);target.run();',
+  ])('resolves an immutable computed callable invocation', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('rejects an opaque computed callable invocation', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const api={mutate(){fetch("https://invalid.example")}};api[getKey()]();'
+      )
+    ).toContain('fetch("https://invalid.example")');
+  });
+
+  it('rejects an opaque computed Reflect invocation', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>0};function mutate(){target.run=()=>fetch("https://invalid.example")}Reflect[getKey()](mutate,null,[]);target.run();'
+      )
+    ).toThrow('requires statically analyzable computed callable invocations');
+  });
+
+  it.each([
+    'const target={run:()=>0};function mutate(){target.run=()=>fetch("https://invalid.example")}Reflect.apply.bind(null,mutate,null,[])();target.run();',
+    'const target={run:()=>0};function mutate(){target.run=()=>fetch("https://invalid.example")}const invoke=Reflect.apply.bind(null,mutate,null,[]);invoke();target.run();',
+  ])('orders a mutation invoked through a bound Reflect helper', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('classifies a callable parameter invoked through bound Reflect.apply', () => {
+    expect(
+      inspectCloudflareInvokedParameterProjectionsForTesting(
+        'const transform=effect=>Reflect.apply.bind(null,effect,null,[])()',
+        'transform'
+      )
+    ).toEqual([{ name: 'effect', path: [] }]);
+  });
+
+  it('bounds local class hierarchy traversal', () => {
+    const classes = [
+      'class C0{run(){}}',
+      ...Array.from(
+        { length: 64 },
+        (_unused, index) => `class C${index + 1} extends C${index}{}`
+      ),
+    ].join(';');
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(`${classes};new C64().run()`)
+    ).toThrow('exceeded bounded factory resolution');
   });
 
   it.each([
