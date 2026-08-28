@@ -8,6 +8,7 @@ import {
   createVerificationEnvironment,
   parseServerFunctionId,
   parseGeneratedCapabilityPreset,
+  printNodeVerificationDiagnostics,
   terminateChild,
   verifyNodeHtmlResponse,
 } from '../../../scripts/verify-node-runtime.mjs';
@@ -243,24 +244,57 @@ describe('cleanupNodeVerificationOnSignal', () => {
     const first = new EventEmitter();
     const second = new EventEmitter();
     const failure = new Error('kill failed');
+    let finishSecondTermination;
+    const secondTermination = new Promise((resolve) => {
+      finishSecondTermination = () => resolve(true);
+    });
     const terminate = vi
       .fn()
       .mockRejectedValueOnce(failure)
-      .mockResolvedValueOnce(true);
+      .mockReturnValueOnce(secondTermination);
 
-    await expect(
-      cleanupNodeVerificationOnSignal({
-        children: [first, second],
-        cleanup: undefined,
-        diagnostics: [],
-        print: vi.fn(),
-        terminate,
-      })
-    ).rejects.toBe(failure);
+    const cleanup = cleanupNodeVerificationOnSignal({
+      children: [first, second],
+      cleanup: undefined,
+      diagnostics: [],
+      print: vi.fn(),
+      terminate,
+    });
+    const events = [];
+    void cleanup.then(
+      () => events.push('resolved'),
+      () => events.push('rejected')
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(events).toEqual([]);
+    finishSecondTermination();
+    await expect(cleanup).rejects.toBe(failure);
 
     expect(terminate).toHaveBeenCalledTimes(2);
     expect(terminate).toHaveBeenCalledWith(first);
     expect(terminate).toHaveBeenCalledWith(second);
+  });
+
+  it('aggregates multiple fallback child termination failures', async () => {
+    const firstFailure = new Error('first kill failed');
+    const secondFailure = new Error('second kill failed');
+
+    await expect(
+      cleanupNodeVerificationOnSignal({
+        children: [new EventEmitter(), new EventEmitter()],
+        cleanup: undefined,
+        diagnostics: [],
+        print: vi.fn(),
+        terminate: vi
+          .fn()
+          .mockRejectedValueOnce(firstFailure)
+          .mockRejectedValueOnce(secondFailure),
+      })
+    ).rejects.toMatchObject({
+      errors: [firstFailure, secondFailure],
+      message: 'Node runtime verification child cleanup was incomplete',
+    });
   });
 
   it('fails signal cleanup when diagnostic output does not drain', async () => {
@@ -272,6 +306,23 @@ describe('cleanupNodeVerificationOnSignal', () => {
         print: async () => false,
       })
     ).rejects.toThrow('diagnostics were incomplete');
+  });
+
+  it('propagates the real diagnostic writer completion signal', async () => {
+    const write = vi.fn().mockResolvedValue(false);
+    const diagnostic = {
+      child: { verificationClosed: Promise.resolve() },
+      name: 'application',
+      readOutput: () => 'captured output',
+    };
+
+    await expect(
+      printNodeVerificationDiagnostics([diagnostic], write)
+    ).resolves.toBe(false);
+    expect(write).toHaveBeenCalledWith('application output:\ncaptured output');
+    await expect(printNodeVerificationDiagnostics([], write)).resolves.toBe(
+      true
+    );
   });
 
   it('preserves cleanup and diagnostic failures together', async () => {

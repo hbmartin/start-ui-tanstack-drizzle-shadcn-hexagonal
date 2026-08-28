@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   exitedVerificationChildError,
   formatRuntimeVerificationError,
+  normalizeRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
+  runtimeVerificationErrorIsSignalCollateral,
+  settleRuntimeVerificationWithin,
   waitForSuccessfulChild,
   writeRuntimeVerificationStderr,
 } from '../../../scripts/runtime-verification-child.mjs';
@@ -188,6 +191,47 @@ describe('runtime verification child process', () => {
       })
     ).resolves.toBe(false);
     expect(() => completeWrite()).not.toThrow();
+  });
+
+  it('bounds fulfilled, rejected, and stalled verification work', async () => {
+    await expect(
+      settleRuntimeVerificationWithin(Promise.resolve('done'), 10)
+    ).resolves.toEqual({ status: 'fulfilled', value: 'done' });
+    await expect(
+      settleRuntimeVerificationWithin(Promise.reject(new Error('failed')), 10)
+    ).resolves.toMatchObject({
+      reason: expect.objectContaining({ message: 'failed' }),
+      status: 'rejected',
+    });
+    await expect(
+      settleRuntimeVerificationWithin(new Promise(() => undefined), 1)
+    ).resolves.toEqual({ status: 'timed-out' });
+  });
+
+  it('normalizes falsy failures and identifies only signal collateral', () => {
+    expect(
+      normalizeRuntimeVerificationError(undefined, 'cleanup failed')
+    ).toEqual(
+      expect.objectContaining({ message: 'cleanup failed: undefined' })
+    );
+    expect(
+      runtimeVerificationErrorIsSignalCollateral(
+        Object.assign(new Error('child stopped'), { signal: 'SIGTERM' }),
+        'SIGTERM'
+      )
+    ).toBe(true);
+    expect(
+      runtimeVerificationErrorIsSignalCollateral(
+        new AggregateError(
+          [
+            Object.assign(new Error('child stopped'), { signal: 'SIGTERM' }),
+            new Error('profile failed'),
+          ],
+          'mixed failure'
+        ),
+        'SIGTERM'
+      )
+    ).toBe(false);
   });
 
   it('does not report a still-running long-lived child as failed', () => {

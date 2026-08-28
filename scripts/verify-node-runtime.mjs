@@ -19,7 +19,10 @@ import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
 import {
   exitedVerificationChildError,
   formatRuntimeVerificationError,
+  normalizeRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
+  runtimeVerificationErrorIsSignalCollateral,
+  settleRuntimeVerificationWithin,
   waitForSuccessfulChild,
   writeRuntimeVerificationStderr,
 } from './runtime-verification-child.mjs';
@@ -31,6 +34,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const responseTimeoutMs = 8_000;
 const startupTimeoutMs = 15_000;
 const shutdownTimeoutMs = 5_000;
+const signalFinalizationTimeoutMs = 8_000;
 const cspNoncePlaceholder = '__START_UI_CSP_NONCE__';
 const publicErrorCorrelationIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -1085,18 +1089,21 @@ const renderDiagnostic = async ({ child, name, readOutput }) => {
   return output ? `${name} output:\n${output}` : '';
 };
 
-const printDiagnostics = async (diagnostics) => {
+export const printNodeVerificationDiagnostics = async (
+  diagnostics,
+  write = writeRuntimeVerificationStderr
+) => {
   const logs = (await Promise.all(diagnostics.map(renderDiagnostic)))
     .filter(Boolean)
     .join('\n');
-  return logs ? writeRuntimeVerificationStderr(logs) : true;
+  return logs ? write(logs) : true;
 };
 
 export const cleanupNodeVerificationOnSignal = async ({
   children,
   cleanup,
   diagnostics,
-  print = printDiagnostics,
+  print = printNodeVerificationDiagnostics,
   terminate = terminateChild,
 }) => {
   let cleanupError;
@@ -1108,7 +1115,14 @@ export const cleanupNodeVerificationOnSignal = async ({
         [...children].map((child) => terminate(child))
       );
       const errors = outcomes.flatMap((outcome) =>
-        outcome.status === 'rejected' ? [outcome.reason] : []
+        outcome.status === 'rejected'
+          ? [
+              normalizeRuntimeVerificationError(
+                outcome.reason,
+                'Node runtime verification child cleanup failed'
+              ),
+            ]
+          : []
       );
       const survivors = outcomes.filter(
         (outcome) => outcome.status === 'fulfilled' && outcome.value !== true
@@ -1200,7 +1214,13 @@ export const verifyNodeRuntime = async () => {
   } catch (error) {
     verificationError = error;
     try {
-      await printDiagnostics(diagnostics);
+      const diagnosticsComplete =
+        await printNodeVerificationDiagnostics(diagnostics);
+      if (diagnosticsComplete === false) {
+        throw new Error(
+          'Node runtime verification diagnostics were incomplete'
+        );
+      }
     } catch (diagnosticError) {
       const combined = new AggregateError(
         [verificationError, diagnosticError],
@@ -1245,38 +1265,53 @@ if (isEntryPoint) {
     if (signalShutdownStarted) return;
     signalShutdownStarted = true;
     shutdownGuard.requestShutdown();
-    try {
-      await cleanupNodeVerificationOnSignal({
+    const deadline = Date.now() + signalFinalizationTimeoutMs;
+    const settle = (completion) =>
+      settleRuntimeVerificationWithin(
+        completion,
+        Math.max(0, deadline - Date.now())
+      );
+    const writeDiagnostic = async (error) => {
+      if (runtimeVerificationErrorIsSignalCollateral(error, signal)) return;
+      await settle(
+        Promise.resolve().then(() =>
+          writeRuntimeVerificationStderr(formatRuntimeVerificationError(error))
+        )
+      );
+    };
+    const cleanupOutcome = await settle(
+      cleanupNodeVerificationOnSignal({
         children: activeChildren,
         cleanup: activeCleanup,
         diagnostics: activeDiagnostics,
-      });
-    } catch (error) {
-      try {
-        await writeRuntimeVerificationStderr(
-          formatRuntimeVerificationError(error)
-        );
-      } catch {
-        // The original signal remains authoritative if stderr itself failed.
-      }
+      })
+    );
+    if (cleanupOutcome.status === 'rejected') {
+      await writeDiagnostic(
+        normalizeRuntimeVerificationError(
+          cleanupOutcome.reason,
+          'Node runtime signal cleanup failed'
+        )
+      );
+    } else if (cleanupOutcome.status === 'timed-out') {
+      await writeDiagnostic(
+        new Error(
+          'Node runtime signal finalization reached its bounded deadline'
+        )
+      );
     }
-    await Promise.race([verificationCompletion, delay(1_000)]);
-    if (signalVerificationError) {
-      try {
-        await writeRuntimeVerificationStderr(
-          formatRuntimeVerificationError(signalVerificationError)
-        );
-      } catch {
-        // The original signal remains authoritative if stderr itself failed.
-      }
-    }
+    await settle(verificationCompletion);
+    if (signalVerificationError) await writeDiagnostic(signalVerificationError);
     process.exit(signal === 'SIGINT' ? 130 : 143);
   };
   process.once('SIGINT', () => void handleSignal('SIGINT'));
   process.once('SIGTERM', () => void handleSignal('SIGTERM'));
   verificationCompletion = verifyNodeRuntime().catch(async (error) => {
     if (signalShutdownStarted) {
-      signalVerificationError = error;
+      signalVerificationError = normalizeRuntimeVerificationError(
+        error,
+        'Node runtime verification failed'
+      );
       return;
     }
     await writeRuntimeVerificationStderr(formatRuntimeVerificationError(error));

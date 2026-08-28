@@ -67,6 +67,51 @@ export const writeRuntimeVerificationStderr = (
     }
   });
 
+export const settleRuntimeVerificationWithin = (
+  completion,
+  timeoutMs = 1_000
+) =>
+  new Promise((resolve) => {
+    let settled = false;
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      // oxlint-disable-next-line promise/no-multiple-resolved -- The settled guard arbitrates completion, rejection, and timeout.
+      resolve(outcome);
+    };
+    const timeout = setTimeout(
+      () => finish({ status: 'timed-out' }),
+      Math.max(0, timeoutMs)
+    );
+    Promise.resolve(completion)
+      .then((value) => finish({ status: 'fulfilled', value }))
+      .catch((reason) => finish({ reason, status: 'rejected' }));
+  });
+
+export const normalizeRuntimeVerificationError = (reason, message) =>
+  reason instanceof Error ? reason : new Error(`${message}: ${String(reason)}`);
+
+export const runtimeVerificationErrorIsSignalCollateral = (
+  error,
+  signal,
+  seen = new Set()
+) => {
+  if (!error || seen.has(error)) return false;
+  const nextSeen = new Set(seen).add(error);
+  if (error.signal === signal || error.signal === 'SIGKILL') return true;
+  const nested = [
+    ...(error instanceof AggregateError ? error.errors : []),
+    ...(error.cause !== undefined ? [error.cause] : []),
+  ];
+  return (
+    nested.length > 0 &&
+    nested.every((cause) =>
+      runtimeVerificationErrorIsSignalCollateral(cause, signal, nextSeen)
+    )
+  );
+};
+
 export const exitedVerificationChildError = (child, message) => {
   if (child.exitCode === null && child.signalCode === null) return undefined;
   return new RuntimeVerificationChildError(

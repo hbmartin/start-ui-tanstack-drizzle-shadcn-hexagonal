@@ -312,7 +312,7 @@ describe('runtime artifact build verification', () => {
       'exit:143',
     ]);
     expect(shutdown.request).toHaveBeenCalledWith('SIGTERM');
-    expect(shutdown.exitCodeFor).toHaveBeenCalledWith(failure);
+    expect(shutdown.exitCodeFor).toHaveBeenCalledWith();
   });
 
   it('forces the authoritative signal exit after successful cleanup', async () => {
@@ -332,7 +332,7 @@ describe('runtime artifact build verification', () => {
 
     expect(write).not.toHaveBeenCalled();
     expect(exit).toHaveBeenCalledWith(130);
-    expect(shutdown.exitCodeFor).toHaveBeenCalledWith(undefined);
+    expect(shutdown.exitCodeFor).toHaveBeenCalledWith();
   });
 
   it('forces the authoritative exit when the diagnostic sink fails', async () => {
@@ -351,23 +351,26 @@ describe('runtime artifact build verification', () => {
     });
 
     expect(exit).toHaveBeenCalledWith(143);
-    expect(shutdown.exitCodeFor).toHaveBeenCalledWith(failure);
+    expect(shutdown.exitCodeFor).toHaveBeenCalledWith();
   });
 
   it('drains a racing verification failure before the signal exit', async () => {
     const events = [];
     const verificationError = new Error('profile contract failed');
     let observedVerificationError;
-    const verificationCompletion = Promise.resolve().then(() => {
-      observedVerificationError = verificationError;
-      return undefined;
+    let finishVerification;
+    const verificationCompletion = new Promise((resolve) => {
+      finishVerification = () => {
+        observedVerificationError = verificationError;
+        resolve();
+      };
     });
     const shutdown = {
       exitCodeFor: vi.fn(() => 143),
       request: vi.fn().mockResolvedValue(undefined),
     };
 
-    await completeArtifactSignalShutdown({
+    const completion = completeArtifactSignalShutdown({
       exit: (code) => events.push(`exit:${String(code)}`),
       readVerificationError: () => observedVerificationError,
       shutdown,
@@ -378,8 +381,73 @@ describe('runtime artifact build verification', () => {
       },
     });
 
+    await Promise.resolve();
+    expect(events).toEqual([]);
+    finishVerification();
+    await completion;
+
     expect(events).toEqual(['write:profile contract failed', 'exit:143']);
-    expect(shutdown.exitCodeFor).toHaveBeenCalledWith(verificationError);
+    expect(shutdown.exitCodeFor).toHaveBeenCalledWith();
+  });
+
+  it('forces the signal exit after a rejecting verification completion', async () => {
+    const exit = vi.fn();
+    const shutdown = {
+      exitCodeFor: vi.fn(() => 143),
+      request: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await completeArtifactSignalShutdown({
+      exit,
+      shutdown,
+      signal: 'SIGTERM',
+      verificationCompletion: Promise.reject(
+        new Error('profile contract failed')
+      ),
+      write: vi.fn(),
+    });
+
+    expect(exit).toHaveBeenCalledWith(143);
+  });
+
+  it('bounds a verification completion that never settles', async () => {
+    const exit = vi.fn();
+    const shutdown = {
+      exitCodeFor: vi.fn(() => 130),
+      request: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await completeArtifactSignalShutdown({
+      exit,
+      finalizationTimeoutMs: 1,
+      shutdown,
+      signal: 'SIGINT',
+      verificationCompletion: new Promise(() => undefined),
+      write: vi.fn(),
+    });
+
+    expect(exit).toHaveBeenCalledWith(130);
+  });
+
+  it('suppresses child failures caused by the requested signal', async () => {
+    const exit = vi.fn();
+    const write = vi.fn();
+    const shutdown = {
+      exitCodeFor: vi.fn(() => 143),
+      request: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await completeArtifactSignalShutdown({
+      exit,
+      readVerificationError: () =>
+        Object.assign(new Error('vite stopped'), { signal: 'SIGTERM' }),
+      shutdown,
+      signal: 'SIGTERM',
+      write,
+    });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(143);
   });
 
   it('settles every child termination when one child signal throws', async () => {

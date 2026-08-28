@@ -11,7 +11,10 @@ import {
 import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
 import {
   formatRuntimeVerificationError,
+  normalizeRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
+  runtimeVerificationErrorIsSignalCollateral,
+  settleRuntimeVerificationWithin,
   waitForSuccessfulChild,
   writeRuntimeVerificationStderr,
 } from './runtime-verification-child.mjs';
@@ -23,6 +26,7 @@ const cloudflareProvenanceKeyEnvironment = 'START_UI_CLOUDFLARE_PROVENANCE_KEY';
 const cloudflareProvenanceArtifact =
   'dist/server/start-ui-app-chunk-provenance.json';
 const artifactChildShutdownTimeoutMs = 1_000;
+const artifactSignalFinalizationTimeoutMs = 6_000;
 
 const artifactChildExited = (child) =>
   child.exitCode !== null || child.signalCode !== null;
@@ -182,36 +186,50 @@ const artifactShutdown = createArtifactShutdownCoordinator(artifactChildren);
 
 export const completeArtifactSignalShutdown = async ({
   exit = process.exit,
+  finalizationTimeoutMs = artifactSignalFinalizationTimeoutMs,
   readVerificationError = () => undefined,
   shutdown,
   signal,
   verificationCompletion = Promise.resolve(),
   write = writeRuntimeVerificationStderr,
 }) => {
+  const deadline = Date.now() + finalizationTimeoutMs;
+  const settle = (completion) =>
+    settleRuntimeVerificationWithin(
+      completion,
+      Math.max(0, deadline - Date.now())
+    );
+  const writeDiagnostic = async (error) => {
+    if (runtimeVerificationErrorIsSignalCollateral(error, signal)) return;
+    await settle(
+      Promise.resolve().then(() => write(formatRuntimeVerificationError(error)))
+    );
+  };
   let failure;
-  try {
-    await shutdown.request(signal);
-  } catch (error) {
-    failure = error;
-    try {
-      await write(formatRuntimeVerificationError(error));
-    } catch {
-      // A broken diagnostic sink must not prevent the authoritative signal exit.
-    }
+  const shutdownOutcome = await settle(
+    Promise.resolve().then(() => shutdown.request(signal))
+  );
+  if (shutdownOutcome.status === 'rejected') {
+    failure = normalizeRuntimeVerificationError(
+      shutdownOutcome.reason,
+      'artifact signal cleanup failed'
+    );
+  } else if (shutdownOutcome.status === 'timed-out') {
+    failure = new Error(
+      'artifact signal cleanup reached its bounded finalization deadline'
+    );
   }
-  await Promise.race([
-    verificationCompletion,
-    new Promise((resolve) => setTimeout(resolve, 1_000)),
-  ]);
-  const verificationError = readVerificationError();
-  if (verificationError) {
-    try {
-      await write(formatRuntimeVerificationError(verificationError));
-    } catch {
-      // A broken diagnostic sink must not prevent the authoritative signal exit.
-    }
+  if (failure) await writeDiagnostic(failure);
+  const verificationOutcome = await settle(verificationCompletion);
+  let verificationError = readVerificationError();
+  if (!verificationError && verificationOutcome.status === 'rejected') {
+    verificationError = normalizeRuntimeVerificationError(
+      verificationOutcome.reason,
+      'artifact verification failed during signal shutdown'
+    );
   }
-  exit(shutdown.exitCodeFor(failure ?? verificationError));
+  if (verificationError) await writeDiagnostic(verificationError);
+  exit(shutdown.exitCodeFor());
 };
 
 export const createCloudflareArtifactProvenanceKey = () =>
@@ -364,7 +382,10 @@ if (isEntryPoint) {
   verificationCompletion = verifyRuntimeArtifactBuild(process.argv[2]).catch(
     async (error) => {
       if (signalShutdownStarted) {
-        signalVerificationError = error;
+        signalVerificationError = normalizeRuntimeVerificationError(
+          error,
+          'artifact verification failed'
+        );
         return;
       }
       await writeRuntimeVerificationStderr(
