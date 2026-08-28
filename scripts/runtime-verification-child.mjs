@@ -22,6 +22,31 @@ export const runtimeVerificationFailureExitCode = (error) => {
   return Number.isInteger(signalNumber) ? 128 + signalNumber : 1;
 };
 
+const runtimeVerificationErrorMessages = (error, seen) => {
+  if (error && typeof error === 'object') {
+    if (seen.has(error)) return [];
+    seen.add(error);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const nested =
+    error instanceof AggregateError
+      ? error.errors
+      : error instanceof Error && error.cause !== undefined
+        ? [error.cause]
+        : [];
+  return [
+    message,
+    ...nested.flatMap((cause) => runtimeVerificationErrorMessages(cause, seen)),
+  ];
+};
+
+export const formatRuntimeVerificationError = (error) =>
+  [
+    ...new Set(
+      runtimeVerificationErrorMessages(error, new Set()).filter(Boolean)
+    ),
+  ].join('\n');
+
 export const exitedVerificationChildError = (child, message) => {
   if (child.exitCode === null && child.signalCode === null) return undefined;
   return new RuntimeVerificationChildError(

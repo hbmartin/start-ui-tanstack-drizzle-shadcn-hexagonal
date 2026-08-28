@@ -18,6 +18,7 @@ import {
 import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
 import {
   exitedVerificationChildError,
+  formatRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
   waitForSuccessfulChild,
 } from './runtime-verification-child.mjs';
@@ -1083,11 +1084,16 @@ const renderDiagnostic = async ({ child, name, readOutput }) => {
   return output ? `${name} output:\n${output}` : '';
 };
 
+const writeStderr = (message) =>
+  new Promise((resolve) => {
+    process.stderr.write(`${message}\n`, resolve);
+  });
+
 const printDiagnostics = async (diagnostics) => {
   const logs = (await Promise.all(diagnostics.map(renderDiagnostic)))
     .filter(Boolean)
     .join('\n');
-  if (logs) console.error(logs);
+  if (logs) await writeStderr(logs);
 };
 
 export const cleanupNodeVerificationOnSignal = async ({
@@ -1227,14 +1233,18 @@ if (isEntryPoint) {
         diagnostics: activeDiagnostics,
       });
     } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
+      try {
+        await writeStderr(formatRuntimeVerificationError(error));
+      } catch {
+        // The original signal remains authoritative if stderr itself failed.
+      }
     }
     process.exit(signal === 'SIGINT' ? 130 : 143);
   };
   process.once('SIGINT', () => void handleSignal('SIGINT'));
   process.once('SIGTERM', () => void handleSignal('SIGTERM'));
   verifyNodeRuntime().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(formatRuntimeVerificationError(error));
     process.exitCode = runtimeVerificationFailureExitCode(error);
   });
 }

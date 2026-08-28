@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   exitedVerificationChildError,
+  formatRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
   waitForSuccessfulChild,
 } from '../../../scripts/runtime-verification-child.mjs';
@@ -67,6 +68,23 @@ describe('runtime verification child process', () => {
 
   it('preserves the status exposed by a synchronous child-process failure', () => {
     expect(runtimeVerificationFailureExitCode({ status: 7 })).toBe(7);
+  });
+
+  it('renders every nested verification failure without duplicate messages', () => {
+    const root = new Error('verification failed');
+    const cleanup = new Error('cleanup failed', { cause: root });
+    const combined = new AggregateError(
+      [root, cleanup],
+      'verification and cleanup failed'
+    );
+
+    expect(formatRuntimeVerificationError(combined)).toBe(
+      [
+        'verification and cleanup failed',
+        'verification failed',
+        'cleanup failed',
+      ].join('\n')
+    );
   });
 
   it('does not report a still-running long-lived child as failed', () => {

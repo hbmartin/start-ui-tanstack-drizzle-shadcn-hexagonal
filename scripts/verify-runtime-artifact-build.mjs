@@ -10,6 +10,7 @@ import {
 } from './runtime-verification-environment.mjs';
 import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
 import {
+  formatRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
   waitForSuccessfulChild,
 } from './runtime-verification-child.mjs';
@@ -139,7 +140,20 @@ export const createArtifactShutdownCoordinator = (registry) => {
     request(signal) {
       if (!requestedSignal) {
         requestedSignal = signal;
-        shutdownPromise = registry.terminateAll(signal, { permanent: true });
+        shutdownPromise = (async () => {
+          try {
+            await registry.terminateAll(signal, { permanent: true });
+          } catch (initialError) {
+            try {
+              await registry.terminateAll(signal, { permanent: true });
+            } catch (retryError) {
+              throw new AggregateError(
+                [initialError, retryError],
+                'artifact signal cleanup failed after a bounded retry'
+              );
+            }
+          }
+        })();
       }
       return shutdownPromise;
     },
@@ -285,12 +299,12 @@ if (isEntryPoint) {
       const shutdown = artifactShutdown.request(signal);
       process.exitCode = artifactShutdown.exitCodeFor();
       void shutdown.catch((error) => {
-        console.error(error instanceof Error ? error.message : String(error));
+        console.error(formatRuntimeVerificationError(error));
       });
     });
   }
   verifyRuntimeArtifactBuild(process.argv[2]).catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(formatRuntimeVerificationError(error));
     process.exitCode = artifactShutdown.exitCodeFor(error);
   });
 }

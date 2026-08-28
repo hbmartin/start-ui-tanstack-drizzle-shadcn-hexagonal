@@ -176,6 +176,9 @@ describe('runtime artifact build verification', () => {
       'survived SIGKILL'
     );
 
+    expect(() => registry.assertCanSpawn()).toThrow(
+      'shutdown began before child spawn'
+    );
     expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
     expect(registry.size).toBe(1);
   });
@@ -242,6 +245,26 @@ describe('runtime artifact build verification', () => {
     expect(terminateAll).toHaveBeenCalledWith('SIGINT', { permanent: true });
     expect(shutdown.signal).toBe('SIGINT');
     expect(shutdown.exitCodeFor(new Error('later failure'))).toBe(130);
+  });
+
+  it('retries signal cleanup once after the first attempt fails', async () => {
+    const initialError = new Error('ordinary cleanup failed');
+    const terminateAll = vi
+      .fn()
+      .mockRejectedValueOnce(initialError)
+      .mockResolvedValueOnce(undefined);
+    const shutdown = createArtifactShutdownCoordinator({ terminateAll });
+
+    await expect(shutdown.request('SIGTERM')).resolves.toBeUndefined();
+
+    expect(terminateAll).toHaveBeenCalledTimes(2);
+    expect(terminateAll).toHaveBeenNthCalledWith(1, 'SIGTERM', {
+      permanent: true,
+    });
+    expect(terminateAll).toHaveBeenNthCalledWith(2, 'SIGTERM', {
+      permanent: true,
+    });
+    expect(shutdown.exitCodeFor(initialError)).toBe(143);
   });
 
   it('deduplicates concurrent registry termination and permits reuse after ordinary cleanup', async () => {
