@@ -180,6 +180,38 @@ describe('runtime artifact build verification', () => {
     expect(registry.size).toBe(1);
   });
 
+  it('allows permanent shutdown to retry a failed ordinary cleanup', async () => {
+    const registry = createArtifactChildRegistry(1);
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    });
+    registry.track(child);
+
+    await expect(registry.terminateAll('SIGTERM')).rejects.toThrow(
+      'survived SIGKILL'
+    );
+
+    child.kill.mockImplementation((signal) => {
+      child.signalCode = signal;
+      child.emit('exit', null, signal);
+    });
+    await expect(
+      registry.terminateAll('SIGINT', { permanent: true })
+    ).resolves.toBeUndefined();
+
+    expect(child.kill.mock.calls).toEqual([
+      ['SIGTERM'],
+      ['SIGKILL'],
+      ['SIGINT'],
+    ]);
+    expect(registry.size).toBe(0);
+    expect(() => registry.assertCanSpawn()).toThrow(
+      'shutdown began before child spawn'
+    );
+  });
+
   it('keeps a child registered after an error until it closes', () => {
     const registry = createArtifactChildRegistry(1);
     const child = Object.assign(new EventEmitter(), {

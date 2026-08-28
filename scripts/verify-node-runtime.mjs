@@ -1090,6 +1090,47 @@ const printDiagnostics = async (diagnostics) => {
   if (logs) console.error(logs);
 };
 
+export const cleanupNodeVerificationOnSignal = async ({
+  children,
+  cleanup,
+  diagnostics,
+  print = printDiagnostics,
+  terminate = terminateChild,
+}) => {
+  let cleanupError;
+  try {
+    if (cleanup) {
+      await cleanup();
+    } else {
+      const outcomes = await Promise.all(
+        [...children].map((child) => terminate(child))
+      );
+      assert(
+        outcomes.every(Boolean),
+        'a Node runtime verification child survived SIGKILL'
+      );
+    }
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  let diagnosticError;
+  try {
+    await print(diagnostics);
+  } catch (error) {
+    diagnosticError = error;
+  }
+
+  if (cleanupError && diagnosticError) {
+    throw new AggregateError(
+      [cleanupError, diagnosticError],
+      'Node runtime signal cleanup failed and diagnostics were incomplete'
+    );
+  }
+  if (cleanupError) throw cleanupError;
+  if (diagnosticError) throw diagnosticError;
+};
+
 export const verifyNodeRuntime = async () => {
   const resources = createRuntimeResources();
   const diagnostics = [];
@@ -1180,18 +1221,11 @@ if (isEntryPoint) {
     signalShutdownStarted = true;
     shutdownGuard.requestShutdown();
     try {
-      if (activeCleanup) {
-        await activeCleanup();
-      } else {
-        const outcomes = await Promise.all(
-          [...activeChildren].map((child) => terminateChild(child))
-        );
-        assert(
-          outcomes.every(Boolean),
-          'a Node runtime verification child survived SIGKILL'
-        );
-      }
-      await printDiagnostics(activeDiagnostics);
+      await cleanupNodeVerificationOnSignal({
+        children: activeChildren,
+        cleanup: activeCleanup,
+        diagnostics: activeDiagnostics,
+      });
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
     }

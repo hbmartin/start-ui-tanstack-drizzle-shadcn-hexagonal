@@ -98,12 +98,21 @@ export const createArtifactChildRegistry = (
           );
         }
       })();
-      let completed = false;
+      const activeTermination = terminationPromise;
       try {
-        await terminationPromise;
-        completed = true;
+        await activeTermination;
+      } catch (error) {
+        // A permanent signal shutdown may retry an ordinary cleanup that failed
+        // while a child was still alive. Spawning remains disabled after failure.
+        if (terminationPromise === activeTermination) {
+          terminationPromise = undefined;
+        }
+        throw error;
       } finally {
-        if (completed && !permanentShutdownRequested) {
+        if (
+          terminationPromise === activeTermination &&
+          !permanentShutdownRequested
+        ) {
           shutdownRequested = false;
           terminationPromise = undefined;
         }

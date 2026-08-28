@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  cleanupNodeVerificationOnSignal,
   createShutdownGuard,
   createVerificationEnvironment,
   parseServerFunctionId,
@@ -196,6 +197,68 @@ describe('terminateChild', () => {
     ).resolves.toBe(true);
     expect(child.kill).toHaveBeenCalledOnce();
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+});
+
+describe('cleanupNodeVerificationOnSignal', () => {
+  it('prints captured diagnostics even when child cleanup fails', async () => {
+    const events = [];
+    const cleanupError = new Error('cleanup failed');
+
+    await expect(
+      cleanupNodeVerificationOnSignal({
+        children: [],
+        cleanup: async () => {
+          events.push('cleanup');
+          throw cleanupError;
+        },
+        diagnostics: ['captured output'],
+        print: async (diagnostics) => {
+          events.push(...diagnostics);
+        },
+      })
+    ).rejects.toBe(cleanupError);
+
+    expect(events).toEqual(['cleanup', 'captured output']);
+  });
+
+  it('fails signal cleanup when a fallback child survives SIGKILL', async () => {
+    const child = new EventEmitter();
+    const print = vi.fn();
+
+    await expect(
+      cleanupNodeVerificationOnSignal({
+        children: [child],
+        cleanup: undefined,
+        diagnostics: [],
+        print,
+        terminate: vi.fn().mockResolvedValue(false),
+      })
+    ).rejects.toThrow('survived SIGKILL');
+
+    expect(print).toHaveBeenCalledWith([]);
+  });
+
+  it('preserves cleanup and diagnostic failures together', async () => {
+    const cleanupError = new Error('cleanup failed');
+    const diagnosticError = new Error('diagnostics failed');
+
+    const promise = cleanupNodeVerificationOnSignal({
+      children: [],
+      cleanup: async () => {
+        throw cleanupError;
+      },
+      diagnostics: [],
+      print: async () => {
+        throw diagnosticError;
+      },
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      errors: [cleanupError, diagnosticError],
+      message:
+        'Node runtime signal cleanup failed and diagnostics were incomplete',
+    });
   });
 });
 
