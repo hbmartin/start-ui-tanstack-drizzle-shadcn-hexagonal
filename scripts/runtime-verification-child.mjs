@@ -1,4 +1,5 @@
 import os from 'node:os';
+import { performance } from 'node:perf_hooks';
 
 export class RuntimeVerificationChildError extends Error {
   constructor(message, { exitCode, signal }) {
@@ -88,6 +89,18 @@ export const settleRuntimeVerificationWithin = (
       .then((value) => finish({ status: 'fulfilled', value }))
       .catch((reason) => finish({ reason, status: 'rejected' }));
   });
+
+export const createRuntimeVerificationDeadline = (
+  timeoutMs,
+  now = () => performance.now()
+) => {
+  let lastObservedTime = now();
+  const deadline = lastObservedTime + Math.max(0, timeoutMs);
+  return () => {
+    lastObservedTime = Math.max(lastObservedTime, now());
+    return Math.max(0, deadline - lastObservedTime);
+  };
+};
 
 export const normalizeRuntimeVerificationError = (reason, message) =>
   reason instanceof Error ? reason : new Error(`${message}: ${String(reason)}`);

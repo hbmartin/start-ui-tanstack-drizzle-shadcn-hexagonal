@@ -10,6 +10,7 @@ import {
 } from './runtime-verification-environment.mjs';
 import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
 import {
+  createRuntimeVerificationDeadline,
   formatRuntimeVerificationError,
   normalizeRuntimeVerificationError,
   runtimeVerificationFailureExitCode,
@@ -193,12 +194,11 @@ export const completeArtifactSignalShutdown = async ({
   verificationCompletion = Promise.resolve(),
   write = writeRuntimeVerificationStderr,
 }) => {
-  const deadline = Date.now() + finalizationTimeoutMs;
+  const remainingFinalizationTime = createRuntimeVerificationDeadline(
+    finalizationTimeoutMs
+  );
   const settle = (completion) =>
-    settleRuntimeVerificationWithin(
-      completion,
-      Math.max(0, deadline - Date.now())
-    );
+    settleRuntimeVerificationWithin(completion, remainingFinalizationTime());
   const writeDiagnostic = async (error) => {
     if (runtimeVerificationErrorIsSignalCollateral(error, signal)) return;
     await settle(

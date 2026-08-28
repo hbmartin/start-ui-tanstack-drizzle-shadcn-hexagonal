@@ -17,6 +17,7 @@ import {
 } from './runtime-verification-environment.mjs';
 import { removeRuntimeArtifactOutput } from './runtime-artifact-output.mjs';
 import {
+  createRuntimeVerificationDeadline,
   exitedVerificationChildError,
   formatRuntimeVerificationError,
   normalizeRuntimeVerificationError,
@@ -1265,12 +1266,11 @@ if (isEntryPoint) {
     if (signalShutdownStarted) return;
     signalShutdownStarted = true;
     shutdownGuard.requestShutdown();
-    const deadline = Date.now() + signalFinalizationTimeoutMs;
+    const remainingFinalizationTime = createRuntimeVerificationDeadline(
+      signalFinalizationTimeoutMs
+    );
     const settle = (completion) =>
-      settleRuntimeVerificationWithin(
-        completion,
-        Math.max(0, deadline - Date.now())
-      );
+      settleRuntimeVerificationWithin(completion, remainingFinalizationTime());
     const writeDiagnostic = async (error) => {
       if (runtimeVerificationErrorIsSignalCollateral(error, signal)) return;
       await settle(

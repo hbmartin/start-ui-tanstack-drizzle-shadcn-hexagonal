@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  createRuntimeVerificationDeadline,
   exitedVerificationChildError,
   formatRuntimeVerificationError,
   normalizeRuntimeVerificationError,
@@ -206,6 +207,17 @@ describe('runtime verification child process', () => {
     await expect(
       settleRuntimeVerificationWithin(new Promise(() => undefined), 1)
     ).resolves.toEqual({ status: 'timed-out' });
+  });
+
+  it('does not extend a deadline when an injected clock moves backward', () => {
+    const readings = [100, 105, 90, 111];
+    const remaining = createRuntimeVerificationDeadline(10, () =>
+      readings.shift()
+    );
+
+    expect(remaining()).toBe(5);
+    expect(remaining()).toBe(5);
+    expect(remaining()).toBe(0);
   });
 
   it('normalizes falsy failures and identifies only signal collateral', () => {
