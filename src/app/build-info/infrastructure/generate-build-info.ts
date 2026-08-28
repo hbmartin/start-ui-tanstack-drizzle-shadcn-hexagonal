@@ -14,6 +14,20 @@ type GitMetadata = Readonly<{
 
 const generatedPath = './src/app/build-info/presentation/build-info.gen.json';
 const unavailableBuildValue = 'unavailable';
+const buildCommitEnvironmentKeys = [
+  'GITHUB_SHA',
+  'VERCEL_GIT_COMMIT_SHA',
+  'CF_PAGES_COMMIT_SHA',
+] as const;
+
+const canonicalPath = (candidate: string) => {
+  const resolved = path.resolve(candidate);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+};
 
 export const sourceDateFromEpoch = (sourceDateEpoch: string) => {
   if (!/^\d+$/.test(sourceDateEpoch)) {
@@ -56,9 +70,11 @@ export const readGitMetadata = (cwd = process.cwd()): GitMetadata | null => {
 };
 
 export const createBuildInfo = ({
+  fallbackCommit,
   gitMetadata,
   sourceDateEpoch,
 }: Readonly<{
+  fallbackCommit?: string;
   gitMetadata: GitMetadata | null;
   sourceDateEpoch?: string;
 }>) => {
@@ -66,29 +82,48 @@ export const createBuildInfo = ({
     sourceDateEpoch === undefined
       ? (gitMetadata?.date ?? unavailableBuildValue)
       : sourceDateFromEpoch(sourceDateEpoch);
-  const display = gitMetadata?.display ?? unavailableBuildValue;
+  const commit = gitMetadata?.commit ?? fallbackCommit ?? unavailableBuildValue;
+  const display =
+    gitMetadata?.display ??
+    fallbackCommit?.slice(0, 8) ??
+    unavailableBuildValue;
   return {
     display,
     version: `${display} - ${date}`,
-    commit: gitMetadata?.commit ?? unavailableBuildValue,
+    commit,
     date,
   };
 };
 
-export const generateAppBuild = () => {
+export const readBuildCommit = (environment: Record<string, unknown>) =>
+  buildCommitEnvironmentKeys
+    .map((key) => environment[key])
+    .find(
+      (value): value is string =>
+        typeof value === 'string' && /^[0-9a-f]{7,64}$/iu.test(value)
+    );
+
+const generateAppBuild = () => {
   try {
-    const rawSourceDateEpoch = readRuntimeEnv().SOURCE_DATE_EPOCH;
+    const environment = readRuntimeEnv();
+    const rawSourceDateEpoch = environment.SOURCE_DATE_EPOCH;
     if (
       rawSourceDateEpoch !== undefined &&
       typeof rawSourceDateEpoch !== 'string'
     ) {
       throw new TypeError('SOURCE_DATE_EPOCH must be a string when supplied');
     }
+    const gitMetadata = readGitMetadata();
+    const fallbackCommit = readBuildCommit(environment);
+    if (!gitMetadata && !fallbackCommit) {
+      console.warn(
+        '⚠️ Git metadata unavailable; generated build provenance uses deterministic unavailable sentinels'
+      );
+    }
     const content = createBuildInfo({
-      gitMetadata: readGitMetadata(),
-      ...(rawSourceDateEpoch === undefined
-        ? {}
-        : { sourceDateEpoch: rawSourceDateEpoch }),
+      fallbackCommit,
+      gitMetadata,
+      sourceDateEpoch: rawSourceDateEpoch?.trim() || undefined,
     });
     fs.writeFileSync(generatedPath, JSON.stringify(content, null, 2));
     console.log(`✅ Build info file generated (${generatedPath})`);
@@ -112,8 +147,9 @@ export const isBuildInfoEntryPoint = (
   const launcher = argv[1];
   if (!launcher) return false;
 
-  const modulePath = path.resolve(fileURLToPath(moduleUrl));
-  if (path.resolve(cwd, launcher) === modulePath) return true;
+  const modulePath = canonicalPath(fileURLToPath(moduleUrl));
+  const launcherPath = canonicalPath(path.resolve(cwd, launcher));
+  if (launcherPath === modulePath) return true;
 
   const launcherName = path.basename(launcher);
   if (launcherName !== 'run-jiti' && launcherName !== 'run-jiti.js') {
@@ -121,10 +157,11 @@ export const isBuildInfoEntryPoint = (
   }
 
   const requestedModule = argv[2];
-  return (
-    requestedModule !== undefined &&
-    path.resolve(cwd, requestedModule) === modulePath
-  );
+  if (requestedModule === undefined) return false;
+  return [
+    path.resolve(cwd, requestedModule),
+    path.resolve(path.dirname(launcherPath), requestedModule),
+  ].some((candidate) => canonicalPath(candidate) === modulePath);
 };
 
 if (isBuildInfoEntryPoint()) generateAppBuild();
