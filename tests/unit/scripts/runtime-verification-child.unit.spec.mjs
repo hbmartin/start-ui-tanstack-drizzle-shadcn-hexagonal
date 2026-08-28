@@ -232,6 +232,23 @@ describe('runtime verification child process', () => {
         'SIGTERM'
       )
     ).toBe(false);
+    expect(
+      runtimeVerificationErrorIsSignalCollateral(
+        Object.assign(
+          new AggregateError(
+            [
+              Object.assign(new Error('child stopped'), {
+                signal: 'SIGTERM',
+              }),
+              new Error('cleanup failed'),
+            ],
+            'decorated mixed failure'
+          ),
+          { signal: 'SIGTERM' }
+        ),
+        'SIGTERM'
+      )
+    ).toBe(false);
   });
 
   it('does not report a still-running long-lived child as failed', () => {

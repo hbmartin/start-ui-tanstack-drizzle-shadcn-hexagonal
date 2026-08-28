@@ -99,16 +99,15 @@ export const runtimeVerificationErrorIsSignalCollateral = (
 ) => {
   if (!error || seen.has(error)) return false;
   const nextSeen = new Set(seen).add(error);
-  if (error.signal === signal || error.signal === 'SIGKILL') return true;
   const nested = [
     ...(error instanceof AggregateError ? error.errors : []),
     ...(error.cause !== undefined ? [error.cause] : []),
   ];
-  return (
-    nested.length > 0 &&
-    nested.every((cause) =>
-      runtimeVerificationErrorIsSignalCollateral(cause, signal, nextSeen)
-    )
+  if (nested.length === 0) {
+    return error.signal === signal || error.signal === 'SIGKILL';
+  }
+  return nested.every((cause) =>
+    runtimeVerificationErrorIsSignalCollateral(cause, signal, nextSeen)
   );
 };
 
