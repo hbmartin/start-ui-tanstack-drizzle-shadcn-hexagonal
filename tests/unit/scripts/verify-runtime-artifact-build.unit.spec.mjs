@@ -315,6 +315,73 @@ describe('runtime artifact build verification', () => {
     expect(shutdown.exitCodeFor).toHaveBeenCalledWith(failure);
   });
 
+  it('forces the authoritative signal exit after successful cleanup', async () => {
+    const exit = vi.fn();
+    const shutdown = {
+      exitCodeFor: vi.fn(() => 130),
+      request: vi.fn().mockResolvedValue(undefined),
+    };
+    const write = vi.fn();
+
+    await completeArtifactSignalShutdown({
+      exit,
+      shutdown,
+      signal: 'SIGINT',
+      write,
+    });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(130);
+    expect(shutdown.exitCodeFor).toHaveBeenCalledWith(undefined);
+  });
+
+  it('forces the authoritative exit when the diagnostic sink fails', async () => {
+    const exit = vi.fn();
+    const failure = new Error('cleanup failed');
+    const shutdown = {
+      exitCodeFor: vi.fn(() => 143),
+      request: vi.fn().mockRejectedValue(failure),
+    };
+
+    await completeArtifactSignalShutdown({
+      exit,
+      shutdown,
+      signal: 'SIGTERM',
+      write: vi.fn().mockRejectedValue(new Error('EPIPE')),
+    });
+
+    expect(exit).toHaveBeenCalledWith(143);
+    expect(shutdown.exitCodeFor).toHaveBeenCalledWith(failure);
+  });
+
+  it('drains a racing verification failure before the signal exit', async () => {
+    const events = [];
+    const verificationError = new Error('profile contract failed');
+    let observedVerificationError;
+    const verificationCompletion = Promise.resolve().then(() => {
+      observedVerificationError = verificationError;
+      return undefined;
+    });
+    const shutdown = {
+      exitCodeFor: vi.fn(() => 143),
+      request: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await completeArtifactSignalShutdown({
+      exit: (code) => events.push(`exit:${String(code)}`),
+      readVerificationError: () => observedVerificationError,
+      shutdown,
+      signal: 'SIGTERM',
+      verificationCompletion,
+      write: async (message) => {
+        events.push(`write:${message}`);
+      },
+    });
+
+    expect(events).toEqual(['write:profile contract failed', 'exit:143']);
+    expect(shutdown.exitCodeFor).toHaveBeenCalledWith(verificationError);
+  });
+
   it('settles every child termination when one child signal throws', async () => {
     const registry = createArtifactChildRegistry(10);
     const signalError = new Error('kill threw');

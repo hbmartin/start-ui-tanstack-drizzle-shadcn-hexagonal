@@ -239,6 +239,41 @@ describe('cleanupNodeVerificationOnSignal', () => {
     expect(print).toHaveBeenCalledWith([]);
   });
 
+  it('settles every fallback child termination when one rejects', async () => {
+    const first = new EventEmitter();
+    const second = new EventEmitter();
+    const failure = new Error('kill failed');
+    const terminate = vi
+      .fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(true);
+
+    await expect(
+      cleanupNodeVerificationOnSignal({
+        children: [first, second],
+        cleanup: undefined,
+        diagnostics: [],
+        print: vi.fn(),
+        terminate,
+      })
+    ).rejects.toBe(failure);
+
+    expect(terminate).toHaveBeenCalledTimes(2);
+    expect(terminate).toHaveBeenCalledWith(first);
+    expect(terminate).toHaveBeenCalledWith(second);
+  });
+
+  it('fails signal cleanup when diagnostic output does not drain', async () => {
+    await expect(
+      cleanupNodeVerificationOnSignal({
+        children: [],
+        cleanup: async () => undefined,
+        diagnostics: ['captured output'],
+        print: async () => false,
+      })
+    ).rejects.toThrow('diagnostics were incomplete');
+  });
+
   it('preserves cleanup and diagnostic failures together', async () => {
     const cleanupError = new Error('cleanup failed');
     const diagnosticError = new Error('diagnostics failed');

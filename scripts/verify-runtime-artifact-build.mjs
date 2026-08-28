@@ -182,8 +182,10 @@ const artifactShutdown = createArtifactShutdownCoordinator(artifactChildren);
 
 export const completeArtifactSignalShutdown = async ({
   exit = process.exit,
+  readVerificationError = () => undefined,
   shutdown,
   signal,
+  verificationCompletion = Promise.resolve(),
   write = writeRuntimeVerificationStderr,
 }) => {
   let failure;
@@ -197,7 +199,19 @@ export const completeArtifactSignalShutdown = async ({
       // A broken diagnostic sink must not prevent the authoritative signal exit.
     }
   }
-  exit(shutdown.exitCodeFor(failure));
+  await Promise.race([
+    verificationCompletion,
+    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  ]);
+  const verificationError = readVerificationError();
+  if (verificationError) {
+    try {
+      await write(formatRuntimeVerificationError(verificationError));
+    } catch {
+      // A broken diagnostic sink must not prevent the authoritative signal exit.
+    }
+  }
+  exit(shutdown.exitCodeFor(failure ?? verificationError));
 };
 
 export const createCloudflareArtifactProvenanceKey = () =>
@@ -333,19 +347,30 @@ const isEntryPoint =
 
 if (isEntryPoint) {
   let signalShutdownStarted = false;
+  let signalVerificationError;
+  let verificationCompletion;
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.once(signal, () => {
       if (signalShutdownStarted) return;
       signalShutdownStarted = true;
       void completeArtifactSignalShutdown({
+        readVerificationError: () => signalVerificationError,
         shutdown: artifactShutdown,
         signal,
+        verificationCompletion,
       });
     });
   }
-  verifyRuntimeArtifactBuild(process.argv[2]).catch(async (error) => {
-    if (signalShutdownStarted) return;
-    await writeRuntimeVerificationStderr(formatRuntimeVerificationError(error));
-    process.exitCode = artifactShutdown.exitCodeFor(error);
-  });
+  verificationCompletion = verifyRuntimeArtifactBuild(process.argv[2]).catch(
+    async (error) => {
+      if (signalShutdownStarted) {
+        signalVerificationError = error;
+        return;
+      }
+      await writeRuntimeVerificationStderr(
+        formatRuntimeVerificationError(error)
+      );
+      process.exitCode = artifactShutdown.exitCodeFor(error);
+    }
+  );
 }

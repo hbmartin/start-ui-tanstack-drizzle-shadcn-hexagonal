@@ -134,6 +134,62 @@ describe('runtime verification child process', () => {
     ).resolves.toBe(false);
   });
 
+  it('reports a completed stderr drain', async () => {
+    const stream = Object.assign(new EventEmitter(), {
+      write: vi.fn((_message, callback) => callback()),
+    });
+
+    await expect(
+      writeRuntimeVerificationStderr('diagnostic', {
+        stream,
+        timeoutMs: 10,
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('reports stream errors and synchronous write throws as incomplete', async () => {
+    const emittedError = Object.assign(new EventEmitter(), {
+      write: vi.fn(() =>
+        queueMicrotask(() => emittedError.emit('error', new Error('EPIPE')))
+      ),
+    });
+    const thrownError = Object.assign(new EventEmitter(), {
+      write: vi.fn(() => {
+        throw new Error('EPIPE');
+      }),
+    });
+
+    await expect(
+      writeRuntimeVerificationStderr('diagnostic', {
+        stream: emittedError,
+        timeoutMs: 10,
+      })
+    ).resolves.toBe(false);
+    await expect(
+      writeRuntimeVerificationStderr('diagnostic', {
+        stream: thrownError,
+        timeoutMs: 10,
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('ignores a write callback that arrives after the bounded timeout', async () => {
+    let completeWrite;
+    const stream = Object.assign(new EventEmitter(), {
+      write: vi.fn((_message, callback) => {
+        completeWrite = callback;
+      }),
+    });
+
+    await expect(
+      writeRuntimeVerificationStderr('diagnostic', {
+        stream,
+        timeoutMs: 1,
+      })
+    ).resolves.toBe(false);
+    expect(() => completeWrite()).not.toThrow();
+  });
+
   it('does not report a still-running long-lived child as failed', () => {
     expect(
       exitedVerificationChildError(

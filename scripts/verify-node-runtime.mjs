@@ -1089,7 +1089,7 @@ const printDiagnostics = async (diagnostics) => {
   const logs = (await Promise.all(diagnostics.map(renderDiagnostic)))
     .filter(Boolean)
     .join('\n');
-  if (logs) await writeRuntimeVerificationStderr(logs);
+  return logs ? writeRuntimeVerificationStderr(logs) : true;
 };
 
 export const cleanupNodeVerificationOnSignal = async ({
@@ -1104,13 +1104,29 @@ export const cleanupNodeVerificationOnSignal = async ({
     if (cleanup) {
       await cleanup();
     } else {
-      const outcomes = await Promise.all(
+      const outcomes = await Promise.allSettled(
         [...children].map((child) => terminate(child))
       );
-      assert(
-        outcomes.every(Boolean),
-        'a Node runtime verification child survived SIGKILL'
+      const errors = outcomes.flatMap((outcome) =>
+        outcome.status === 'rejected' ? [outcome.reason] : []
       );
+      const survivors = outcomes.filter(
+        (outcome) => outcome.status === 'fulfilled' && outcome.value !== true
+      ).length;
+      if (survivors > 0) {
+        errors.push(
+          new Error(
+            `${String(survivors)} Node runtime verification child process(es) survived SIGKILL`
+          )
+        );
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(
+          errors,
+          'Node runtime verification child cleanup was incomplete'
+        );
+      }
     }
   } catch (error) {
     cleanupError = error;
@@ -1118,7 +1134,12 @@ export const cleanupNodeVerificationOnSignal = async ({
 
   let diagnosticError;
   try {
-    await print(diagnostics);
+    const diagnosticsComplete = await print(diagnostics);
+    if (diagnosticsComplete === false) {
+      diagnosticError = new Error(
+        'Node runtime verification diagnostics were incomplete'
+      );
+    }
   } catch (error) {
     diagnosticError = error;
   }
