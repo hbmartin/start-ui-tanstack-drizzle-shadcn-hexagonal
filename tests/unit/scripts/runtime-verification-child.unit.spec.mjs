@@ -222,11 +222,14 @@ describe('runtime verification child process', () => {
 
   it('uses a monotonic default clock independent of wall-clock jumps', () => {
     const wallClock = vi.spyOn(Date, 'now').mockReturnValue(0);
-    const remaining = createRuntimeVerificationDeadline(10_000);
-    wallClock.mockReturnValue(Number.MAX_SAFE_INTEGER);
+    try {
+      const remaining = createRuntimeVerificationDeadline(10_000);
+      wallClock.mockReturnValue(Number.MAX_SAFE_INTEGER);
 
-    expect(remaining()).toBeGreaterThan(0);
-    wallClock.mockRestore();
+      expect(remaining()).toBeGreaterThan(0);
+    } finally {
+      wallClock.mockRestore();
+    }
   });
 
   it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY])(
@@ -287,6 +290,24 @@ describe('runtime verification child process', () => {
         'SIGTERM'
       )
     ).toBe(true);
+    const sharedCollateral = collateral();
+    expect(
+      runtimeVerificationErrorIsSignalCollateral(
+        new AggregateError(
+          [sharedCollateral, sharedCollateral],
+          'shared collateral'
+        ),
+        'SIGTERM'
+      )
+    ).toBe(true);
+    expect(
+      runtimeVerificationErrorIsSignalCollateral(
+        new AggregateError([collateral()], 'mixed channels', {
+          cause: new Error('cleanup failed'),
+        }),
+        'SIGTERM'
+      )
+    ).toBe(false);
     expect(
       runtimeVerificationErrorIsSignalCollateral(
         new Error('wrapper', { cause: collateral() }),
