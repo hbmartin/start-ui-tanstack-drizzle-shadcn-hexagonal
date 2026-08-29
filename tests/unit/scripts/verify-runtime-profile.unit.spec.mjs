@@ -4,17 +4,37 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { parseSync } from 'oxc-parser';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   inspectArtifactOwnerConsumerSourcesForTesting,
   inspectArtifactOwnerCallerComponentsForTesting,
   inspectAstTraversalForTesting,
+  inspectAstDigestForTesting,
+  inspectCloudflareAnalysisBudgetForTesting,
+  inspectCloudflareAnalysisBucketsForTesting,
+  inspectCloudflareAggregateResolutionDepthForTesting,
+  inspectCloudflareAppOnlyTopLevelInertForTesting,
   inspectCloudflareDeferredArgumentHazardForTesting,
+  inspectCloudflareFactorySpecializationLifecycleForTesting,
   inspectCloudflareInvokedParameterProjectionsForTesting,
+  inspectCloudflareImportedFactoryCycleForTesting,
+  inspectCloudflareImportedFactoryContextReentryForTesting,
   inspectCloudflareLoadEffectsForTesting,
+  inspectCloudflareShallowLoadEffectsForTesting,
+  inspectCloudflareSyntheticMutationTargetKeysForTesting,
+  inspectCloudflareUncertainReceiverIndexForTesting,
   inspectCloudflareModuleGraphBoundForTesting,
+  inspectCloudflareReviewedLoadEffectsForTesting,
+  inspectCloudflareReviewedClosurePolicyForTesting,
+  inspectCloudflareReviewedFactoryResultPathForTesting,
+  inspectCloudflareReviewedPolicyValidationForTesting,
+  inspectCloudflareReviewedOriginDirectAliasProofForTesting,
+  inspectCloudflareProvisionalReceiverDetailsForTesting,
+  inspectCloudflareReceiverDetailsForTesting,
   inspectCloudflareReviewedReceiverMutationsForTesting,
+  inspectCloudflareReviewedSingletonReceiverRootsForTesting,
   inspectFreeIdentifierReferencesForTesting,
   inspectTopLevelOwnerConsumerBoundForTesting,
   verifyRuntimeProfile as verifyRuntimeProfileImplementation,
@@ -22,6 +42,11 @@ import {
 
 const compareCodePointStrings = (left, right) =>
   left < right ? -1 : left > right ? 1 : 0;
+const referenceAstDigestIgnoredKeys = new Set(['end', 'loc', 'raw', 'start']);
+const referenceAstDigestReplacer = (key, value) => {
+  if (referenceAstDigestIgnoredKeys.has(key)) return undefined;
+  return typeof value === 'bigint' ? { $bigint: value.toString() } : value;
+};
 const dynamicOwnerSourceNames = {
   tanstack: 'src/entry-server.ts',
   telemetryProxy: 'src/platform/telemetry/index.ts',
@@ -398,7 +423,21 @@ const createNodeArtifact = (root) => {
     publicDir: 'public',
     serverEntry: 'server/index.mjs',
   });
-  write(root, '.output/node/server/index.mjs');
+  write(
+    root,
+    '.output/node/server/index.mjs',
+    'import{defineLazyEventHandler,serve}from"./_libs/h3-fixture.mjs";const route=defineLazyEventHandler(()=>import("./_chunks/ssr-renderer.mjs"));serve({fetch:route});const node_server_default={};export{node_server_default as default};'
+  );
+  write(
+    root,
+    '.output/node/server/_libs/h3-fixture.mjs',
+    'export const defineLazyEventHandler=(load)=>load;export const serve=()=>{};'
+  );
+  write(
+    root,
+    '.output/node/server/_chunks/ssr-renderer.mjs',
+    'const lazyService=(load)=>load;const service=lazyService(()=>import("../_ssr/ssr.mjs"));const ssrRenderer=()=>service;export{ssrRenderer as default};'
+  );
   write(
     root,
     '.output/node/server/_ssr/ssr.mjs',
@@ -428,26 +467,90 @@ const createVercelArtifact = (root) => {
     runtime: 'nodejs24.x',
     supportsResponseStreaming: true,
   });
-  write(root, '.vercel/output/functions/__server.func/index.mjs');
+  write(
+    root,
+    '.vercel/output/functions/__server.func/index.mjs',
+    'import{defineLazyEventHandler}from"./_libs/h3-fixture.mjs";const route=defineLazyEventHandler(()=>import("./_chunks/ssr-renderer.mjs"));const useNitroApp=()=>({fetch:route});const nitroApp=useNitroApp();const vercel_web_default={async fetch(req,context){void context;return nitroApp.fetch(req)}};export{vercel_web_default as default};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_libs/h3-fixture.mjs',
+    'export const defineLazyEventHandler=(load)=>load;'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_chunks/ssr-renderer.mjs',
+    'const lazyService=(load)=>load;const service=lazyService(()=>import("../_ssr/ssr.mjs"));const ssrRenderer=()=>service;export{ssrRenderer as default};'
+  );
   write(
     root,
     '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
-    'var {initVercelTelemetry,runWithVercelSentryRequestIsolation}=await import("../_libs/telemetry-owner.mjs");initVercelTelemetry();var {vercelRequestLifecycle}=await import("./request-lifecycle-fixture.mjs");var {createApplicationServerEntry}=await import("./create-application-server-entry-fixture.mjs");await createApplicationServerEntry("vercel",vercelRequestLifecycle,runWithVercelSentryRequestIsolation);'
+    'var {initVercelTelemetry,runWithVercelSentryRequestIsolation}=await import("../_libs/telemetry-owner.mjs");initVercelTelemetry();var {vercelRequestLifecycle}=await import("./request-lifecycle-fixture.mjs");var {createApplicationServerEntry}=await import("./create-application-server-entry-fixture.mjs");var server_entry_default=await createApplicationServerEntry("vercel",vercelRequestLifecycle,runWithVercelSentryRequestIsolation);export{server_entry_default as default};'
   );
   write(
     root,
     '.vercel/output/functions/__server.func/_libs/telemetry-owner.mjs',
-    'export const initVercelTelemetry=()=>{};export const runWithVercelSentryRequestIsolation=(run)=>run();"@vercel/otel"'
+    'import{r as runWithVercelSentryRequestIsolation,t as initVercelTelemetry}from"../_ssr/telemetry-implementation.mjs";export{initVercelTelemetry,runWithVercelSentryRequestIsolation};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs',
+    'import{withIsolationScope}from"../_libs/sentry__core.mjs";import{registerOTel}from"../_libs/vercel__otel.mjs";const runWithSentryNodeRequestIsolation=(operation)=>withIsolationScope(operation);const runWithVercelSentryRequestIsolation=runWithSentryNodeRequestIsolation;const runWithNormalizedOtelSdkEnvironment=(operation)=>operation();const createSentryNodeRequestContextManager=()=>({});const initializeTraceOwner=(config,contextManager)=>runWithNormalizedOtelSdkEnvironment(()=>registerOTel({config,contextManager}));const initializeSignalOwners=()=>({});const installServerTelemetry=()=>{};const initVercelTelemetry=()=>{const config={};const contextManager=createSentryNodeRequestContextManager();initializeTraceOwner(config,contextManager);initializeSignalOwners();installServerTelemetry()};export{runWithVercelSentryRequestIsolation as r,initVercelTelemetry as t};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_libs/sentry__core.mjs',
+    'export const withIsolationScope=(operation)=>operation();"@sentry/core";'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_libs/vercel__otel.mjs',
+    'export const registerOTel=()=>{};"@vercel/otel";'
   );
   write(
     root,
     '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs',
-    'export const vercelRequestLifecycle={onRequestSettled(){}};"@vercel/functions"'
+    'import{forceFlushRequestTelemetry}from"./request-completion-fixture.mjs";import{getTelemetry}from"./telemetry-fixture.mjs";import{require_functions}from"../_libs/vercel__functions.mjs";const import_functions=require_functions();const vercelRequestLifecycle={onRequestSettled(request){const flush=forceFlushRequestTelemetry(request,getTelemetry()).then(()=>void 0);import_functions.waitUntil(flush)}};export{vercelRequestLifecycle};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/request-completion-fixture.mjs',
+    'const forceFlushRequestTelemetry=()=>Promise.resolve();export{forceFlushRequestTelemetry};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/telemetry-fixture.mjs',
+    'const getTelemetry=()=>({});export{getTelemetry};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_libs/vercel__functions.mjs',
+    'export const require_functions=()=>({waitUntil(){}});"@vercel/functions";'
   );
   write(
     root,
     '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
-    'export const createApplicationServerEntry=()=>({fetch(){}})'
+    'import{reportTelemetryFailure}from"./telemetry-proxy-fixture.mjs";import{claimRequestException,createRequestExceptionCaptureState,bindRequestExceptionState}from"./request-exception-state-fixture.mjs";import{isUnexpectedRequestFailure}from"./request-failure-fixture.mjs";const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-proxy-fixture.mjs");const tanstack=await import("./entry-server-fixture.mjs");return tanstack.createServerEntry({async fetch(request){const handleRequest=async()=>{const telemetryCaptureState=createRequestExceptionCaptureState();bindRequestExceptionState(request,telemetryCaptureState);const context={requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState};try{return await tanstack.default.fetch(request,{context})}catch(error){if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{level:"error",tags:{event:"framework.request.failed",requestId:context.requestId}});throw error}finally{try{lifecycle?.onRequestSettled(request)}catch{}}};if(!requestScope)return handleRequest();let applicationResult;const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult};try{return requestScope(runApplicationOnce)}catch(failure){reportTelemetryFailure("sentry.request_scope",failure);return applicationResult??runApplicationOnce()}}})};export{createApplicationServerEntry};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/telemetry-proxy-fixture.mjs',
+    'export const telemetryProxy={captureException(){}};export const reportTelemetryFailure=()=>{};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/request-exception-state-fixture.mjs',
+    'export const claimRequestException=()=>true;export const createRequestExceptionCaptureState=()=>({});export const bindRequestExceptionState=()=>{};'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/request-failure-fixture.mjs',
+    'export const isUnexpectedRequestFailure=()=>true;'
+  );
+  write(
+    root,
+    '.vercel/output/functions/__server.func/_ssr/entry-server-fixture.mjs',
+    'const entry={fetch(){return new Response()}};export const createServerEntry=(value)=>value;export{entry as default};'
   );
   fs.mkdirSync(path.join(root, '.vercel/output/static'));
 };
@@ -1003,6 +1106,65 @@ afterEach(() => {
 });
 
 describe('runtime artifact verifier', () => {
+  it('preserves parser AST JSON digest semantics without recursion', () => {
+    const representative = {
+      body: [
+        {
+          end: 42,
+          raw: 'ignored',
+          start: 7,
+          type: 'Literal',
+          value: 9n,
+        },
+        undefined,
+        Number.NaN,
+      ],
+      enabled: true,
+      loc: { ignored: true },
+      name: 'fixture',
+    };
+    const expected = createHash('sha256')
+      .update(JSON.stringify(representative, referenceAstDigestReplacer))
+      .digest('hex');
+
+    expect(inspectAstDigestForTesting(representative)).toBe(expected);
+  });
+
+  it('rejects exotic AST digest objects without invoking hooks', () => {
+    const toJSON = vi.fn(() => ({ type: 'Identifier' }));
+    const exotic = Object.create(Date.prototype);
+    exotic.toJSON = toJSON;
+
+    expect(() => inspectAstDigestForTesting(exotic)).toThrow(
+      'AST digest input must contain only parser-owned plain data'
+    );
+    expect(toJSON).not.toHaveBeenCalled();
+  });
+
+  it('preserves OXC regex literal digest semantics', () => {
+    const program = parseSync('regex.fixture.js', 'const value=/abc/gu;', {
+      sourceType: 'module',
+    }).program;
+    const expected = createHash('sha256')
+      .update(JSON.stringify(program, referenceAstDigestReplacer))
+      .digest('hex');
+
+    expect(inspectAstDigestForTesting(program)).toBe(expected);
+  });
+
+  it('digests deeply nested AST projections without overflowing the stack', () => {
+    let projection = { name: 'target', type: 'Identifier' };
+    for (let depth = 0; depth < 20_000; depth += 1) {
+      projection = {
+        computed: false,
+        object: projection,
+        property: { name: 'value', type: 'Identifier' },
+        type: 'MemberExpression',
+      };
+    }
+
+    expect(inspectAstDigestForTesting(projection)).toMatch(/^[a-f\d]{64}$/u);
+  });
   it('bounds deferred-argument aggregate traversal without recursive stack growth', () => {
     const nested = `const payload=${'['.repeat(1_024)}()=>1${']'.repeat(1_024)};`;
     expect(
@@ -1178,6 +1340,15 @@ describe('runtime artifact verifier', () => {
     }
   );
 
+  it('fails closed before materializing an oversized direct-callsite projection', () => {
+    const calls = Array.from({ length: 513 }, () => 'mutate(target)').join(';');
+    const source = `function mutate(value){value.run=()=>0}const target={run:()=>0};${calls};target.run();`;
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'exceeded bounded parameter projection count'
+    );
+  });
+
   it.each([
     [
       'forwarded rest array',
@@ -1305,6 +1476,162 @@ describe('runtime artifact verifier', () => {
     ]);
   });
 
+  it('keeps shallow conditional load-effect inspection conservative without deep target state', () => {
+    const source =
+      'if(globalThis.flag)fetch("https://conditional-shallow.invalid.example");';
+
+    expect(inspectCloudflareShallowLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://conditional-shallow.invalid.example")',
+    ]);
+  });
+
+  it('recognizes only zero-effect app-owned top-level declarations', () => {
+    expect(
+      inspectCloudflareAppOnlyTopLevelInertForTesting(
+        'import"./owner.js";const data={value:1,list:[1,()=>fetch("https://dormant.invalid.example")]};function dormant(){return fetch("https://dormant.invalid.example")}export{data,dormant};'
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    ['top-level call', 'const value=run();'],
+    ['top-level constructor', 'const value=new Map();'],
+    ['member read', 'const value=source.field;'],
+    ['object spread', 'const value={...source};'],
+    ['computed object key', 'const value={[source]:1};'],
+    [
+      'object getter',
+      'const value={get field(){return fetch("https://invalid.example")}};',
+    ],
+    [
+      'computed class key',
+      'class Value{[fetch("https://invalid.example")](){}}',
+    ],
+    [
+      'class static block',
+      'class Value{static{fetch("https://invalid.example")}}',
+    ],
+    ['assignment', 'let value;value=source;'],
+    ['update', 'let value=0;value++;'],
+  ])('requires deep app-owned analysis for a %s', (_label, source) => {
+    expect(inspectCloudflareAppOnlyTopLevelInertForTesting(source)).toBe(false);
+  });
+
+  it('bounds a self-referential imported factory argument', () => {
+    expect(
+      inspectCloudflareImportedFactoryCycleForTesting(
+        'import{make}from"./owner.js";const value=make(value);export{value};',
+        'value'
+      )
+    ).toBe(true);
+  });
+
+  it('shares imported factory cycle state across lexical-context re-entry', () => {
+    expect(
+      inspectCloudflareImportedFactoryContextReentryForTesting(
+        'import{make}from"./owner.js";const value=make();export{value};',
+        'value'
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      'reachable then unreachable',
+      'mutate(true,target,()=>fetch("https://invalid.example"));mutate(false,target,()=>0);',
+    ],
+    [
+      'unreachable then reachable',
+      'mutate(false,target,()=>0);mutate(true,target,()=>fetch("https://invalid.example"));',
+    ],
+  ])(
+    'does not memoize callsite-dependent unreachable mutations: %s',
+    (_label, invocations) => {
+      const source = `function mutate(enabled,target,run){if(enabled)target.run=run}const target={run:()=>0};${invocations}target.run();`;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+        'fetch("https://invalid.example")'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'object',
+      'make({effect:()=>fetch("https://invalid.example")}).consume();',
+      'const make=root=>({consume:()=>root.effect()});export{make};',
+    ],
+    [
+      'array',
+      'make([()=>fetch("https://invalid.example")]).consume();',
+      'const make=root=>({consume:()=>root[0]()});export{make};',
+    ],
+    [
+      'nested object',
+      'make({nested:{effect:()=>fetch("https://invalid.example")}}).consume();',
+      'const make=root=>({consume:()=>root.nested.effect()});export{make};',
+    ],
+    [
+      'destructured object',
+      'make({used:()=>fetch("https://invalid.example"),unused:()=>0}).consume();',
+      'const make=({used})=>({consume:()=>used()});export{make};',
+    ],
+    [
+      'object alias',
+      'const options={effect:()=>fetch("https://invalid.example")};make(options).consume();',
+      'const make=root=>({consume:()=>root.effect()});export{make};',
+    ],
+  ])(
+    'rejects a used callable in a structural imported factory %s argument',
+    (_label, invocation, owner) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      addCloudflareRouterEffectModule(
+        root,
+        `import{make}from"./router-effect-AAAAAAAA.js";${invocation}`,
+        owner
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(
+        'must not execute fetch, eval, or worker effects while loading'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'object',
+      'make({used:()=>0,unused:()=>fetch("https://invalid.example")}).consume();',
+      'const make=root=>({consume:()=>root.used()});export{make};',
+    ],
+    [
+      'destructured object',
+      'make({used:()=>0,unused:()=>fetch("https://invalid.example")}).consume();',
+      'const make=({used})=>({consume:()=>used()});export{make};',
+    ],
+  ])(
+    'keeps an unused callable dormant in a structural imported factory %s argument',
+    (_label, invocation, owner) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      addCloudflareRouterEffectModule(
+        root,
+        `import{make}from"./router-effect-AAAAAAAA.js";${invocation}`,
+        owner
+      );
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).not.toThrow();
+    }
+  );
+
   it.each([
     [
       'tail index one through one wrapper',
@@ -1359,6 +1686,27 @@ describe('runtime artifact verifier', () => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
   });
 
+  it('identity-keys deep synthetic mutation targets without digesting them', () => {
+    let deepTarget = { name: 'target', type: 'Identifier' };
+    for (let depth = 0; depth < 20_000; depth += 1) {
+      deepTarget = {
+        computed: false,
+        object: deepTarget,
+        property: { name: 'value', type: 'Identifier' },
+        type: 'MemberExpression',
+      };
+    }
+    const otherTarget = { ...deepTarget };
+
+    expect(
+      inspectCloudflareSyntheticMutationTargetKeysForTesting([
+        deepTarget,
+        deepTarget,
+        otherTarget,
+      ])
+    ).toEqual(['synthetic:0', 'synthetic:0', 'synthetic:1']);
+  });
+
   it.each([
     [
       'write through alias',
@@ -1405,9 +1753,1993 @@ describe('runtime artifact verifier', () => {
     ]);
   });
 
+  it.each([
+    [
+      'assignment',
+      'function mutate(...args){args[0].run=args[1]}const target={run:()=>0};mutate(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'Object.assign',
+      'function mutate(...args){Object.assign(args[0],{run:args[1]})}const target={run:()=>0};mutate(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'Reflect.set',
+      'function mutate(...args){Reflect.set(args[0],"run",args[1])}const target={run:()=>0};mutate(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'returned assignment',
+      'function make(...args){return()=>{args[0].run=args[1]}}const target={run:()=>0};make(target,()=>fetch("https://invalid.example"))();target.run()',
+    ],
+    [
+      'returned Object.assign',
+      'function make(...args){return()=>Object.assign(args[0],{run:args[1]})}const target={run:()=>0};make(target,()=>fetch("https://invalid.example"))();target.run()',
+    ],
+    [
+      'returned Reflect.set',
+      'function make(...args){return()=>Reflect.set(args[0],"run",args[1])}const target={run:()=>0};make(target,()=>fetch("https://invalid.example"))();target.run()',
+    ],
+    [
+      'array-destructured rest assignment',
+      'function mutate([target,...runs]){target.run=runs[0]}const target={run:()=>0};mutate([target,()=>fetch("https://invalid.example")]);target.run()',
+    ],
+    [
+      'object-destructured rest assignment',
+      'function mutate({target,...rest}){target.run=rest.run}const target={run:()=>0};mutate({target,run:()=>fetch("https://invalid.example")});target.run()',
+    ],
+    [
+      'returned array-destructured rest assignment',
+      'function make([target,...runs]){return()=>{target.run=runs[0]}}const target={run:()=>0};make([target,()=>fetch("https://invalid.example")])();target.run()',
+    ],
+    [
+      'returned object-destructured rest assignment',
+      'function make({target,...rest}){return()=>{target.run=rest.run}}const target={run:()=>0};make({target,run:()=>fetch("https://invalid.example")})();target.run()',
+    ],
+  ])('specializes a rest-operand receiver mutation (%s)', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('keeps a safe rest-operand receiver mutation inert', () => {
+    const source =
+      'function mutate(...args){Object.assign(args[0],{run:args[1]})}const target={run:()=>0};mutate(target,()=>0);target.run()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'array-destructured sibling',
+      'function mutate([target,...runs]){target.run=runs[0]}const first={run:()=>0},second={run:()=>0};mutate([first,()=>fetch("https://invalid.example")]);second.run()',
+    ],
+    [
+      'object-destructured sibling',
+      'function mutate({target,...rest}){target.run=rest.run}const first={run:()=>0},second={run:()=>0};mutate({target:first,run:()=>fetch("https://invalid.example")});second.run()',
+    ],
+    [
+      'array-destructured call site',
+      'function mutate([target,...runs]){target.run=runs[0]}const first={run:()=>0},second={run:()=>0};mutate([first,()=>fetch("https://invalid.example")]);mutate([second,()=>0]);second.run()',
+    ],
+    [
+      'object-destructured call site',
+      'function mutate({target,...rest}){target.run=rest.run}const first={run:()=>0},second={run:()=>0};mutate({target:first,run:()=>fetch("https://invalid.example")});mutate({target:second,run:()=>0});second.run()',
+    ],
+  ])('isolates a safe %s rest mutation', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
   it('scopes a directly called parameter receiver mutation to its argument', () => {
     const source =
       'const first={run:()=>0};const second={run:()=>0};function mutate(target){target.run=()=>fetch("https://invalid.example")}mutate(first);second.run();';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('retains intra-call ordering when two parameters alias one receiver', () => {
+    const source =
+      'function mutate(first,second){Object.defineProperty(first,"run",{value:()=>fetch("https://invalid.example")});second.run()}const target={};mutate(target,target);';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('keeps distinct direct-call parameter receivers isolated', () => {
+    const source =
+      'function mutate(first,second){Object.defineProperty(first,"run",{value:()=>fetch("https://invalid.example")});second.run()}mutate({}, {run:()=>0});';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'safe then hazardous',
+      'install(target,first);install(target,second)',
+      '()=>0',
+      '()=>fetch("https://invalid.example")',
+    ],
+    [
+      'hazardous then safe',
+      'install(target,second);install(target,first)',
+      '()=>0',
+      '()=>fetch("https://invalid.example")',
+    ],
+  ])(
+    'keeps ordered delegated parameter writes distinct (%s)',
+    (_label, writes, first, second) => {
+      const source = `function install(target,run){target.run=run}function relay(target,first,second){${writes}}const target={run:()=>0};relay(target,${first},${second});target.run()`;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+        'fetch("https://invalid.example")'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'declaration',
+      'const target={run:()=>0};function write(receiver,value){const alias=receiver;alias.run=value}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'assignment',
+      'const target={run:()=>0};function write(receiver,value){let alias;alias=receiver;alias.run=value}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'chain',
+      'const target={run:()=>0};function write(receiver,value){const first=receiver,second=first;second.run=value}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'container',
+      'const target={run:()=>0};function write(receiver,value){const box={receiver};const {receiver:alias}=box;alias.run=value}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'parameter pattern',
+      'const target={run:()=>0};function write({receiver},value){const alias=receiver;alias.run=value}write({receiver:target},()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'conditional',
+      'const target={run:()=>0};function write(receiver,value){const alias=true?receiver:receiver;alias.run=value}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'logical',
+      'const target={run:()=>0};function write(receiver,value){const alias=receiver||receiver;alias.run=value}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'nested member',
+      'const target={run:()=>0};function write(receiver,value){const alias=receiver.inner;alias.run=value}write({inner:target},()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'identity helper',
+      'const identity=value=>value,target={run:()=>0};function write(receiver,value){const alias=identity(receiver);alias.run=value}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'this',
+      'const api={run:()=>0,write(value){const alias=this;alias.run=value}};api.write(()=>fetch("https://invalid.example"));api.run()',
+    ],
+    [
+      'defineProperty',
+      'const target={run:()=>0};function write(receiver,value){const alias=receiver;Object.defineProperty(alias,"run",{value})}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'Reflect.set',
+      'const target={run:()=>0};function write(receiver,value){const alias=receiver;Reflect.set(alias,"run",value)}write(target,()=>fetch("https://invalid.example"));target.run()',
+    ],
+  ])(
+    'propagates writes through a parameter receiver alias (%s)',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+        'fetch("https://invalid.example")'
+      );
+    }
+  );
+
+  it.each([
+    ['conditional', 'const alias=which?first:second'],
+    ['logical', 'const alias=first||second'],
+    ['reassignment', 'let alias=first;alias=second'],
+  ])(
+    'propagates writes through a multi-source receiver alias (%s)',
+    (_label, alias) => {
+      const source = `function mutate(first,second,which){${alias};alias.run=()=>fetch("https://invalid.example")}const target={run:()=>0};mutate({},target,false);target.run()`;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+        'fetch("https://invalid.example")'
+      );
+    }
+  );
+
+  it.each([
+    'function mutate(){this.box.run=()=>fetch("https://invalid.example")}const target={box:{run:()=>0}};mutate.call(target);target.box.run()',
+    'const target={box:{run:()=>0},mutate(){this.box.run=()=>fetch("https://invalid.example")}};target.mutate();target.box.run()',
+  ])('propagates a nested this receiver mutation', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'target.run=()=>run()',
+    'Object.defineProperty(target,"run",{value:()=>run()})',
+  ])('specializes a delegated structured mutation operand (%s)', (mutation) => {
+    const source = `function mutate(target,run){${mutation}}function wrapper(target,run){mutate(target,run)}const target={};wrapper(target,()=>fetch("https://invalid.example"));target.run()`;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    ['safe then hazardous', 'safe(target);bad(target)'],
+    ['hazardous then safe', 'bad(target);safe(target)'],
+  ])(
+    'keeps ordered delegated factory captures distinct (%s)',
+    (_label, writes) => {
+      const source = `const target={run:()=>0};function make(effect){return target=>{target.run=()=>effect()}}const bad=make(()=>fetch("https://invalid.example")),safe=make(()=>0);function relay(target){${writes}}relay(target);target.run()`;
+
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'direct value',
+      'function mutate(run){target.run=run}const target={};mutate(()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'direct structured value',
+      'function mutate(run){target.run=()=>run()}const target={};mutate(()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'one wrapper',
+      'function mutate(run){target.run=()=>run()}function wrapper(run){mutate(run)}const target={};wrapper(()=>fetch("https://invalid.example"));target.run()',
+    ],
+    [
+      'two wrappers',
+      'function mutate(run){target.run=()=>run()}function first(run){mutate(run)}function second(run){first(run)}const target={};second(()=>fetch("https://invalid.example"));target.run()',
+    ],
+  ])(
+    'specializes a concrete-receiver mutation operand (%s)',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+        'fetch("https://invalid.example")'
+      );
+    }
+  );
+
+  it('fails closed for an unresolved captured-receiver factory mutation', () => {
+    const source =
+      'function make(target){return function mutate(run){target.run=()=>run()}}const target={},mutate=make(target);mutate(()=>fetch("https://invalid.example"));target.run()';
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects opaque aggregate member mutations'
+    );
+  });
+
+  it.each([
+    [
+      'safe then hazardous',
+      'mutate(()=>0);mutate(()=>fetch("https://invalid.example"));target.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'hazardous then safe',
+      'mutate(()=>fetch("https://invalid.example"));mutate(()=>0);target.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'hazardous read before safe',
+      'mutate(()=>fetch("https://invalid.example"));target.run();mutate(()=>0)',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'safe read before hazardous',
+      'mutate(()=>0);target.run();mutate(()=>fetch("https://invalid.example"))',
+      [],
+    ],
+  ])(
+    'orders concrete-receiver parameterized mutations (%s)',
+    (_label, operations, expected) => {
+      const source = `function mutate(run){target.run=()=>run()}const target={};${operations}`;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(expected);
+    }
+  );
+
+  it.each([
+    [
+      'direct repeated read',
+      'read();mutate();read()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'wrapped repeated read',
+      'wrapper();mutate();wrapper()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'mutation before all reads',
+      'mutate();read();read()',
+      ['fetch("https://invalid.example")'],
+    ],
+    ['mutation after all reads', 'read();read();mutate()', []],
+  ])(
+    'orders a mutation against the latest %s',
+    (_label, operations, expected) => {
+      const source = `const target={run:()=>0};function read(){target.run()}function wrapper(){read()}function mutate(){target.run=()=>fetch("https://invalid.example")}${operations}`;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(expected);
+    }
+  );
+
+  it.each([
+    ['safe', '()=>0', []],
+    [
+      'hazardous',
+      '()=>fetch("https://invalid.example")',
+      ['fetch("https://invalid.example")'],
+    ],
+  ])(
+    'bounds a %s delegated receiver-mutation doubling graph',
+    (_label, replacement, expected) => {
+      const owners = [`function mutate0(target){target.run=${replacement}}`];
+      for (let index = 1; index < 16; index += 1) {
+        owners.push(
+          `function mutate${String(index)}(target){mutate${String(index - 1)}(target);mutate${String(index - 1)}(target)}`
+        );
+      }
+      const source = `${owners.join('')}const target={run:()=>0};mutate15(target);target.run();`;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(expected);
+    }
+  );
+
+  it('memoizes shared delegated receiver-mutation descendants', () => {
+    const source =
+      'function leaf(target){target.run=()=>fetch("https://invalid.example")}function left(target){leaf(target)}function right(target){leaf(target)}function root(target){left(target);right(target)}const target={run:()=>0};root(target);target.run()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('terminates a recursive delegated receiver-mutation cycle', () => {
+    const source =
+      'function first(target){target.run=()=>fetch("https://invalid.example");second(target)}function second(target){first(target)}const target={run:()=>0};first(target);target.run()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it.each([
+    'function invoke(fn){return fn()}invoke(()=>fetch)("https://invalid.example")',
+    'function invoke(owner){return owner?.fn?.()}invoke({fn:()=>fetch})("https://invalid.example")',
+    'function run(params){params.effect("https://invalid.example")}run({effect:fetch})',
+    'function run(params){params?.effect?.("https://invalid.example")}run({effect:fetch})',
+  ])(
+    'detects a load effect propagated through a call result (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
+
+  it('keeps returned factory bindings scoped to their call site', () => {
+    const source =
+      'function outer(value){return()=>value}const bad=outer(()=>fetch("https://invalid.example")),safe=outer(()=>undefined);safe();bad()();';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('does not leak an unused hazardous factory binding into a safe call', () => {
+    const source =
+      'function outer(value){return()=>value}const bad=outer(()=>fetch("https://invalid.example")),safe=outer(()=>undefined);bad();safe()();';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'rest parameter',
+      'function make(...runs){return()=>runs[0]()}make(()=>fetch("https://invalid.example"))()',
+    ],
+    [
+      'implicit arguments',
+      'function make(){return()=>arguments[0]()}make(()=>fetch("https://invalid.example"))()',
+    ],
+    [
+      'rest parameter alias',
+      'function make(...runs){const values=runs;return()=>values[0]()}make(()=>fetch("https://invalid.example"))()',
+    ],
+    [
+      'implicit arguments alias',
+      'function make(){const values=arguments;return()=>values[0]()}make(()=>fetch("https://invalid.example"))()',
+    ],
+    [
+      'assignment-created rest parameter alias',
+      'function make(...runs){let values;values=runs;return()=>values[0]()}make(()=>fetch("https://invalid.example"))()',
+    ],
+    [
+      'assignment-created implicit arguments alias',
+      'function make(){let values;values=arguments;return()=>values[0]()}make(()=>fetch("https://invalid.example"))()',
+    ],
+    [
+      'destructured rest parameter',
+      'function make(...runs){const [run]=runs;return()=>run()}make(()=>fetch("https://invalid.example"))()',
+    ],
+    [
+      'destructured implicit arguments',
+      'function make(){const [run]=arguments;return()=>run()}make(()=>fetch("https://invalid.example"))()',
+    ],
+  ])(
+    'detects an immediately invoked returned closure capturing %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+        'fetch("https://invalid.example")'
+      );
+    }
+  );
+
+  it('propagates an assignment-created rest alias into a returned mutation operand', () => {
+    const source =
+      'function make(...args){let value;value=args[1];return()=>{args[0].run=value}}const target={run:()=>0};make(target,()=>fetch("https://invalid.example"))();target.run()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('uses the latest assignment-created returned-factory alias', () => {
+    const source =
+      'function make(...runs){let values=runs;values=[];return()=>values[0]?.()}make(()=>fetch("https://invalid.example"))()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('retains a possible returned-factory alias write after a definite write', () => {
+    const source =
+      'function make(...runs){let values=[];values=[];if(globalThis.flag)values=runs;return()=>values[0]?.()}make(()=>fetch("https://invalid.example"))()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'function make(run){let value=run;if(globalThis.flag)return()=>value();value=()=>0;return()=>value()}make(()=>fetch("https://invalid.example"))()',
+    'function make(...runs){let values=runs;if(globalThis.flag)return()=>values[0]?.();values=[];return()=>values[0]?.()}make(()=>fetch("https://invalid.example"))()',
+    'function make(run){const value=run;return()=>()=>value()}make(()=>fetch("https://invalid.example"))()()',
+    'function make(...runs){let values;values=runs;return()=>()=>values[0]()}make(()=>fetch("https://invalid.example"))()()',
+  ])('preserves a capture across returned-factory layers (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('keeps nested returned-factory aliases scoped to the invoked call site', () => {
+    const source =
+      'function make(run){const value=run;return()=>()=>value()}const bad=make(()=>fetch("https://invalid.example")),safe=make(()=>0);bad();safe()()()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'function outer(run){const value=run;function inner(){value()}inner()}outer(()=>fetch("https://nested-alias.invalid.example"))',
+    'function outer(run){let value;value=run;function inner(){value()}inner()}outer(()=>fetch("https://nested-assignment-alias.invalid.example"))',
+    'function outer(...runs){const values=runs;function inner(){values[0]()}inner()}outer(()=>fetch("https://nested-rest-alias.invalid.example"))',
+    'function outer(){const values=arguments;function inner(){values[0]()}inner()}outer(()=>fetch("https://nested-arguments-alias.invalid.example"))',
+  ])(
+    'preserves an outer capture in an ordinary nested owner (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
+
+  it.each([
+    'function make(run){return new Proxy(run,{})}make(()=>fetch("https://returned-proxy.invalid.example"))()',
+    'function make(run){return new Proxy(run,{})}const proxy=make(()=>fetch("https://stored-returned-proxy.invalid.example"));proxy()',
+    'function make(run){return Proxy.revocable(run,{}).proxy}make(()=>fetch("https://returned-revocable-proxy.invalid.example"))()',
+  ])('preserves a returned Proxy target capture (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'function make(handler){return new Proxy(()=>0,handler)}make({apply(){return fetch("https://returned-handler.invalid.example")}})()',
+    'function make(handler){return Proxy.revocable(()=>0,handler).proxy}make({apply(){return fetch("https://returned-revocable-handler.invalid.example")}})()',
+    'function make(options){return Proxy.revocable(options.target,options.handler).proxy}make({target:()=>0,handler:{apply(){return fetch("https://returned-projected-revocable-apply.invalid.example")}}})()',
+    'function make(options){return Proxy.revocable(options.target,options.handler).proxy}new (make({target:function(){},handler:{construct(){fetch("https://returned-projected-revocable-construct.invalid.example");return {}}}}))()',
+    'function make(options){const {proxy}=Proxy.revocable(options.target,options.handler);return proxy}make({target:()=>0,handler:{apply(){return fetch("https://returned-destructured-revocable-apply.invalid.example")}}})()',
+    'function make(options){const {proxy}=Proxy.revocable(options.target,options.handler);return proxy}new (make({target:function(){},handler:{construct(){fetch("https://returned-destructured-revocable-construct.invalid.example");return {}}}}))()',
+    'function make(){const handler={apply(){return fetch("https://returned-local-handler.invalid.example")}};return new Proxy(()=>0,handler)}make()()',
+    'function make(run){const value=run;return new Proxy(value,{})}make(()=>fetch("https://returned-proxy-alias.invalid.example"))()',
+    'function make(run){const value=run;return()=>new Proxy(()=>0,{apply(){return value()}})}make(()=>fetch("https://returned-trap-alias.invalid.example"))()()',
+  ])('preserves a returned Proxy handler or alias capture (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'function make(run){const value=run;return new Proxy({},{get(){value();return 0}})}make(()=>fetch("https://returned-get-trap-alias.invalid.example")).value',
+    'function make(run){const value=run;return new Proxy({},{set(){value();return true}})}const proxy=make(()=>fetch("https://returned-set-trap-alias.invalid.example"));proxy.value=1',
+  ])(
+    'preserves an alias captured by a returned Proxy property trap (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
+
+  it.each([
+    'function make(...handlers){return new Proxy({},handlers[0])}make({get(){return fetch("https://returned-rest-get-handler.invalid.example")}}).value',
+    'function make(){return new Proxy({},arguments[0])}make({get(){return fetch("https://returned-arguments-get-handler.invalid.example")}}).value',
+    'function make(...handlers){const values=handlers;return new Proxy({},values[0])}make({set(){return fetch("https://returned-rest-set-handler.invalid.example")}}).value=1',
+  ])('projects a returned Proxy property handler capture (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'function make(target){return new Proxy(target,{})}make({get value(){return fetch("https://returned-get-target.invalid.example")}}).value',
+    'function make(target){return new Proxy(target,{})}make({set value(next){fetch("https://returned-set-target.invalid.example")}}).value=1',
+    'function make(target){const value=target;return new Proxy(value,{})}make({get value(){return fetch("https://returned-alias-target.invalid.example")}}).value',
+    'function make(...targets){return new Proxy(targets[0],{})}make({get value(){return fetch("https://returned-rest-target.invalid.example")}}).value',
+    'function make(run){const value=run;const target={get value(){value();return 0}};return new Proxy(target,{})}make(()=>fetch("https://returned-local-target.invalid.example")).value',
+  ])(
+    'forwards a returned Proxy property operation to its target (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
+
+  it.each([
+    'function make(run){let value=run;value=()=>0;return new Proxy({},{get(){value();return 0}})}make(()=>fetch("https://overwritten-get-trap.invalid.example")).value',
+    'function make(run){let value=run;value=()=>0;return new Proxy({},{set(){value();return true}})}make(()=>fetch("https://overwritten-set-trap.invalid.example")).value=1',
+    'function make(run){let value=run;value=()=>0;return new Proxy(()=>0,{apply(){value();return 0}})}make(()=>fetch("https://overwritten-apply-trap.invalid.example"))()',
+    'function make(run){let value=run;value=()=>0;return new Proxy(function(){},{construct(){value();return {}}})}new (make(()=>fetch("https://overwritten-construct-trap.invalid.example")))()',
+    'function make(run){let handler={get(){run();return 0}};handler={get(){return 0}};return new Proxy({},handler)}make(()=>fetch("https://overwritten-get-handler.invalid.example")).value',
+  ])(
+    'ignores a definitely overwritten returned Proxy capture (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it('retains a possibly overwritten returned Proxy capture', () => {
+    const source =
+      'function make(run){let value=()=>0;if(globalThis.flag)value=run;return new Proxy({},{get(){value();return 0}})}make(()=>fetch("https://conditional-get-trap.invalid.example")).value';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'function make(...runs){return new Proxy(runs[0],{})}make(()=>fetch("https://returned-rest-proxy.invalid.example"))()',
+    'function make(){return new Proxy(arguments[0],{})}make(()=>fetch("https://returned-arguments-proxy.invalid.example"))()',
+    'function make(...runs){const values=runs;return new Proxy(values[0],{})}make(()=>fetch("https://returned-rest-alias-proxy.invalid.example"))()',
+    'function make(...handlers){return new Proxy(()=>0,handlers[0])}make({apply(){return fetch("https://returned-rest-handler.invalid.example")}})()',
+    'function make(){return new Proxy(()=>0,arguments[0])}make({apply(){return fetch("https://returned-arguments-handler.invalid.example")}})()',
+  ])('projects a returned Proxy target or handler capture (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'function make(run,handler){return new Proxy(run,handler)}make(()=>fetch("https://suppressed-returned-proxy.invalid.example"),{apply(){return 0}})()',
+    'function make(run){const handler={apply(){return 0}};return new Proxy(run,handler)}make(()=>fetch("https://suppressed-local-handler.invalid.example"))()',
+  ])('honors a suppressing returned Proxy handler (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('honors a suppressing projected Proxy handler', () => {
+    const source =
+      'function make(run,...handlers){return new Proxy(run,handlers[0])}make(()=>fetch("https://suppressed-projected-handler.invalid.example"),{apply(){return 0}})()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'function make(run){return new Proxy(()=>0,{apply(){run();return 0}})}Array.from([1],make(()=>fetch("https://returned-proxy-mapper.invalid.example")))',
+    'function make(run){return Proxy.revocable(()=>0,{apply(){run();return 0}}).proxy}Array.from([1],make(()=>fetch("https://returned-revocable-proxy-mapper.invalid.example")))',
+    'function make(run){return new Proxy(function(){},{construct(){run();return[]}})}Array.from.call(make(()=>fetch("https://returned-proxy-constructor.invalid.example")),[])',
+    'function make(run){return Proxy.revocable(function(){},{construct(){run();return[]}}).proxy}Array.from.call(make(()=>fetch("https://returned-revocable-proxy-constructor.invalid.example")),[])',
+    'function make(run){return new Proxy([],{get(target,key,receiver){if(key===Symbol.iterator)run();return Reflect.get(target,key,receiver)}})}Array.from(make(()=>fetch("https://returned-proxy-iterator.invalid.example")))',
+    'function make(run){return Proxy.revocable([],{get(target,key,receiver){if(key===Symbol.iterator)run();return Reflect.get(target,key,receiver)}}).proxy}Array.from(make(()=>fetch("https://returned-revocable-proxy-iterator.invalid.example")))',
+    'function make(options){return new Proxy(options.target,options.handler)}Array.from(make({target:[],handler:{get(target,key,receiver){fetch("https://returned-projected-proxy-iterator.invalid.example");return Reflect.get(target,key,receiver)}}}))',
+    'function make(options){return Proxy.revocable(options.target,options.handler).proxy}Array.from(make({target:[],handler:{get(target,key,receiver){fetch("https://returned-projected-revocable-iterator.invalid.example");return Reflect.get(target,key,receiver)}}}))',
+  ])('preserves a returned Proxy used by Array.from (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const values=new Proxy([],{get(target,key,receiver){return Reflect.get(target,fetch("https://proxy-get-key-effect.invalid.example"),receiver)}});Array.from(values)',
+    'const values=new Proxy([],{get(target,key,receiver){return Reflect.get(target,(fetch("https://proxy-get-comma-key-effect.invalid.example"),key),receiver)}});Array.from(values)',
+    'function make(run){return new Proxy([],{get(target,key,receiver){return Reflect.get(target,(run(),key),receiver)}})}Array.from(make(()=>fetch("https://returned-proxy-get-key-effect.invalid.example")))',
+    'const call=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply(target,(fetch("https://proxy-apply-this-effect.invalid.example"),thisArg),args)}});call()',
+    'const call=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply((fetch("https://proxy-apply-target-effect.invalid.example"),target),thisArg,args)}});call()',
+    'const Construct=new Proxy(function(){},{construct(target,args,newTarget){return Reflect.construct(target,(fetch("https://proxy-construct-args-effect.invalid.example"),args),newTarget)}});new Construct()',
+    'const handler={get get(){fetch("https://proxy-iterator-trap-getter.invalid.example");return(target,key,receiver)=>Reflect.get(target,key,receiver)}},values=new Proxy([],handler);Array.from(values)',
+    'const handler={get get(){fetch("https://proxy-iterator-missing-trap-getter.invalid.example");return undefined}},values=new Proxy([],handler);Array.from(values)',
+    'function make(run){const handler={get get(){run();return(target,key,receiver)=>Reflect.get(target,key,receiver)}};return new Proxy([],handler)}Array.from(make(()=>fetch("https://returned-proxy-iterator-trap-getter.invalid.example")))',
+    'const handler={get apply(){fetch("https://proxy-apply-trap-getter.invalid.example");return undefined}},call=new Proxy(()=>0,handler);call()',
+    'const handler={get apply(){fetch("https://proxy-apply-noncallable-trap-getter.invalid.example");return {}}},call=new Proxy(()=>0,handler);call()',
+    'const handler={get construct(){fetch("https://proxy-construct-trap-getter.invalid.example");return null}},Construct=new Proxy(function(){},handler);new Construct()',
+    'Reflect.apply=()=>fetch("https://mutated-reflect-apply.invalid.example");const call=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});call()',
+    'Object.defineProperty(Reflect,"apply",{value:()=>fetch("https://defined-reflect-apply.invalid.example")});const call=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});call()',
+    'Reflect.construct=()=>fetch("https://mutated-reflect-construct.invalid.example");const Construct=new Proxy(function(){},{construct(target,args,newTarget){return Reflect.construct(target,args,newTarget)}});new Construct()',
+    'Reflect.get=()=>fetch("https://mutated-reflect-get.invalid.example");const values=new Proxy([],{get(target,key,receiver){return Reflect.get(target,key,receiver)}});Array.from(values)',
+    'Reflect.get=()=>fetch("https://mutated-reflect-property-get.invalid.example");const proxy=new Proxy({},{get(target,key,receiver){return Reflect.get(target,key,receiver)}});proxy.value',
+    'Reflect.set(Reflect,"apply",()=>fetch("https://reflect-set-apply.invalid.example"));const call=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});call()',
+    'Object.assign(Reflect,{construct:()=>{fetch("https://object-assign-construct.invalid.example");return {}}});const Construct=new Proxy(function(){},{construct(target,args,newTarget){return Reflect.construct(target,args,newTarget)}});new Construct()',
+    'Object.defineProperties(Reflect,{get:{value:()=>fetch("https://define-properties-get.invalid.example")}});const values=new Proxy([],{get(target,key,receiver){return Reflect.get(target,key,receiver)}});Array.from(values)',
+    'const RuntimeReflect=Reflect;RuntimeReflect.construct=()=>{fetch("https://aliased-reflect-construct.invalid.example");return {}};const Construct=new Proxy(function(){},{construct(target,args,newTarget){return Reflect.construct(target,args,newTarget)}});new Construct()',
+    'Reflect.construct=()=>{fetch("https://captured-reflect-construct.invalid.example");return {}};const construct=Reflect.construct,Construct=new Proxy(function(){},{construct(target,args,newTarget){return construct(target,args,newTarget)}});new Construct()',
+  ])(
+    'preserves effects in a non-transparent Reflect Proxy trap (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
+
+  it.each([
+    'const original=Reflect.apply;Reflect.apply=()=>fetch("https://restored-reflect-apply.invalid.example");Reflect.apply=original;const call=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});call()',
+    'Reflect.apply=()=>fetch("https://overwritten-reflect-apply.invalid.example");Reflect.apply=()=>0;const call=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});call()',
+    'Reflect.get=()=>fetch("https://overwritten-reflect-get.invalid.example");Reflect.get=()=>0;const values=new Proxy([],{get(target,key,receiver){return Reflect.get(target,key,receiver)}});Array.from(values)',
+    'const call=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});call();Reflect.apply=()=>fetch("https://later-reflect-apply.invalid.example")',
+  ])(
+    'uses the current Reflect Proxy operation implementation (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it.each([
+    [
+      'Reflect.apply=()=>0;const call=new Proxy(()=>fetch("https://suppressed-reflect-apply-target.invalid.example"),{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});call()',
+      'fetch("https://suppressed-reflect-apply-target.invalid.example")',
+    ],
+    [
+      'Reflect.construct=()=>({});const Construct=new Proxy(function(){fetch("https://suppressed-reflect-construct-target.invalid.example")},{construct(target,args,newTarget){return Reflect.construct(target,args,newTarget)}});new Construct()',
+      'fetch("https://suppressed-reflect-construct-target.invalid.example")',
+    ],
+    [
+      'Reflect.get=()=>0;const target={get [Symbol.iterator](){fetch("https://suppressed-reflect-get-target.invalid.example")}},values=new Proxy(target,{get(target,key,receiver){return Reflect.get(target,key,receiver)}});Array.from(values)',
+      'fetch("https://suppressed-reflect-get-target.invalid.example")',
+    ],
+    [
+      'Reflect.get=()=>0;const target={get value(){fetch("https://suppressed-reflect-property-target.invalid.example")}},proxy=new Proxy(target,{get(target,key,receiver){return Reflect.get(target,key,receiver)}});proxy.value',
+      'fetch("https://suppressed-reflect-property-target.invalid.example")',
+    ],
+  ])(
+    'does not fall through a safe Reflect Proxy replacement (%s)',
+    (source, targetEffect) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toContain(
+        targetEffect
+      );
+    }
+  );
+
+  it.each([
+    [
+      'const handler={get apply(){fetch("https://proxy-apply-lookup.invalid.example");return {}}},call=new Proxy(()=>fetch("https://suppressed-proxy-apply-target.invalid.example"),handler);call()',
+      'fetch("https://proxy-apply-lookup.invalid.example")',
+      'fetch("https://suppressed-proxy-apply-target.invalid.example")',
+    ],
+    [
+      'const handler={get construct(){fetch("https://proxy-construct-lookup.invalid.example");return {}}},Construct=new Proxy(function(){fetch("https://suppressed-proxy-construct-target.invalid.example")},handler);new Construct()',
+      'fetch("https://proxy-construct-lookup.invalid.example")',
+      'fetch("https://suppressed-proxy-construct-target.invalid.example")',
+    ],
+    [
+      'const handler={get get(){fetch("https://proxy-iterator-lookup.invalid.example");return {}}},target={[Symbol.iterator](){fetch("https://suppressed-proxy-iterator-target.invalid.example")}},values=new Proxy(target,handler);Array.from(values)',
+      'fetch("https://proxy-iterator-lookup.invalid.example")',
+      'fetch("https://suppressed-proxy-iterator-target.invalid.example")',
+    ],
+  ])(
+    'stops after a noncallable Proxy trap lookup (%s)',
+    (source, lookupEffect, targetEffect) => {
+      const effects = inspectCloudflareLoadEffectsForTesting(source);
+      expect(effects).toContain(lookupEffect);
+      expect(effects).not.toContain(targetEffect);
+    }
+  );
+
+  it.each([
+    'function make(run){return()=>Array.from([0],()=>run())}make(()=>fetch("https://returned-array-from-capture.invalid.example"))()',
+    'function invoke(run){const box={run};Array.from([0],()=>box.run())}invoke(()=>fetch("https://array-from-object-capture.invalid.example"))',
+  ])('preserves a nested Array.from callback capture (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it('preserves a structured alias in a returned owner', () => {
+    const source =
+      'function make(run){const box={run};return()=>box.run()}make(()=>fetch("https://returned-object-capture.invalid.example"))()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'function make(run){return new Proxy(run,{})}const bad=make(()=>fetch("https://dormant-returned-proxy.invalid.example")),safe=make(()=>0);safe()',
+    'function make(run){return()=>Array.from([0],()=>run())}const bad=make(()=>fetch("https://dormant-returned-array-from.invalid.example")),safe=make(()=>0);safe()',
+  ])('keeps a dormant captured callback isolated (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('preserves an alias captured by a returned named owner', () => {
+    const source =
+      'function make(run){const value=run;function inner(){value()}return inner}make(()=>fetch("https://returned-named-owner.invalid.example"))()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it('preserves an implicit-arguments alias captured by a returned named owner', () => {
+    const source =
+      'function make(){const values=arguments;function inner(){values[0]()}return inner}make(()=>fetch("https://returned-named-arguments-owner.invalid.example"))()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it('ignores an unreachable returned Proxy branch', () => {
+    const source =
+      'function make(bad,safe){if(false)return new Proxy(bad,{});return new Proxy(safe,{})}make(()=>fetch("https://unreachable-returned-proxy.invalid.example"),()=>0)()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'new Proxy(()=>()=>fetch("https://proxy-result-target.invalid.example"),{})()()',
+    'new Proxy(()=>()=>fetch("https://proxy-result-undefined-trap.invalid.example"),{apply:undefined})()()',
+    'new Proxy(()=>0,{apply(){return()=>fetch("https://proxy-result-trap.invalid.example")}})()()',
+    'const safe=()=>()=>0,select=globalThis.flag?safe:new Proxy(()=>()=>fetch("https://conditional-proxy-result.invalid.example"),{});function make(){return select()}make()()',
+  ])('preserves a callable result returned through a Proxy (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'new Proxy(()=>()=>fetch("https://suppressed-proxy-result.invalid.example"),{apply(){return()=>0}})()()',
+    'new Proxy(()=>()=>fetch("https://noncallable-proxy-result.invalid.example"),{apply:1})()()',
+    'const bad=new Proxy(()=>()=>fetch("https://dormant-proxy-result.invalid.example"),{}),safe=()=>()=>0;safe()()',
+  ])('does not invent a suppressed or dormant Proxy result (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('orders an assignment-created member after its returned lexical-this mutation', () => {
+    const source =
+      'const factory={make(run){return()=>{this.run=run}}};factory.run=()=>0;factory.make(()=>fetch("https://invalid.example"))();factory.run()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('keeps an indirect descendant mutation fail-closed across shared call sites', () => {
+    const source =
+      'function mutate(value,run){value.run=run}const root={child:{run:()=>0}},alias=mutate;mutate(root,()=>undefined);alias(root.child,()=>fetch("https://invalid.example"));root.child.run();';
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects opaque aggregate member mutations'
+    );
+  });
+
+  it.each([
+    'const target={run:()=>0};function mutate(owner,value){owner.run=value}function outer(effect){mutate(target,effect)}outer(()=>fetch("https://invalid.example"));target.run()',
+    'function outer(secret){function init(target){Object.defineProperty(target,"run",{value:()=>secret()})}return target=>init(target)}const apply=outer(()=>fetch("https://invalid.example")),target={};apply(target);target.run()',
+    'function make(run){return target=>Object.defineProperty(target,"run",{value:run})}const first={},second={};make(()=>undefined)(first);make(()=>fetch("https://invalid.example"))(second);second.run()',
+  ])('preserves a captured mutation callback (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('resolves a directly invoked escaped factory result', () => {
+    const source =
+      'function make(run){return target=>Object.defineProperty(target,"run",{value:run})}const target={},mutate=make(()=>fetch("https://invalid.example"));mutate(target);target.run()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'function make(){return target=>Object.defineProperty(target,"run",{value:this.run})}const target={};make.call({run:()=>undefined})(target);target.run()',
+    'function make(){return target=>Object.defineProperty(target,"run",{value:this.run})}const target={};make.apply({run:()=>undefined},[])(target);target.run()',
+    'function make(){return target=>Object.defineProperty(target,"run",{value:()=>arguments[0]()})}const target={};make(()=>undefined)(target);target.run()',
+    'function make(...runs){return target=>Object.defineProperty(target,"run",{value:()=>runs[0]()})}const target={};make(()=>undefined)(target);target.run()',
+    'function make(run){run=()=>undefined;return target=>Object.defineProperty(target,"run",{value:()=>run()})}const target={};make(()=>undefined)(target);target.run()',
+    'function make(run,replace){if(replace)run=()=>undefined;return target=>Object.defineProperty(target,"run",{value:()=>run()})}const target={};make(()=>undefined,false)(target);target.run()',
+  ])(
+    'fails closed for an escaped or lexical-this factory result (%s)',
+    (source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
+  it.each([
+    'const target={run:()=>0};function mutate(owner,value){owner.run=value}function outer(effect){mutate(target,effect)}outer(()=>undefined);target.run()',
+    'function outer(secret){function init(target){Object.defineProperty(target,"run",{value:()=>secret()})}return target=>init(target)}const apply=outer(()=>undefined),target={};apply(target);target.run()',
+    'function run(params){params?.effect?.("https://invalid.example")}run({effect:()=>undefined})',
+  ])('keeps a safe propagated callback inert (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'const target={run:()=>0};function mutate(owner,value){owner.run=value}function make(fn){return(owner,value)=>fn(owner,value)}const invoke=make(mutate);invoke(target,()=>fetch("https://invalid.example"));target.run()',
+    'const target={run:()=>0};function mutate(owner,value){owner.run=value}function make(fn){return(owner,value)=>fn(owner,value)}const invoke=make(mutate);invoke(target,()=>undefined);target.run()',
+  ])(
+    'fails closed for a captured factory-dispatched mutation (%s)',
+    (source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
+  it.each([
+    'const owner=null;owner?.run(fetch("https://invalid.example"))',
+    'const owner=null;owner?.[fetch("https://invalid.example")]',
+    'const owner={run:null};owner.run?.(fetch("https://invalid.example"))',
+  ])(
+    'does not evaluate a statically skipped optional operand (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it('retains an optional operand when the receiver is unknown', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'owner?.run(fetch("https://invalid.example"))'
+      )
+    ).toEqual(['fetch("https://invalid.example")']);
+  });
+
+  it.each([
+    [
+      'an earlier hazardous source',
+      `
+        function assign(target, source) { Object.assign(target, source) }
+        const first = { run: () => 0 };
+        const second = { run: () => 0 };
+        assign(first, { run: () => fetch('https://invalid.example') });
+        assign(second, { run: () => 0 });
+        second.run();
+      `,
+      [],
+    ],
+    [
+      'a later hazardous source',
+      `
+        function assign(target, source) { Object.assign(target, source) }
+        const first = { run: () => 0 };
+        const second = { run: () => 0 };
+        assign(first, { run: () => 0 });
+        assign(second, { run: () => fetch('https://invalid.example') });
+        second.run();
+      `,
+      ["fetch('https://invalid.example')"],
+    ],
+  ])(
+    'keeps Object.assign receiver and source operands correlated with %s',
+    (_label, source, expected) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(expected);
+    }
+  );
+
+  it.each([
+    [
+      'a later hazardous call',
+      `
+        assign(target, { run: () => 0 });
+        target.run();
+        assign(target, { run: () => fetch('https://invalid.example') });
+      `,
+      [],
+    ],
+    [
+      'an earlier hazardous call',
+      `
+        assign(target, { run: () => fetch('https://invalid.example') });
+        target.run();
+        assign(target, { run: () => 0 });
+      `,
+      ["fetch('https://invalid.example')"],
+    ],
+  ])(
+    'preserves a concrete mutation callsite before an intervening read with %s',
+    (_label, body, expected) => {
+      const source = `
+        function assign(target, source) { Object.assign(target, source) }
+        const target = { run: () => 0 };
+        ${body}
+      `;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(expected);
+    }
+  );
+
+  it('keeps a safe nested descriptor member independent from a peer parameter', () => {
+    const source = `
+      function install(target, source) {
+        Object.defineProperty(target, 'box', {
+          value: { safe: () => 0, other: source },
+        });
+      }
+      const target = {};
+      install(target, () => fetch('https://invalid.example'));
+      target.box.safe();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('resolves a selected nested descriptor parameter at its callsite', () => {
+    const source = `
+      function install(target, source) {
+        Object.defineProperty(target, 'box', {
+          value: { safe: () => 0, other: source },
+        });
+      }
+      const target = {};
+      install(target, () => fetch('https://invalid.example'));
+      target.box.other();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      "fetch('https://invalid.example')",
+    ]);
+  });
+
+  it.each([
+    [
+      'an earlier hazardous nested value',
+      `
+        install(first, () => fetch('https://invalid.example'));
+        install(second, () => 0);
+      `,
+      [],
+    ],
+    [
+      'a later hazardous nested value',
+      `
+        install(first, () => 0);
+        install(second, () => fetch('https://invalid.example'));
+      `,
+      ["fetch('https://invalid.example')"],
+    ],
+  ])(
+    'keeps nested descriptor operands correlated with %s',
+    (_label, invocations, expected) => {
+      const source = `
+        function install(target, source) {
+          Object.defineProperty(target, 'box', {
+            value: { safe: () => 0, other: source },
+          });
+        }
+        const first = {};
+        const second = {};
+        ${invocations}
+        second.box.other();
+      `;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(expected);
+    }
+  );
+
+  it('tracks aliased receivers through a static callback parameter', () => {
+    const source =
+      'function invoke(callback,target){callback(target,target)}invoke((first,second)=>{Object.defineProperty(first,"run",{value:()=>fetch("https://invalid.example")});second.run()},{});';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('retains an analyzable branch when a local mutator may be invoked through an export', () => {
+    const source =
+      'function mutate(target){Object.defineProperty(target,"run",{value:()=>fetch("https://invalid.example")})}const first={};const second={run:()=>0};mutate(first);second.run();export{mutate};';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it.each([
+    [
+      'named declaration export',
+      'export function mutate(target){Object.defineProperty(target,"run",{value:()=>fetch("https://invalid.example")})}const first={};const second={run:()=>0};mutate(first);second.run();',
+    ],
+    [
+      'default declaration export',
+      'export default function mutate(target){Object.defineProperty(target,"run",{value:()=>fetch("https://invalid.example")})}const first={};const second={run:()=>0};mutate(first);second.run();',
+    ],
+  ])('retains an analyzable branch for a %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('retains fail-closed behavior for an opaque exported mutation', () => {
+    const source =
+      'export function mutate(target,key,value){Object.defineProperty(target,key,{value})}const first={};const second={run:()=>0};mutate(first,"safe",()=>0);second.run();';
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects opaque aggregate member mutations'
+    );
+  });
+
+  it.each([
+    [
+      'named specifier',
+      'function mutate(target,key,value){Object.defineProperty(target,key,{value})}export{mutate};',
+      'mutate(first,"safe",()=>0);',
+    ],
+    [
+      'default specifier',
+      'function mutate(target,key,value){Object.defineProperty(target,key,{value})}export{mutate as default};',
+      'mutate(first,"safe",()=>0);',
+    ],
+    [
+      'exported arrow binding',
+      'export const mutate=(target,key,value)=>Object.defineProperty(target,key,{value});',
+      'mutate(first,"safe",()=>0);',
+    ],
+    [
+      'aliased binding',
+      'const install=(target,key,value)=>Object.defineProperty(target,key,{value});const mutate=install;export{mutate};',
+      'mutate(first,"safe",()=>0);',
+    ],
+    [
+      'anonymous default',
+      'export default function(target,key,value){Object.defineProperty(target,key,{value})}',
+      '',
+    ],
+  ])(
+    'retains fail-closed behavior for an opaque %s export',
+    (_label, exportSource, invocation) => {
+      const source = `${exportSource}const first={};const second={run:()=>0};${invocation}second.run();`;
+
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'object variable declaration',
+      'const first={run:()=>0};const {target}={target:first};function mutate(value){value.run=()=>fetch("https://invalid.example")}mutate(target);first.run();',
+    ],
+    [
+      'array variable declaration',
+      'const first={run:()=>0};const [target]=[first];function mutate(value){value.run=()=>fetch("https://invalid.example")}mutate(target);first.run();',
+    ],
+    [
+      'object assignment',
+      'const first={run:()=>0};let target;({target}={target:first});function mutate(value){value.run=()=>fetch("https://invalid.example")}mutate(target);first.run();',
+    ],
+    [
+      'array assignment',
+      'const first={run:()=>0};let target;[target]=[first];function mutate(value){value.run=()=>fetch("https://invalid.example")}mutate(target);first.run();',
+    ],
+  ])('links receiver identity through an %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it.each([
+    [
+      'object default',
+      'const first={run:()=>0};const {target=first}={};function mutate(value){value.run=()=>fetch("https://invalid.example")}mutate(target);first.run();',
+    ],
+    [
+      'array default',
+      'const first={run:()=>0};const [target=first]=[];function mutate(value){value.run=()=>fetch("https://invalid.example")}mutate(target);first.run();',
+    ],
+    [
+      'object assignment default',
+      'const first={run:()=>0};let target;({target=first}={});function mutate(value){value.run=()=>fetch("https://invalid.example")}mutate(target);first.run();',
+    ],
+    [
+      'array assignment default',
+      'const first={run:()=>0};let target;[target=first]=[];function mutate(value){value.run=()=>fetch("https://invalid.example")}mutate(target);first.run();',
+    ],
+  ])('fails closed for a destructured %s receiver', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it.each([
+    ['direct member assignment', 'box.target=first'],
+    ['array member assignment', 'box[0]=first', 'box[0]'],
+    [
+      'Object.defineProperty',
+      'Object.defineProperty(box,"target",{value:first})',
+    ],
+    ['Object.assign', 'Object.assign(box,{target:first})'],
+    ['Reflect.set', 'Reflect.set(box,"target",first)'],
+    [
+      'Object.defineProperties',
+      'Object.defineProperties(box,{target:{value:first}})',
+    ],
+  ])(
+    'links receiver identity through %s',
+    (_label, install, targetExpression = 'box.target') => {
+      const source = `
+        const first={run:()=>0};
+        const box={};
+        ${install};
+        function mutate(value){value.run=()=>fetch("https://invalid.example")}
+        mutate(${targetExpression});
+        first.run();
+      `;
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+        'fetch("https://invalid.example")',
+      ]);
+    }
+  );
+
+  it('resolves an aggregate member alias when reading a prior mutation', () => {
+    const source = `
+      const first={run:()=>0};
+      const box={};
+      box.target=first;
+      function mutate(value){value.run=()=>fetch("https://invalid.example")}
+      mutate(first);
+      box.target.run();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('conservatively tracks a receiver through an unmodeled array mutation', () => {
+    const source = `
+      const first={run:()=>0};
+      const box=[];box.push(first);
+      function mutate(value){value.run=()=>fetch("https://invalid.example")}
+      mutate(box[0]);
+      first.run();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('tracks a receiver through a statically resolved local helper mutation', () => {
+    const source = `
+      const first={run:()=>0};
+      const box={};
+      function put(container,value){container.target=value}
+      put(box,first);
+      function mutate(value){value.run=()=>fetch("https://invalid.example")}
+      mutate(box.target);
+      first.run();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it.each([
+    [
+      'Object.assign',
+      'function put(box,value){Object.assign(box,{target:value})}',
+      'put(box,first)',
+    ],
+    [
+      'Reflect.set',
+      'function put(box,value){Reflect.set(box,"target",value)}',
+      'put(box,first)',
+    ],
+    [
+      'Object.defineProperty',
+      'function put(box,value){Object.defineProperty(box,"target",{value})}',
+      'put(box,first)',
+    ],
+    [
+      'delegated helper',
+      'function write(box,value){box.target=value}function put(box,value){write(box,value)}',
+      'put(box,first)',
+    ],
+    [
+      'destructured parameter',
+      'function put({box},value){box.target=value}',
+      'put({box},first)',
+    ],
+    [
+      'object-member alias',
+      'function store(box,value){box.target=value}const service={store}',
+      'service.store(box,first)',
+    ],
+  ])(
+    'tracks a receiver through a local %s mutation',
+    (_label, helper, invocation) => {
+      const source = `
+        const first={run:()=>0};
+        const box={};
+        ${helper};
+        ${invocation};
+        function mutate(value){value.run=()=>fetch("https://invalid.example")}
+        mutate(box.target);
+        first.run();
+      `;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+        'fetch("https://invalid.example")',
+      ]);
+    }
+  );
+
+  it('keeps a well-known Symbol member mutation isolated from string members', () => {
+    const source = `
+      const target={run:()=>0};
+      Object.defineProperty(target,Symbol.hasInstance,{
+        value:()=>fetch("https://invalid.example")
+      });
+      target.run();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('resolves a well-known Symbol member mutation at a computed read', () => {
+    const source = `
+      const target={};
+      Object.defineProperty(target,Symbol.hasInstance,{
+        value:()=>fetch("https://invalid.example")
+      });
+      target[Symbol.hasInstance]();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('executes an installed defineProperty getter when its member is read', () => {
+    const source = `
+      const target={};
+      Object.defineProperty(target,"run",{
+        get:()=>fetch("https://invalid.example")
+      });
+      target.run;
+    `;
+
+    const effects = inspectCloudflareLoadEffectsForTesting(source);
+    expect(effects).toHaveLength(2);
+    expect(effects[0]).toContain('Object.defineProperty');
+    expect(effects[1]).toBe('fetch("https://invalid.example")');
+  });
+
+  it('does not invoke a setter-only defineProperty member when read', () => {
+    const source = `
+      const target={};
+      Object.defineProperty(target,"run",{set:()=>undefined});
+      target.run;
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('keeps a defineProperty getter isolated from another static member', () => {
+    const source = `
+      const target={safe:()=>0};
+      Object.defineProperty(target,"run",{
+        get:()=>fetch("https://invalid.example")
+      });
+      target.safe();
+    `;
+
+    const effects = inspectCloudflareLoadEffectsForTesting(source);
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toContain('Object.defineProperty');
+  });
+
+  it.each([
+    'const source={};Object.defineProperties(source,{effect:{enumerable:true,get(){fetch("https://invalid.example");return 1}}});const target={...source};',
+    'const source={},descriptor={enumerable:true,get(){fetch("https://invalid.example");return 1}};Object.defineProperties(source,{effect:descriptor});const {effect}=source;',
+  ])(
+    'rejects accessor-bearing defineProperties during installation (%s)',
+    (source) => {
+      const effects = inspectCloudflareLoadEffectsForTesting(source);
+      expect(effects).toHaveLength(1);
+      expect(effects[0]).toContain('Object.defineProperties');
+    }
+  );
+
+  it.each([
+    'const source={get effect(){fetch("https://invalid.example");return 1}};Object.values(source);',
+    'const source={get effect(){fetch("https://invalid.example");return 1}};Object.entries(source);',
+    'const source={get effect(){fetch("https://invalid.example");return 1}};JSON.stringify(source);',
+    'const source={get effect(){fetch("https://invalid.example");return 1}};structuredClone(source);',
+    'const source={get effect(){fetch("https://invalid.example");return 1}},values=Object.values;values.call(null,source);',
+  ])('rejects a reflective getter read (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it('allows reflective reads of a static data object', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const source={effect:1};Object.values(source);JSON.stringify(source);'
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    'const source={};source.effect={get nested(){fetch("https://invalid.example");return 1}};JSON.stringify(source);',
+    'const source={};Reflect.set(source,"effect",{get nested(){fetch("https://invalid.example");return 1}});structuredClone(source);',
+    'const source={};Object.defineProperty(source,"effect",{enumerable:true,value:{get nested(){fetch("https://invalid.example");return 1}}});JSON.stringify(source);',
+    'const source=[];source[0]={get nested(){fetch("https://invalid.example");return 1}};structuredClone(source);',
+    'const source=[];source.push({get nested(){fetch("https://invalid.example");return 1}});structuredClone(source);',
+    'const source=[];source.toJSON=()=>fetch("https://invalid.example");JSON.stringify(source);',
+    'const key=new String("effect");key.toString=()=>{fetch("https://invalid.example");return "effect"};const replacer=[];replacer.push(key);JSON.stringify({effect:1},replacer);',
+    'const transfer=[];transfer[Symbol.iterator]=()=>{fetch("https://invalid.example");return [][Symbol.iterator]()};const options={transfer};structuredClone({},options);',
+    'structuredClone({},{get transfer(){fetch("https://invalid.example");return []}});',
+    'const prototype={get transfer(){fetch("https://invalid.example");return []}};const options={__proto__:prototype};structuredClone({},options);',
+    'Array.prototype[Symbol.iterator]=function*(){fetch("https://invalid.example")};structuredClone({},{transfer:[]});',
+  ])('rejects a post-construction reflective hook (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'Object.defineProperty(String.prototype,Symbol.iterator,{value:function*(){fetch("https://invalid.example")}});new Set("value")',
+    'const prototype=String.prototype;prototype[Symbol.iterator]=function*(){fetch("https://invalid.example")};new Set("value")',
+    'const StringAlias=String;StringAlias.prototype[Symbol.iterator]=function*(){fetch("https://invalid.example")};new Set("value")',
+    'delete String.prototype[Symbol.iterator];new Set("value")',
+    'Reflect.deleteProperty(String.prototype,Symbol.iterator);new Set("value")',
+    'function remove(){delete String.prototype[Symbol.iterator]}remove();new Set("value")',
+    'delete Array.prototype[Symbol.iterator];new Set([1])',
+    'Reflect.deleteProperty(Array.prototype,Symbol.iterator);Object.fromEntries([["effect",1]])',
+    'const prototype=Object.getPrototypeOf([][Symbol.iterator]());delete prototype.next;new Set([1])',
+    'const prototype=Object.getPrototypeOf([][Symbol.iterator]());Reflect.deleteProperty(prototype,"next");new Set([1])',
+    'function mutate(prototype){delete prototype.next}mutate(Object.getPrototypeOf([][Symbol.iterator]()));new Set([1])',
+    'function mutate(prototype){prototype.next=undefined}function wrapper(){mutate(Object.getPrototypeOf([][Symbol.iterator]()))}wrapper();new Set([1])',
+    'Array.prototype[Symbol.iterator]++;new Set([1])',
+    'const prototype=Object.getPrototypeOf([][Symbol.iterator]());prototype.next++;new Set([1])',
+    'const prototype=Object.getPrototypeOf([][Symbol.iterator]());prototype.__defineGetter__("next",()=>undefined);new Set([1])',
+    'function install(prototype,value){Object.assign(prototype,{next:value})}install(Object.getPrototypeOf([][Symbol.iterator]()),function(){fetch("https://invalid.example");return{done:true}});new Set([])',
+  ])('rejects a mutated String iterator prototype (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it('ignores an unreachable String iterator prototype mutation', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'if(false)String.prototype[Symbol.iterator]=function*(){fetch("https://invalid.example")};new Set("value")'
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    'const values={[Symbol.iterator](){fetch("https://invalid.example");return {next(){return {done:true}}}}};for(const value of values){}',
+    'const values={[Symbol.iterator](){return {next(){fetch("https://invalid.example");return {done:true}}}}};for(const value of values){}',
+    'const values={[Symbol.iterator](){fetch("https://invalid.example");return {next(){return {done:true}}}}};const [value]=values',
+  ])('models general iterator protocol execution (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'const values={[Symbol.iterator](){return {next(){return {get done(){fetch("https://done.invalid.example");return true}}}}}};for(const value of values){}',
+    'const values={[Symbol.iterator](){return {next(){return {done:false,get value(){fetch("https://value.invalid.example");return 1}}}}}};const [value]=values',
+    'const values={[Symbol.iterator](){fetch("https://array-from.invalid.example");return [][Symbol.iterator]()}};Array.from(values)',
+    'function* values(){fetch("https://array-from-generator.invalid.example")}const current=values();Array.from(current)',
+  ])('models observable iterator result access (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const values={[Symbol.iterator](){return {next(){return {done:false,value:1}},get return(){fetch("https://close-get.invalid.example");return function(){fetch("https://close-call.invalid.example")}}}}};for(const value of values){break}',
+    'const values={[Symbol.iterator](){return {next(){return {done:false,value:1}},return(){fetch("https://close.invalid.example")}}}};const [value]=values',
+    'const values={[Symbol.iterator](){return {next(){fetch("https://unread-next.invalid.example");return {done:false,value:1}},return(){fetch("https://empty-close.invalid.example")}}}};const []=values',
+    'const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://continue-close.invalid.example")}}}};outer:for(let index=0;index<1;index++){for(const value of values){continue outer}}',
+    'const target={set value(next){throw new Error(String(next))}};const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://assignment-close.invalid.example")}}}};for(target.value of values){}',
+    'const target={set value(next){throw new Error(String(next))}};const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://pattern-close.invalid.example")}}}};for([target.value] of values){}',
+  ])('models IteratorClose execution (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const values={[Symbol.iterator](){return {next(){return {run(){fetch("https://done-this.invalid.example")},get done(){this.run();return true}}}}}};for(const value of values){}',
+    'const values={[Symbol.iterator](){return {next(){return {done:false,value:1}},run(){fetch("https://close-this.invalid.example")},return(){this.run()}}}};for(const value of values){break}',
+  ])('preserves iterator protocol receivers (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const values={[Symbol.iterator](){return{next(){fetch("https://parameter.invalid.example");return{done:true}}}}};function take([value]){};take(values)',
+    'const inner={[Symbol.iterator](){return{next(){fetch("https://nested.invalid.example");return{done:true}}}}};const [[value]]=[inner]',
+    'const inner={[Symbol.iterator](){return{next(){fetch("https://for-declaration.invalid.example");return{done:true}}}}};for(const [value] of [inner]){}',
+    'const inner={[Symbol.iterator](){return{next(){fetch("https://for-assignment.invalid.example");return{done:true}}}}};let value;for([value] of [inner]){}',
+    'const values={[Symbol.iterator](){return{next(){fetch("https://default-parameter.invalid.example");return{done:true}}}}};function take([value]=values){};take()',
+    'const values={[Symbol.iterator](){fetch("https://nested-default.invalid.example");return[][Symbol.iterator]()}};const {value:[nested]=values}={}',
+    'const values={[Symbol.iterator](){fetch("https://nested-parameter-default.invalid.example");return[][Symbol.iterator]()}};function take({value:[nested]=values}){};take({})',
+    'const values={[Symbol.iterator](){fetch("https://rest-parameter.invalid.example");return[][Symbol.iterator]()}};function take(...[[nested]]){};take(values)',
+  ])('models nested and parameter iterator consumption (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const values={[Symbol.iterator](){fetch("https://call.invalid.example");return [][Symbol.iterator]()}};Array.from.call(null,values)',
+    'const values={[Symbol.iterator](){fetch("https://apply.invalid.example");return [][Symbol.iterator]()}};Array.from.apply(null,[values])',
+    'const values={[Symbol.iterator](){fetch("https://reflect-apply.invalid.example");return [][Symbol.iterator]()}};Reflect.apply(Array.from,null,[values])',
+    'const receiver={run(){fetch("https://mapper-this.invalid.example")}};Array.from([1],function(){this.run()},receiver)',
+    'const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://mapper-close.invalid.example")}}}};Array.from(values,()=>{throw new Error()})',
+    'Array.from({get length(){fetch("https://array-like-length.invalid.example");return 0}})',
+    'Array.from({length:1,get 0(){fetch("https://array-like-index.invalid.example");return 1}})',
+    'const values={length:1,0:1};Object.defineProperty(values,"0",{get(){fetch("https://array-like-mutated-index.invalid.example")}});Array.from(values)',
+    'const flag=globalThis.flag;if(flag)Array.from=()=>[];const values={[Symbol.iterator](){fetch("https://conditional-replacement.invalid.example");return[][Symbol.iterator]()}};Array.from(values)',
+    'function fail(){throw new Error()}const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://wrapped-mapper-close.invalid.example")}}}};Array.from(values,()=>fail())',
+    'const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://conditional-mapper-close.invalid.example")}}}};Array.from(values,()=>{if(globalThis.flag)throw new Error()})',
+    'const hazardous={run(){fetch("https://bound-mapper-this.invalid.example")}},safe={run(){}};Array.from([1],function(){this.run()}.bind(hazardous),safe)',
+    'Array.from([()=>fetch("https://mapper-value.invalid.example")],value=>value())',
+    'function Collection(){fetch("https://array-from-constructor.invalid.example")}Array.from.call(Collection,[])',
+    'const values=new Proxy([],{get(target,key,receiver){if(key===Symbol.iterator)fetch("https://proxy-iterator.invalid.example");return Reflect.get(target,key,receiver)}});Array.from(values)',
+    'const mapper=new Proxy(()=>0,{apply(){fetch("https://proxy-mapper.invalid.example");return 1}});Array.from([1],mapper)',
+    'const mapper=Proxy.revocable(()=>0,{apply(){fetch("https://revocable-proxy-mapper.invalid.example");return 1}}).proxy;Array.from([1],mapper)',
+    'const Result=new Proxy(function(){},{construct(){fetch("https://proxy-constructor.invalid.example");return[]}});Array.from.call(Result,[])',
+    'const Result=Proxy.revocable(function(){},{construct(){fetch("https://revocable-proxy-constructor.invalid.example");return[]}}).proxy;Array.from.call(Result,[])',
+    'const values={[Symbol.iterator](){fetch("https://bound-array-from.invalid.example");return[][Symbol.iterator]()}};Array.from.bind(null,values)()',
+    'const values={[Symbol.iterator](){fetch("https://proxied-array-from.invalid.example");return[][Symbol.iterator]()}},from=new Proxy(Array.from,{});from(values)',
+  ])('models Array.from protocol execution (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const values={[Symbol.iterator](){fetch("https://bound-call-array-from.invalid.example");return[][Symbol.iterator]()}};Function.prototype.bind.call(Array.from,null,values)()',
+    'const values={[Symbol.iterator](){fetch("https://bound-apply-array-from.invalid.example");return[][Symbol.iterator]()}};Array.from.apply.bind(Array.from,null,[values])()',
+    'const values={[Symbol.iterator](){fetch("https://reflect-bound-array-from.invalid.example");return[][Symbol.iterator]()}};Reflect.apply(Function.prototype.bind,Array.from,[null,values])()',
+  ])('fails closed for a complex bound Array.from dispatch (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const flag=globalThis.flag;if(flag)Array.from=()=>[];const values={[Symbol.iterator](){fetch("https://conditional-replacement.invalid.example");return [][Symbol.iterator]()}};Array.from(values)',
+    'globalThis.flag?Array.from=()=>[]:0;const values={[Symbol.iterator](){fetch("https://conditional-expression-replacement.invalid.example");return [][Symbol.iterator]()}};Array.from(values)',
+  ])(
+    'retains the intrinsic Array.from path after an uncertain replacement (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
+
+  it.each([
+    'function fail(){throw new Error()}const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://indirect-mapper-close.invalid.example")}}}};Array.from(values,()=>fail())',
+    'const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://conditional-mapper-close.invalid.example")}}}};Array.from(values,()=>{if(globalThis.flag)throw new Error()})',
+  ])(
+    'closes an Array.from iterator when a mapper may complete abruptly (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
+
+  it.each([
+    'const unsafe={run(){fetch("https://bound-mapper-this.invalid.example")}},safe={run(){}};const mapper=function(){this.run()}.bind(unsafe);Array.from([1],mapper,safe)',
+    'const mapper=(value)=>value();const bound=mapper.bind(null,()=>fetch("https://bound-mapper-value.invalid.example"));Array.from([()=>{}],bound)',
+    'Array.from([()=>fetch("https://array-mapper-value.invalid.example")],value=>value())',
+    'Array.from({0:()=>fetch("https://array-like-mapper-value.invalid.example"),length:1},value=>value())',
+    'const values={length:0};values[0]=()=>fetch("https://assigned-array-like-mapper.invalid.example");values.length=1;Array.from(values,value=>value())',
+    'const values={length:0};Object.assign(values,{0:()=>fetch("https://assigned-object-array-like-mapper.invalid.example"),length:1});Array.from(values,value=>value())',
+    'const values={length:0};Object.defineProperties(values,{0:{value:()=>fetch("https://defined-array-like-mapper.invalid.example")},length:{value:1}});Array.from(values,value=>value())',
+  ])(
+    'binds the concrete Array.from mapper receiver and values (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
+
+  it.each([
+    'function Result(){fetch("https://array-from-constructor.invalid.example")}Array.from.call(Result,[])',
+    'function Result(){fetch("https://array-from-reflect-constructor.invalid.example")}Reflect.apply(Array.from,Result,[{length:0}])',
+  ])('models a custom Array.from result constructor (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const unsafe={run(){fetch("https://ignored-array-from-this.invalid.example")}},safe={run(){}};const mapper=function(){this.run()}.bind(safe);Array.from([1],mapper,unsafe)',
+    'Array.from([],()=>fetch("https://empty-array-mapper.invalid.example"))',
+    'Array.from({length:0},()=>fetch("https://empty-array-like-mapper.invalid.example"))',
+    'Array.from({length:-1,get 0(){fetch("https://negative-array-like-index.invalid.example")}})',
+    'const values=[1];values.length=0;Array.from(values,()=>fetch("https://shrunk-array-mapper.invalid.example"))',
+    'const values=new Proxy([],{});Array.from(values)',
+    'const values=Proxy.revocable([],{}).proxy;Array.from(values)',
+    'const values=new Proxy([],{get(target,key,receiver){return Reflect.get(target,key,receiver)}});Array.from(values)',
+    'const values=new Proxy([],{get(target,key,receiver){void key;return Reflect.get(target,key,receiver)}});Array.from(values)',
+    'function make(){return new Proxy([],{get(target,key,receiver){void key;return Reflect.get(target,key,receiver)}})}Array.from(make())',
+    'function make(){return new Proxy([],{get(target,key,receiver){if(false)fetch("https://unreachable-proxy-iterator.invalid.example");return Reflect.get(target,key,receiver)}})}Array.from(make())',
+    'function make(target){return new Proxy(target,{})}Array.from(make([]))',
+    'function make(){const target=[];return new Proxy(target,{})}Array.from(make())',
+    'function make(options){return new Proxy(options.target,options.handler)}Array.from(make({target:[],handler:{get(target,key,receiver){void key;return Reflect.get(target,key,receiver)}}}))',
+    'function make(options){return Proxy.revocable(options.target,options.handler).proxy}Array.from(make({target:[],handler:{}}))',
+    'function make(options){return Proxy.revocable(options.target,options.handler).proxy}Array.from(make({target:[],handler:{get(target,key,receiver){void key;return Reflect.get(target,key,receiver)}}}))',
+    'function make(options){return Proxy.revocable(options.target,options.handler).proxy}const bad=make({target:{[Symbol.iterator](){fetch("https://dormant-revocable-iterator.invalid.example")}},handler:{}}),safe=make({target:[],handler:{}});Array.from(safe)',
+    'function make(options){return new Proxy(options.target,options.handler)}Array.from(make({target:{get [Symbol.iterator](){fetch("https://suppressed-projected-iterator.invalid.example");return Array.prototype[Symbol.iterator]}},handler:{get(){return function(){return [][Symbol.iterator]()}}}}))',
+    'function make(target,...handlers){return new Proxy(target,handlers[0])}Array.from(make({get [Symbol.iterator](){fetch("https://suppressed-rest-iterator.invalid.example");return Array.prototype[Symbol.iterator]}},{get(){return function(){return [][Symbol.iterator]()}}}))',
+    'function make(run){let value=run;value=()=>0;return new Proxy([],{get(target,key,receiver){value();return Reflect.get(target,key,receiver)}})}Array.from(make(()=>fetch("https://overwritten-proxy-iterator.invalid.example")))',
+    'const target={[Symbol.iterator](){fetch("https://suppressed-proxy-iterator.invalid.example")}},values=new Proxy(target,{get(){return function(){return [][Symbol.iterator]()}}});Array.from(values)',
+    'const mapper=new Proxy(()=>0,{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});Array.from([1],mapper)',
+    'const from=new Proxy(Array.from,{apply(target,thisArg,args){return Reflect.apply(target,thisArg,args)}});from([1])',
+    'const values={0:()=>fetch("https://overwritten-direct-array-like.invalid.example"),length:1};values[0]=()=>0;Array.from(values,value=>value())',
+    'const values={0:()=>fetch("https://overwritten-assign-array-like.invalid.example"),length:1};Object.assign(values,{0:()=>0});Array.from(values,value=>value())',
+    'const values={0:()=>fetch("https://overwritten-descriptor-array-like.invalid.example"),length:1};Object.defineProperties(values,{0:{value:()=>0}});Array.from(values,value=>value())',
+  ])('does not invent Array.from mapper or index execution (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'const values={[Symbol.iterator](){return {next(){return {done:true,get value(){fetch("https://unread.invalid.example")}}}}}};for(const value of values){}',
+    'const values={[Symbol.iterator](){return {next(){return {done:true}},return(){fetch("https://unclosed.invalid.example")}}}};const [value]=values',
+    'const values={[Symbol.iterator](){return {next(){return {done:true}},return(){fetch("https://rest-unclosed.invalid.example")}}}};const [...all]=values',
+    'const Array={from(){}};const values={[Symbol.iterator](){fetch("https://shadowed.invalid.example");return [][Symbol.iterator]()}};Array.from(values)',
+    'Array.from=()=>[];const values={[Symbol.iterator](){fetch("https://replaced.invalid.example");return [][Symbol.iterator]()}};Array.from(values)',
+    'Array.from({length:0})',
+    'Array.from({0:1,length:1})',
+    'const values={length:1,get 0(){fetch("https://array-like-replaced-index.invalid.example");return 1}};Object.defineProperty(values,"0",{value:1});Array.from(values)',
+    'const hazardous={run(){fetch("https://ignored-mapper-this.invalid.example")}},safe={run(){}};Array.from([1],function(){this.run()}.bind(safe),hazardous)',
+    'Array.from({length:-1,get 0(){fetch("https://negative-length.invalid.example")}})',
+    'Array.from([],()=>fetch("https://empty-mapper.invalid.example"))',
+    'Array.from({length:0},()=>fetch("https://empty-array-like-mapper.invalid.example"))',
+    'const values={run(){},[Symbol.iterator](){this.run();return{next(){return{done:true}}}}};for(const value of values){}',
+    'const values={get [Symbol.iterator](){return function(){return{next(){return{done:true}}}}}};for(const value of values){}',
+    'const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://unreachable-close.invalid.example")}}}};for(const value of values){if(false)break}',
+    'const values={[Symbol.iterator](){return{next(){return{done:false,value:1}},return(){fetch("https://unreachable-after-continue.invalid.example")}}}};for(const value of values){continue;break}',
+    'const values={[Symbol.iterator](){return{next(){return{get done(){throw new Error()},get value(){fetch("https://unread-value.invalid.example")}}},return(){fetch("https://iterator-error-close.invalid.example")}}}};for(const value of values){break}',
+    'const values={[Symbol.iterator](){return{next(){return{done:false,get value(){throw new Error()}}},return(){fetch("https://value-error-close.invalid.example")}}}};const [value]=values',
+  ])('does not invent iterator protocol execution (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('models a Proxy get trap during for-of iterator discovery', () => {
+    const source =
+      'const values=new Proxy([],{get(target,key,receiver){if(key===Symbol.iterator)fetch("https://proxy-for-of-iterator.invalid.example");return Reflect.get(target,key,receiver)}});for(const value of values){}';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://proxy-for-of-iterator.invalid.example")'
+    );
+  });
+
+  it('redispatches a transparent Proxy to Reflect.get semantics', () => {
+    const source =
+      'const value={get member(){fetch("https://proxied-reflect-get.invalid.example");return 1}},get=new Proxy(Reflect.get,{});get(value,"member")';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://proxied-reflect-get.invalid.example")'
+    );
+  });
+
+  it('rejects a for-of loop after an Array iterator mutation', () => {
+    const source =
+      'Array.prototype[Symbol.iterator]=function*(){fetch("https://invalid.example")};for(const value of [1]){}';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it.each([
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};const source={[key]:1};',
+    'const key={[Symbol.toPrimitive](){fetch("https://invalid.example");return "effect"}};const source={[key]:1};',
+    'const key={valueOf(){fetch("https://invalid.example");return "effect"}};const source={};source[key]=1;',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};class Source{[key](){}}',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};Object.defineProperty({},key,{value:1});',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};key in {};',
+    'const key={[Symbol.toPrimitive](){fetch("https://invalid.example");return "effect"}};key in {};',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};Object.fromEntries([[key,1]]);',
+    'Object.fromEntries({[Symbol.iterator](){fetch("https://invalid.example");return [][Symbol.iterator]()}});',
+    'const key=Object.create({toString(){fetch("https://invalid.example");return "effect"}});const source={[key]:1};',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};({}).hasOwnProperty(key);',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};({}).propertyIsEnumerable(key);',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};Object.prototype.hasOwnProperty.call({},key);',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};Object.prototype.hasOwnProperty.apply({},[key]);',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};Object.groupBy([1],()=>key);',
+    'const key=getKey();const source={[key]:1};',
+  ])('rejects an effectful computed property key (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it('allows a statically primitive computed property key', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const key="effect";const source={[key]:1};source[key];'
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    '"effect" in {};',
+    'Object.fromEntries([["effect",1]]);',
+    'Object.fromEntries([[]]);',
+    'Object.fromEntries([[,1]]);',
+    'class Source{#effect;static has(value){return #effect in value}}Source.has(new Source());',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};({hasOwnProperty(){return true}}).hasOwnProperty(key);',
+    'const key={toString(){fetch("https://invalid.example");return "effect"}};Map.groupBy([1],()=>key);',
+  ])('allows a safe property-key operation (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('rejects a primitive right operand for the in operator', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting('"effect" in 1;')
+    ).not.toEqual([]);
+  });
+
+  it('allows computed keys created by the unshadowed Symbol intrinsic', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const local=Symbol("local");const shared=Symbol.for("shared");const source={[local]:1,[shared]:2,[Symbol.iterator]:3};'
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    'new Set({[Symbol.iterator](){fetch("https://invalid.example");return [][Symbol.iterator]()}});',
+    'const Collection=Map;const values={*[Symbol.iterator](){fetch("https://invalid.example")}};new Collection(values);',
+    'const values={get [Symbol.iterator](){fetch("https://invalid.example");return function(){return [][Symbol.iterator]()}}};new WeakSet(values);',
+    'const values={[Symbol.iterator](){return {next(){fetch("https://invalid.example");return {done:true}}}}};new WeakMap(values);',
+    'const values={[Symbol.iterator](){fetch("https://invalid.example");return [][Symbol.iterator]()}};Reflect.construct(Set,[values]);',
+    'function build(Collection,values){return new Collection(values)}const values={[Symbol.iterator](){fetch("https://invalid.example");return [][Symbol.iterator]()}};build(Set,values);',
+    'const values=[];values[Symbol.iterator]=()=>{fetch("https://invalid.example");return [][Symbol.iterator]()};new Set(values);',
+    'String.prototype[Symbol.iterator]=function*(){fetch("https://invalid.example")};new Set("x");',
+    'new Map("x");',
+    'new WeakMap("x");',
+    'new WeakSet("x");',
+    'new WeakSet([1]);',
+    'new WeakSet([,]);',
+    'new WeakMap([[1,{}]]);',
+  ])('rejects an effectful collection iterable (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+  });
+
+  it('allows pristine static collection iterables', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'new Set([1,2]);new Set("safe");new Map([[1,2]]);new WeakSet([]);new WeakSet([{}]);new WeakSet([Symbol("key")]);new WeakMap([]);new WeakMap([[{},1]]);'
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    '[0].forEach(function(){this.run()},{run:()=>fetch("https://invalid.example")});',
+    'const visit=function(){this.run()};const receiver={run:()=>fetch("https://invalid.example")};[0].findLast(visit,receiver);',
+  ])('binds an array callback thisArg (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('keeps wide static array callback resolution bounded', () => {
+    const values = Array.from(
+      { length: 192 },
+      () => '{run:()=>undefined}'
+    ).join(',');
+
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        `const values=[${values}];values.forEach(value=>value.run());`
+      )
+    ).toEqual([]);
+  });
+
+  it('retains a hazardous member in a wide static array callback', () => {
+    const values = [
+      ...Array.from({ length: 191 }, () => '{run:()=>undefined}'),
+      '{run:()=>fetch("https://invalid.example")}',
+    ].join(',');
+
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        `const values=[${values}];values.forEach(value=>value.run());`
+      )
+    ).toContain('fetch("https://invalid.example")');
+  });
+
+  it('tracks a shadowed well-known Symbol member conservatively', () => {
+    const source = `
+      const Symbol={hasInstance:"run"};
+      const target={run:()=>0};
+      Object.defineProperty(target,Symbol.hasInstance,{
+        value:()=>fetch("https://invalid.example")
+      });
+      target.run();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it('does not let an unresolved parameter mutation poison an unshadowed ambient owner', () => {
+    const source = `
+      export function mutate(value,key){
+        value[key]=()=>fetch("https://invalid.example")
+      }
+      Object.defineProperty(class {},"name",{value:"Safe"});
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('tracks an explicit parameter mutation of an unshadowed ambient owner', () => {
+    const source = `
+      function mutate(value,key){
+        value[key]=()=>fetch("https://invalid.example")
+      }
+      mutate(Object,"defineProperty");
+      Object.defineProperty(class {},"name",{value:"Unsafe"});
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it.each([
+    [
+      'direct Object assignment',
+      'Object={defineProperty:()=>fetch("https://invalid.example")};Object.defineProperty({},"run",{});',
+    ],
+    [
+      'globalThis.Object assignment',
+      'globalThis.Object={defineProperty:()=>fetch("https://invalid.example")};globalThis.Object.defineProperty({},"run",{});',
+    ],
+    [
+      'direct Reflect assignment',
+      'Reflect={set:()=>fetch("https://invalid.example")};Reflect.set({},"run",0);',
+    ],
+    [
+      'direct Promise assignment',
+      'Promise={all:()=>({then:()=>fetch("https://invalid.example")})};Promise.all([]).then();',
+    ],
+    [
+      'globalThis.Promise assignment',
+      'globalThis.Promise={all:()=>({then:()=>fetch("https://invalid.example")})};globalThis.Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty Promise replacement',
+      'Object.defineProperty(globalThis,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+  ])('fails closed after a %s', (_label, source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects a replaced intrinsic global'
+    );
+  });
+
+  it('does not let an unresolved parameter mutation poison an isolated Promise aggregate', () => {
+    const source = `
+      export function mutate(value,key){
+        value[key]=()=>fetch("https://invalid.example")
+      }
+      Promise.all([]).then(()=>0);
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('tracks an explicit parameter mutation of an isolated Promise aggregate', () => {
+    const source = `
+      const promise=Promise.all([]);
+      function mutate(value){
+        value.then=()=>fetch("https://invalid.example")
+      }
+      mutate(promise);
+      promise.then();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'fetch("https://invalid.example")',
+    ]);
+  });
+
+  it.each([
+    [
+      'factory return',
+      'const shared={run:()=>0};shared.run=()=>fetch("https://invalid.example");function get(){return shared}get().run();',
+    ],
+    [
+      'constructor object return',
+      'const shared={run:()=>0};shared.run=()=>fetch("https://invalid.example");function Owner(){return shared}new Owner().run();',
+    ],
+    [
+      'patched Promise aggregate',
+      'const shared={then:()=>0};shared.then=()=>fetch("https://invalid.example");Promise.all=()=>shared;Promise.all([]).then();',
+    ],
+    [
+      'object-literal prototype',
+      'const proto={run:()=>0};proto.run=()=>fetch("https://invalid.example");({__proto__:proto}).run();',
+    ],
+    [
+      'Function prototype',
+      'Function.prototype.run=()=>fetch("https://invalid.example");(()=>0).run();',
+    ],
+    [
+      'Object.create prototype',
+      'const proto={run:()=>0};proto.run=()=>fetch("https://invalid.example");Object.create(proto).run();',
+    ],
+  ])('tracks a mutation through a resolved %s receiver', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('suppresses unresolved export aliases only for the exact reviewed Zod closure', () => {
+    const record = {
+      modules: [
+        {
+          id: 'node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js',
+          owner: 'non-app',
+        },
+      ],
+      ownership: 'non-app',
+      sha256:
+        'b58b76143de945661f801945b38db191e2fbe55ecd29e98f6d30fd9d54cec758',
+    };
+
+    const policy = inspectCloudflareReviewedClosurePolicyForTesting(record);
+    expect(policy.opaqueMemberMutationExemptions).toHaveLength(30);
+    expect(policy.safeCallExemptions).toEqual([]);
+    expect(
+      policy.opaqueMemberMutationExemptions.map(({ reason }) => typeof reason)
+    ).toEqual(Array.from({ length: 30 }, () => 'string'));
+    const mutationSources = policy.opaqueMemberMutationExemptions.flatMap(
+      ({ expectedMutationContainerSource, expectedMutationSource }) =>
+        [expectedMutationContainerSource, expectedMutationSource].filter(
+          (value) => value !== undefined
+        )
+    );
+    expect(mutationSources).toHaveLength(30);
+    expect(mutationSources.map((source) => typeof source)).toEqual(
+      Array.from({ length: 30 }, () => 'string')
+    );
+    expect(
+      inspectCloudflareReviewedClosurePolicyForTesting({
+        ...record,
+        sha256: '0'.repeat(64),
+      })
+    ).toEqual({ opaqueMemberMutationExemptions: [], safeCallExemptions: [] });
+    expect(
+      inspectCloudflareReviewedClosurePolicyForTesting({
+        ...record,
+        modules: [{ id: 'src/adversarial.ts', owner: 'non-app' }],
+      })
+    ).toEqual({ opaqueMemberMutationExemptions: [], safeCallExemptions: [] });
+
+    const prefix = 'function mutate(inst,k,proto){';
+    const reviewedSource = `${prefix.padEnd(571, ' ')}inst[k] = proto[k].bind(inst)}const target={_zod:()=>0};mutate(target,getKey(),{_zod(){},other(){}});target._zod();`;
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(reviewedSource)
+    ).toThrow('rejects opaque aggregate member mutations');
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(reviewedSource, record)
+    ).toThrow('test source hash must match');
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(reviewedSource, {
+        ...record,
+        sha256: '0'.repeat(64),
+      })
+    ).toThrow('test source hash must match');
+  });
+
+  it('preserves a reviewed member path through descriptor projections', () => {
+    const source =
+      'const getKey=()=>"_zod";function mutate(inst,k,proto){inst[k]=proto[k].bind(inst)}const target={_zod:()=>0};mutate(target,getKey(),{_zod(){},other(){}});target._zod();';
+    const mutationStart = source.indexOf('inst[k]=');
+    const mutationEnd = source.indexOf('}', mutationStart);
+    const mutationSource = source.slice(mutationStart, mutationEnd);
+    const reviewedClosure = {
+      opaqueMemberMutationExemptions: [
+        {
+          expectedMutationSource: mutationSource,
+          memberPathPart: '_zod',
+          mutationEnd,
+          mutationStart,
+          mutationType: 'AssignmentExpression',
+          reason:
+            'The exact prototype copy cannot replace the reviewed metadata path.',
+          suppressOpaqueMutation: true,
+        },
+      ],
+      safeCallExemptions: [],
+    };
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects opaque aggregate member mutations'
+    );
+    expect(
+      inspectCloudflareReviewedLoadEffectsForTesting(source, reviewedClosure)
+    ).toEqual([]);
+  });
+
+  it('validates reviewed exemption sources, ranges, and uniqueness', () => {
+    const source = 'const target={};target.run=()=>0;target.run();';
+    const mutationStart = source.indexOf('target.run=');
+    const mutationEnd = source.indexOf(';', mutationStart);
+    const readStart = source.lastIndexOf('target.run');
+    const readEnd = readStart + 'target.run'.length;
+    const exemption = {
+      expectedMutationSource: source.slice(mutationStart, mutationEnd),
+      expectedReadSource: source.slice(readStart, readEnd),
+      mutationEnd,
+      mutationStart,
+      mutationType: 'AssignmentExpression',
+      readEnd,
+      readStart,
+      readType: 'MemberExpression',
+      reason: 'The exact fixture mutation and read are intentionally paired.',
+      suppressOpaqueMutation: true,
+    };
+    expect(
+      inspectCloudflareReviewedPolicyValidationForTesting(source, {
+        opaqueMemberMutationExemptions: [exemption],
+      })
+    ).toBe(true);
+    expect(() =>
+      inspectCloudflareReviewedPolicyValidationForTesting(source, {
+        opaqueMemberMutationExemptions: [
+          { ...exemption, expectedMutationSource: 'target.safe=()=>0' },
+        ],
+      })
+    ).toThrow('source must match its reviewed bytes');
+    expect(() =>
+      inspectCloudflareReviewedPolicyValidationForTesting(source, {
+        opaqueMemberMutationExemptions: [exemption, exemption],
+      })
+    ).toThrow('must not duplicate another exemption');
+    expect(() =>
+      inspectCloudflareReviewedPolicyValidationForTesting(source, {
+        opaqueMemberMutationExemptions: [
+          exemption,
+          { ...exemption, reason: 'Different prose for the same behavior.' },
+        ],
+      })
+    ).toThrow('must not duplicate another exemption');
+    expect(() =>
+      inspectCloudflareReviewedPolicyValidationForTesting(source, {
+        opaqueMemberMutationExemptions: [
+          { ...exemption, undocumentedSelector: true },
+        ],
+      })
+    ).toThrow('must not define unknown policy fields');
+  });
+
+  it('resolves a projected parameter receiver in each call-site scope', () => {
+    const source = `
+      function handle(result, final, key, present) {
+        if (result.value === undefined) {
+          if (present) final.value[key] = undefined;
+        } else final.value[key] = result.value;
+      }
+      function parse(payload, key, result) {
+        handle(result, payload, key, true);
+        return payload;
+      }
+      parse({ value: {} }, 'field', { value: undefined });
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('terminates a projected parameter mutation whose value reads a peer parameter', () => {
+    const source = `
+      function handle(result, final, key, present) {
+        if (result.value === undefined) {
+          if (present) final.value[key] = undefined;
+        } else final.value[key] = result.value;
+      }
+      function parse(payload, key, result, pending) {
+        if (pending) {
+          Promise.resolve(result).then((resolved) =>
+            handle(resolved, payload, key, true)
+          );
+        } else {
+          handle(result, payload, key, true);
+        }
+        return payload;
+      }
+      parse({ value: {} }, 'field', { value: undefined }, false);
+    `;
 
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
   });
@@ -1545,6 +3877,89 @@ describe('runtime artifact verifier', () => {
 
   it.each([
     [
+      'dormant wrapper containing both write and read',
+      'const target={run:()=>0};function wrapper(){mutate();read()}read();function mutate(){target.run=()=>fetch("https://invalid.example")}function read(){target.run()}',
+    ],
+    [
+      'dormant recursive wrapper cycle',
+      'const target={run:()=>0};function a(){b()}function b(){a();mutate();read()}read();function mutate(){target.run=()=>fetch("https://invalid.example")}function read(){target.run()}',
+    ],
+  ])('ignores a mutation path in a %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'array forEach callback',
+      'const target={run:()=>0};[0].forEach(()=>{target.run=()=>fetch("https://invalid.example")});target.run();',
+    ],
+    [
+      'generic callback parameter',
+      'const target={run:()=>0};function apply(callback){callback()}apply(()=>{target.run=()=>fetch("https://invalid.example")});target.run();',
+    ],
+    [
+      'named generic callback parameter',
+      'const target={run:()=>0};function mutate(){target.run=()=>fetch("https://invalid.example")}function apply(callback){callback()}apply(mutate);target.run();',
+    ],
+    [
+      'callback invoking a helper',
+      'const target={run:()=>0};function mutate(){target.run=()=>fetch("https://invalid.example")}function apply(callback){callback()}apply(()=>mutate());target.run();',
+    ],
+  ])('orders a mutation through a synchronous %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    [
+      'two helper edges',
+      'const target={run:()=>0},dispatch={run:()=>0};function apply(callback){callback()}function install(){dispatch.run=helper}function helper(){mutate()}function mutate(){target.run=()=>fetch("https://invalid.example")}function invoke(){dispatch.run()}function read(){target.run()}apply(install);invoke();read()',
+    ],
+    [
+      'three helper edges',
+      'const target={run:()=>0},dispatch={run:()=>0};function apply(callback){callback()}function install(){dispatch.run=helper}function helper(){middle()}function middle(){mutate()}function mutate(){target.run=()=>fetch("https://invalid.example")}function invoke(){dispatch.run()}function read(){target.run()}apply(install);invoke();read()',
+    ],
+  ])('replays readers after discovering %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'const target={run:()=>0},dispatch={run:()=>0};function apply(callback){callback()}function install(){dispatch.run=helper}function helper(){mutate()}function mutate(){target.run=()=>0}function invoke(){dispatch.run()}function read(){target.run()}apply(install);invoke();read()',
+    'const target={run:()=>0},dispatch={run:()=>0};function apply(callback){callback()}function install(){dispatch.run=helper}function helper(){cycle()}function cycle(){helper()}function invoke(){dispatch.run()}function read(){target.run()}apply(install);invoke();read()',
+  ])('terminates a safe multi-hop mutation graph', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('builds the same bounded mutation graph across declaration orders', () => {
+    const readers = Array.from(
+      { length: 128 },
+      (_unused, index) => `function r${String(index)}(){target.run()}`
+    ).join('');
+    const calls = Array.from(
+      { length: 128 },
+      (_unused, index) => `r${String(index)}()`
+    ).join(';');
+    const prefix = 'const target={run:()=>0};';
+    const mutation = 'function mutate(){target.run=()=>0}';
+    const execution = `mutate();${calls}`;
+
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        `${prefix}${mutation}${readers}${execution}`
+      )
+    ).toEqual([]);
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        `${prefix}${readers}${mutation}${execution}`
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
       'nested member receiver',
       'const box={target:{run:()=>0}};box.target.run=()=>fetch("https://invalid.example");box.target.run();',
     ],
@@ -1610,6 +4025,51 @@ describe('runtime artifact verifier', () => {
     ]);
   });
 
+  it.each(['undefined', 'null'])(
+    'treats a %s Object.assign source as a no-op',
+    (source) => {
+      expect(
+        inspectCloudflareLoadEffectsForTesting(
+          `const target={run:()=>fetch("https://invalid.example")};Object.assign(target,${source});target.run()`
+        )
+      ).toEqual(['fetch("https://invalid.example")']);
+    }
+  );
+
+  it.each([
+    [
+      'direct target',
+      'const target={run:()=>0};Object.assign(target,source());target.run()',
+    ],
+    [
+      'preexisting alias',
+      'const target={run:()=>0},alias=target;Object.assign(target,source());alias.run()',
+    ],
+    [
+      'returned alias',
+      'const target={run:()=>0};const alias=Object.assign(target,source());alias.run()',
+    ],
+    [
+      'container alias',
+      'const target={run:()=>0},box={target};Object.assign(target,source());box.target.run()',
+    ],
+  ])(
+    'keeps an opaque Object.assign source fail-closed through a %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
+  it('does not propagate an exact Object.assign mutation to an unrelated receiver', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const first={};const second={run:()=>0};Object.assign(first,source());second.run()'
+      )
+    ).toEqual([]);
+  });
+
   it.each([
     [
       'named prototype getter',
@@ -1634,6 +4094,15 @@ describe('runtime artifact verifier', () => {
   });
 
   it.each([
+    'Object.create(null,{run:{value:()=>fetch("https://invalid.example")}}).run()',
+    'Object.fromEntries([["run",()=>fetch("https://invalid.example")]]).run()',
+  ])('models a static object-producing intrinsic (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
     [
       'Reflect.defineProperty data descriptor',
       'const target={};Reflect.defineProperty(target,"run",{value:()=>fetch("https://invalid.example")});target.run();',
@@ -1647,6 +4116,38 @@ describe('runtime artifact verifier', () => {
       'fetch("https://invalid.example")',
     ]);
   });
+
+  it.each([
+    'Reflect.set({},"run",()=>fetch("https://stored.invalid.example"))',
+    'const set=Reflect.set;set({},"run",()=>fetch("https://stored-alias.invalid.example"))',
+    'Reflect.set.call(null,{},"run",()=>fetch("https://stored-call.invalid.example"))',
+    'Reflect.set.apply(null,[{},"run",()=>fetch("https://stored-apply.invalid.example")])',
+    'Reflect.apply(Reflect.set,null,[{},"run",()=>fetch("https://stored-reflect-apply.invalid.example")])',
+  ])(
+    'keeps a function merely stored by intrinsic Reflect.set dormant (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it('preserves callback execution by a shadowed Reflect.set', () => {
+    const source =
+      'const Reflect={set(_target,_key,value){value()}};Reflect.set({},"run",()=>fetch("https://shadowed-reflect-set.invalid.example"))';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://shadowed-reflect-set.invalid.example")'
+    );
+  });
+
+  it.each([
+    'const target={set run(value){value()}};Reflect.set(target,"run",()=>fetch("https://reflect-set-setter.invalid.example"))',
+    'const set=Reflect.set,target={set run(value){value()}};set(target,"run",()=>fetch("https://aliased-reflect-set-setter.invalid.example"))',
+  ])(
+    'passes the stored Reflect.set value to an invoked setter (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
+    }
+  );
 
   it.each([
     [
@@ -1758,12 +4259,20 @@ describe('runtime artifact verifier', () => {
 
   it.each([
     'const target={};Object.defineProperties(target,{run:{__proto__:{value:()=>fetch("https://invalid.example")}}});target.run();',
-    'Object.prototype.value=()=>fetch("https://invalid.example");const target={};Object.defineProperties(target,{run:{}});target.run();',
     'const key=getKey();const target={};Object.defineProperties(target,{[key]:{value:()=>fetch("https://invalid.example")}});target[key]();',
     'const key=Symbol.for("run");const target={};Object.defineProperties(target,{[key]:{value:()=>fetch("https://invalid.example")}});target[key]();',
   ])('fails closed for ambiguous descriptor semantics', (source) => {
     expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
       'rejects opaque aggregate member mutations'
+    );
+  });
+
+  it('tracks inherited descriptor fields on Object.prototype', () => {
+    const source =
+      'Object.prototype.value=()=>fetch("https://invalid.example");const target={};Object.defineProperties(target,{run:{}});target.run();';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
     );
   });
 
@@ -1948,6 +4457,14 @@ describe('runtime artifact verifier', () => {
     'Object.getOwnPropertyDescriptor(globalThis,"fetch").value("https://invalid.example")',
     'const get=Reflect.get;get(globalThis,"fetch")("https://invalid.example")',
     'const descriptor=Object.getOwnPropertyDescriptor(globalThis,"fetch");descriptor.value("https://invalid.example")',
+    'const evil=()=>fetch("https://invalid.example"),target={run:evil};function get(target,key){return Reflect.get(target,key)}get(target,"run")()',
+    'const evil=()=>fetch("https://invalid.example"),target={run:evil};function get(target,key){return Object.getOwnPropertyDescriptor(target,key)}get(target,"run").value()',
+    'Reflect.get({get effect(){fetch("https://invalid.example");return 1}},"effect")',
+    'const base={get effect(){this.run()}},receiver={run:()=>fetch("https://invalid.example")};Reflect.get(base,"effect",receiver)',
+    'Object.getOwnPropertyDescriptor({get effect(){fetch("https://invalid.example")}},"effect").get()',
+    'Object.getOwnPropertyDescriptor({set effect(value){fetch("https://invalid.example")}},"effect").set(1)',
+    'Reflect.getOwnPropertyDescriptor({effect:()=>fetch("https://invalid.example")},"effect").value()',
+    'function descriptor(target,key){return Reflect.getOwnPropertyDescriptor(target,key)}descriptor({effect:()=>fetch("https://invalid.example")},"effect").value()',
   ])('detects a reflective load-effect read', (source) => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).not.toEqual([]);
   });
@@ -1976,6 +4493,38 @@ describe('runtime artifact verifier', () => {
     );
   });
 
+  const sharedLocalFactoryDag = (leaf, layerCount) => {
+    const layers = [
+      `const layer0=make(${leaf});`,
+      ...Array.from(
+        { length: layerCount },
+        (_unused, index) =>
+          `const layer${index + 1}=fan(layer${index},layer${index});`
+      ),
+    ].join('');
+    return `const make=effect=>()=>effect(),fan=(left,right)=>()=>{left();right()},consume=action=>()=>action();${layers}consume(layer${layerCount})();`;
+  };
+
+  it('bounds a safe shared local factory DAG by unique specialization', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(sharedLocalFactoryDag('()=>0', 10))
+    ).toEqual([]);
+  });
+
+  it('preserves a hazardous leaf in a shared local factory DAG', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        sharedLocalFactoryDag('()=>fetch("https://invalid.example")', 10)
+      )
+    ).toContain('fetch("https://invalid.example")');
+  });
+
+  it('fails deep local factory resolution with the bounded diagnostic', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(sharedLocalFactoryDag('()=>0', 14))
+    ).toThrow('exceeded bounded target candidate resolution depth');
+  });
+
   it('indexes a wide set of irrelevant member mutations without quadratic scans', () => {
     const writes = Array.from(
       { length: 4_096 },
@@ -1989,22 +4538,159 @@ describe('runtime artifact verifier', () => {
     ).toEqual([]);
   });
 
-  it('bounds a wide member-mutation and read workload', () => {
-    const writes = Array.from(
-      { length: 4_096 },
-      (_unused, index) => `target["member${String(index)}"]=()=>undefined`
+  it('indexes uncertain receiver calls once for pristine collections', () => {
+    const constructions = Array.from(
+      { length: 512 },
+      () => 'new Set([1])'
     ).join(';');
-    const reads = Array.from(
-      { length: 4_096 },
-      (_unused, index) => `target["member${String(index)}"]()`
-    ).join(';');
+
+    expect(
+      inspectCloudflareUncertainReceiverIndexForTesting(constructions)
+    ).toEqual({ builds: 1, candidatesVisited: 0 });
+  });
+
+  it('treats receiver details as uncertain during index construction', () => {
+    expect(
+      inspectCloudflareProvisionalReceiverDetailsForTesting('const target={}')
+    ).toEqual({
+      component: expect.any(String),
+      isolated: false,
+      opaqueUncertain: true,
+      uncertain: true,
+    });
+  });
+
+  it('separates dynamic Object.assign members from target identity', () => {
+    const source =
+      'const configure=(plugin)=>{const atoms={};const methods={};if(plugin.getAtoms)Object.assign(atoms,plugin.getAtoms?.());if(plugin.pathMethods)Object.assign(methods,plugin.pathMethods);return{atoms,methods}}';
+
+    expect(
+      inspectCloudflareReceiverDetailsForTesting(source, [
+        'atoms',
+        'methods',
+        'plugin',
+      ])
+    ).toEqual({
+      atoms: {
+        component: expect.any(String),
+        isolated: true,
+        opaqueUncertain: false,
+        uncertain: false,
+      },
+      methods: {
+        component: expect.any(String),
+        isolated: true,
+        opaqueUncertain: false,
+        uncertain: false,
+      },
+      plugin: {
+        component: expect.any(String),
+        isolated: false,
+        opaqueUncertain: false,
+        uncertain: true,
+      },
+    });
+  });
+
+  it('checks indexed uncertain receiver calls against collection sources', () => {
+    expect(
+      inspectCloudflareUncertainReceiverIndexForTesting(
+        'const values=[1];values.push(2);new Set(values)'
+      )
+    ).toEqual({ builds: 1, candidatesVisited: 1 });
+  });
+
+  it('bounds total candidate work across individually bounded phases', () => {
+    expect(() =>
+      inspectCloudflareAnalysisBudgetForTesting([
+        131_000, 131_000, 131_000, 131_000, 289,
+      ])
+    ).toThrow('exceeded bounded candidate work');
+  });
+
+  it('bounds aggregate resolution across fresh lexical contexts', () => {
+    expect(inspectCloudflareAggregateResolutionDepthForTesting(64)).toEqual({
+      activeAfter: 0,
+      activeAtLeaf: 64,
+    });
+    expect(() =>
+      inspectCloudflareAggregateResolutionDepthForTesting(65)
+    ).toThrow('exceeded bounded aggregate resolution stack');
+    expect(inspectCloudflareAggregateResolutionDepthForTesting(1)).toEqual({
+      activeAfter: 0,
+      activeAtLeaf: 1,
+    });
+  });
+
+  it('enforces independent base and invocation analysis ceilings', () => {
+    expect(() =>
+      inspectCloudflareAnalysisBucketsForTesting([
+        { amount: 131_073, bucket: 'base' },
+      ])
+    ).toThrow('exceeded bounded candidate work');
+    expect(() =>
+      inspectCloudflareAnalysisBucketsForTesting([
+        { amount: 262_145, bucket: 'invocation' },
+      ])
+    ).toThrow('exceeded bounded candidate work');
+  });
+
+  it('counts both analysis buckets toward the shared total ceiling', () => {
+    expect(() =>
+      inspectCloudflareAnalysisBucketsForTesting([
+        { amount: 131_000, bucket: 'base', reset: true },
+        { amount: 131_000, bucket: 'invocation', reset: true },
+        { amount: 131_000, bucket: 'base', reset: true },
+        { amount: 131_000, bucket: 'invocation', reset: true },
+        { amount: 289, bucket: 'invocation', reset: true },
+      ])
+    ).toThrow('exceeded bounded candidate work');
+  });
+
+  it('restores the analysis bucket after nested success and failure', () => {
+    expect(
+      inspectCloudflareAnalysisBucketsForTesting([
+        { amount: 1, bucket: 'nested-invocation' },
+        { amount: 1, bucket: 'nested-invocation', catch: true, throw: true },
+        { amount: 1, bucket: 'base' },
+      ])
+    ).toEqual({ activeBucket: undefined, base: 1, invocation: 2, total: 3 });
+  });
+
+  it('bounds recursive parameter receiver propagation before the JavaScript stack', () => {
+    const wrappers = [
+      'function f0(target){target.run=()=>fetch("https://invalid.example")}',
+      ...Array.from({ length: 31 }, (_unused, offset) => {
+        const index = offset + 1;
+        return `function f${String(index)}(target){f${String(index - 1)}(target)}`;
+      }),
+    ].join(';');
 
     expect(() =>
       inspectCloudflareLoadEffectsForTesting(
-        `const target={};${writes};${reads};`
+        `${wrappers};const target={run:()=>0};f31(target);target.run();`
       )
-    ).toThrow('exceeded bounded candidate work');
+    ).toThrow('exceeded bounded parameter projection depth');
   });
+
+  it('indexes wide direct-call parameter mutations without quadratic program scans', () => {
+    const functionCount = 2_048;
+    const functions = Array.from(
+      { length: functionCount },
+      (_unused, index) =>
+        `function mutate${String(index)}(target){target.member${String(index)}=()=>undefined}`
+    ).join(';');
+    const calls = Array.from(
+      { length: functionCount },
+      (_unused, index) => `mutate${String(index)}(target)`
+    ).join(';');
+
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        `const target={safe:()=>undefined};${functions};${calls};target.safe();`
+      )
+    ).toEqual([]);
+  }, 5_000);
 
   it.each([
     [
@@ -2019,20 +4705,21 @@ describe('runtime artifact verifier', () => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
   });
 
-  it('models a dynamic member write as a wildcard mutation', () => {
+  it('flags an unresolved dynamic key and models its write as a wildcard mutation', () => {
     const source =
       'const target={run:()=>undefined};target[key]=()=>fetch("https://invalid.example");target.run();';
 
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'key',
       'fetch("https://invalid.example")',
     ]);
   });
 
-  it('allows a safe dynamic member write', () => {
+  it('flags unresolved key coercion even when the assigned value is safe', () => {
     const source =
       'const target={run:()=>undefined};target[key]=()=>undefined;target.run();';
 
-    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(['key']);
   });
 
   it('keeps a recursive dynamic aggregate cursor locally scoped', () => {
@@ -2042,13 +4729,31 @@ describe('runtime artifact verifier', () => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
   });
 
-  it('rejects an opaque prior member mutation', () => {
+  it('analyzes a safe accessor installed by a prior member mutation', () => {
     const source =
       'const target={run:()=>undefined};Object.defineProperty(target,"run",{get(){return()=>undefined}});target.run();';
 
-    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
-      'rejects opaque aggregate member mutations'
+    const effects = inspectCloudflareLoadEffectsForTesting(source);
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toContain('Object.defineProperty');
+  });
+
+  it('executes a setter installed by defineProperty on assignment', () => {
+    const source =
+      'const target={};Object.defineProperty(target,"run",{set:()=>fetch("https://invalid.example")});target.run=1;';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
     );
+  });
+
+  it('executes a computed key expression during a write-only member access', () => {
+    const source =
+      'const target={};target.run=createValue();target[getKey()]=1;';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      'getKey()',
+    ]);
   });
 
   it.each([
@@ -2103,6 +4808,36 @@ describe('runtime artifact verifier', () => {
     [
       'nested Reflect.apply intrinsic mutation',
       'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");Reflect.apply(Reflect.apply,null,[Object.defineProperty,null,[route,"handler",{value:()=>1}]]);route({loader:()=>1});',
+      false,
+      ['createFileRoute', 'route'],
+    ],
+    [
+      'direct bound intrinsic mutation',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");Object.assign.bind(null,route,{handler:()=>1})();route({loader:()=>1});',
+      false,
+      ['createFileRoute', 'route'],
+    ],
+    [
+      'aliased bound intrinsic mutation',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");const mutate=Object.assign.bind(null,route,{handler:()=>1});mutate();route({loader:()=>1});',
+      false,
+      ['createFileRoute', 'route'],
+    ],
+    [
+      'destructured assignment alias mutation',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");let alias;[alias]=[route];alias.handler=()=>1;route({loader:()=>1});',
+      false,
+      ['alias', 'createFileRoute', 'route'],
+    ],
+    [
+      'spread intrinsic mutation arguments',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");const args=[route,{handler:()=>1}];Object.assign(...args);route({loader:()=>1});',
+      false,
+      ['args', 'createFileRoute', 'route'],
+    ],
+    [
+      'inline parameter projection mutation',
+      'import{createFileRoute}from"./reviewed.js";const route=createFileRoute("/x");function mutate({route}){Object.assign(route,{handler:()=>1})}mutate({route});route({loader:()=>1});',
       false,
       ['createFileRoute', 'route'],
     ],
@@ -2188,20 +4923,61 @@ describe('runtime artifact verifier', () => {
     expect(states.every(({ unmutated }) => unmutated)).toBe(true);
   }, 5_000);
 
-  it('accepts each exact target artifact contract', () => {
-    const root = fixture();
-    createNodeArtifact(root);
-    createVercelArtifact(root);
-    createCloudflareArtifact(root);
+  it.each([
+    [
+      'an assignment alias',
+      'let first;first=require_react();const second=require_react();first.useRef=()=>0;',
+      ['first', 'second'],
+      false,
+    ],
+    [
+      'an object container alias',
+      'const box={first:require_react()},second=require_react();box.first.useRef=()=>0;',
+      ['box', 'second'],
+      false,
+    ],
+    [
+      'an array container alias',
+      'const items=[require_react()],second=require_react();items[0].useRef=()=>0;',
+      ['items', 'second'],
+      false,
+    ],
+    [
+      'safe repeated declarators',
+      'const first=require_react(),second=require_react();void first;void second;',
+      ['first', 'second'],
+      true,
+    ],
+  ])(
+    'indexes reviewed singleton results through %s',
+    (_label, body, roots, unmutated) => {
+      const states = inspectCloudflareReviewedSingletonReceiverRootsForTesting(
+        `import{require_react}from"./react.js";${body}`
+      );
 
-    expect(verifyRuntimeProfile('node', root)).toBe('node');
-    expect(verifyRuntimeProfile('vercel', root)).toBe('vercel');
-    expect(
-      verifyRuntimeProfile('cloudflare', root, {
-        expectedAppSlug: 'acme-app',
-      })
-    ).toBe('cloudflare');
-  });
+      expect(states).toHaveLength(2);
+      expect(states.every((state) => state.unmutated === unmutated)).toBe(true);
+      expect(
+        states.every(
+          (state) => JSON.stringify(state.roots) === JSON.stringify(roots)
+        )
+      ).toBe(true);
+    }
+  );
+
+  it.each([
+    ['node', createNodeArtifact, undefined],
+    ['vercel', createVercelArtifact, undefined],
+    ['cloudflare', createCloudflareArtifact, { expectedAppSlug: 'acme-app' }],
+  ])(
+    'accepts the exact %s target artifact contract',
+    (profile, create, options) => {
+      const root = fixture();
+      create(root);
+
+      expect(verifyRuntimeProfile(profile, root, options)).toBe(profile);
+    }
+  );
 
   it('explains how to verify a Cloudflare artifact without provenance', () => {
     const root = fixture();
@@ -2613,6 +5389,7 @@ describe('runtime artifact verifier', () => {
     'const dormant=(effect)=>{const alias=effect;alias()};const unused=()=>dormant(()=>fetch("https://invalid.example"));',
     'const runner={};Object.defineProperty(runner,"run",{value:()=>fetch("https://invalid.example")});',
     'function* dormant(){fetch("https://invalid.example")}dormant();',
+    'const left=()=>undefined,right=()=>fetch("https://invalid.example");(left||right)();',
   ])('does not activate a dormant or shadowed load effect (%s)', (prefix) => {
     const root = fixture();
     createCloudflareArtifact(root);
@@ -2636,7 +5413,6 @@ describe('runtime artifact verifier', () => {
     'const runner={...{run:()=>fetch("https://invalid.example")}};runner.run();',
     'const run=({safe,...rest})=>rest.effect();run({...{safe:true,effect:()=>fetch("https://invalid.example")}});',
     'const left=()=>undefined,right=()=>fetch("https://invalid.example");(false?left:right)();',
-    'const left=()=>undefined,right=()=>fetch("https://invalid.example");(left||right)();',
     'const evil=()=>fetch("https://invalid.example"),get=()=>evil;get()();',
     'const get=value=>value;get(()=>fetch("https://invalid.example"))();',
     'const make=effect=>()=>effect();make(()=>fetch("https://invalid.example"))();',
@@ -6100,6 +8876,15 @@ describe('runtime artifact verifier', () => {
       'must initialize Vercel telemetry exactly once',
     ],
     [
+      'unreachable telemetry initialization',
+      (source) =>
+        source.replace(
+          'initVercelTelemetry();',
+          'false&&initVercelTelemetry();'
+        ),
+      'must initialize Vercel telemetry exactly once',
+    ],
+    [
       'same-name local isolation no-op',
       (source) =>
         source.replace(
@@ -6117,6 +8902,746 @@ describe('runtime artifact verifier', () => {
     write(root, entry, mutate(fs.readFileSync(entryPath, 'utf8')));
 
     expect(() => verifyRuntimeProfile('vercel', root)).toThrow(error);
+  });
+
+  it.each([
+    [
+      'Node',
+      createNodeArtifact,
+      '.output/node/server/index.mjs',
+      'must route exactly once to the Nitro SSR renderer',
+    ],
+    [
+      'Vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/index.mjs',
+      'must route exactly once to the Nitro SSR renderer',
+    ],
+  ])(
+    'rejects an empty declared %s deployment entry',
+    (_profileName, createArtifact, entry, error) => {
+      const root = fixture();
+      createArtifact(root);
+      write(root, entry, '');
+
+      expect(() =>
+        verifyRuntimeProfile(_profileName.toLowerCase(), root)
+      ).toThrow(error);
+    }
+  );
+
+  it('rejects a Vercel renderer detached from the reviewed SSR entry', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    write(
+      root,
+      '.vercel/output/functions/__server.func/_chunks/ssr-renderer.mjs',
+      'const lazyService=(load)=>load;const service=lazyService(()=>import("../_ssr/decoy.mjs"));const ssrRenderer=()=>service;export{ssrRenderer as default};'
+    );
+    write(
+      root,
+      '.vercel/output/functions/__server.func/_ssr/decoy.mjs',
+      'export default {}'
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must load exactly one reviewed application SSR entry'
+    );
+  });
+
+  it.each([
+    [
+      'missing telemetry exports',
+      '.vercel/output/functions/__server.func/_libs/telemetry-owner.mjs',
+      '"@vercel/otel";',
+      'must export linked Vercel telemetry initializer',
+    ],
+    [
+      'no-op telemetry implementation',
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs',
+      'const initVercelTelemetry=()=>{};const runWithVercelSentryRequestIsolation=(operation)=>operation();export{runWithVercelSentryRequestIsolation as r,initVercelTelemetry as t};"@vercel/otel";',
+      'Vercel telemetry initializer must reach',
+    ],
+    [
+      'no-op lifecycle implementation',
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs',
+      'const vercelRequestLifecycle={onRequestSettled(request){void request}};export{vercelRequestLifecycle};"@vercel/functions";',
+      'must flush Vercel request telemetry with waitUntil',
+    ],
+    [
+      'dummy application factory',
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>({runtimeProfile,lifecycle,requestScope});export{createApplicationServerEntry};',
+      'must import telemetry before the TanStack server entry',
+    ],
+  ])('rejects a Vercel %s', (_label, file, source, error) => {
+    const root = fixture();
+    createVercelArtifact(root);
+    write(root, file, source);
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(error);
+  });
+
+  it.each([
+    [
+      'dead lifecycle scheduling',
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs',
+      'import_functions.waitUntil(flush)',
+      'if(false)import_functions.waitUntil(flush)',
+      'must flush Vercel request telemetry with waitUntil',
+    ],
+    [
+      'dead application entry return',
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'return tanstack.createServerEntry',
+      'if(false)return tanstack.createServerEntry',
+      'universal application server entry',
+    ],
+  ])('rejects Vercel %s', (_label, file, search, replacement, error) => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(error);
+  });
+
+  it('rejects a Vercel lifecycle waitUntil decoy receiver', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs
+        .readFileSync(filePath, 'utf8')
+        .replace(
+          'import_functions.waitUntil(flush)',
+          '({waitUntil(){}}).waitUntil(flush)'
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must flush Vercel request telemetry with waitUntil'
+    );
+  });
+
+  it('rejects locally shadowed Vercel lifecycle helpers', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs
+        .readFileSync(filePath, 'utf8')
+        .replace(
+          'onRequestSettled(request){',
+          'onRequestSettled(request){const forceFlushRequestTelemetry=()=>Promise.resolve(),getTelemetry=()=>({}),import_functions={waitUntil(){}};'
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must flush Vercel request telemetry with waitUntil'
+    );
+  });
+
+  it('rejects mutation of the reviewed Vercel waitUntil receiver', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs
+        .readFileSync(filePath, 'utf8')
+        .replace(
+          'const flush=',
+          'import_functions.waitUntil=()=>{};const flush='
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must flush Vercel request telemetry with waitUntil'
+    );
+  });
+
+  it('rejects Vercel lifecycle self-mutation hidden in the flush initializer', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs
+        .readFileSync(filePath, 'utf8')
+        .replace(
+          'forceFlushRequestTelemetry(request,getTelemetry())',
+          '(this.onRequestSettled=()=>{},forceFlushRequestTelemetry(request,getTelemetry()))'
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must flush Vercel request telemetry with waitUntil'
+    );
+  });
+
+  it('rejects mutation of an alias of the reviewed Vercel waitUntil receiver', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs
+        .readFileSync(filePath, 'utf8')
+        .replace(
+          'const flush=',
+          'const waitAlias=import_functions;waitAlias.waitUntil=()=>{};const flush='
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must flush Vercel request telemetry with waitUntil'
+    );
+  });
+
+  it('rejects conditionally scheduled Vercel request telemetry', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs
+        .readFileSync(filePath, 'utf8')
+        .replace(
+          'import_functions.waitUntil(flush)',
+          'if(Math.random()<0)import_functions.waitUntil(flush)'
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must flush Vercel request telemetry with waitUntil'
+    );
+  });
+
+  it.each([
+    [
+      'mutated TanStack fetch receiver',
+      'const handleRequest=async()=>{',
+      'const handleRequest=async()=>{tanstack.default.fetch=()=>new Response("decoy");',
+    ],
+    [
+      'mutated lifecycle receiver',
+      'const handleRequest=async()=>{',
+      'const handleRequest=async()=>{lifecycle.onRequestSettled=()=>{};',
+    ],
+    [
+      'reassigned request scope',
+      'async fetch(request){',
+      'async fetch(request){requestScope=()=>new Response("decoy");',
+    ],
+    [
+      'disconnected request scope',
+      'try{return requestScope(runApplicationOnce)}',
+      'requestScope(()=>{});try{return runApplicationOnce()}',
+    ],
+    [
+      'discarded TanStack response',
+      'return await tanstack.default.fetch(request,{context})',
+      'await tanstack.default.fetch(request,{context});return new Response("decoy")',
+    ],
+  ])('rejects a Vercel application with %s', (_label, search, replacement) => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow();
+  });
+
+  it.each([
+    [
+      'trace wrapper parameter',
+      'const initializeTraceOwner=(config,contextManager)=>',
+      'const initializeTraceOwner=(config,contextManager,runWithNormalizedOtelSdkEnvironment=(operation)=>operation())=>',
+      'must delegate Vercel trace ownership to @vercel/otel',
+    ],
+    [
+      'Sentry isolation parameter',
+      'const runWithSentryNodeRequestIsolation=(operation)=>',
+      'const runWithSentryNodeRequestIsolation=(operation,withIsolationScope=(value)=>value())=>',
+      'must implement Sentry request isolation',
+    ],
+    [
+      'telemetry owner parameters',
+      'const initVercelTelemetry=()=>',
+      'const initVercelTelemetry=(createSentryNodeRequestContextManager=()=>({}),initializeSignalOwners=()=>({}),initializeTraceOwner=()=>({}),installServerTelemetry=()=>{})=>',
+      'Vercel telemetry initializer must reach',
+    ],
+  ])('rejects a shadowing Vercel %s', (_label, search, replacement, error) => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(error);
+  });
+
+  it.each([
+    [
+      'telemetry initializer',
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs',
+      'export{runWithVercelSentryRequestIsolation as r,initVercelTelemetry as t}',
+      'initVercelTelemetry=()=>{};export{runWithVercelSentryRequestIsolation as r,initVercelTelemetry as t}',
+    ],
+    [
+      'request-isolation owner',
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs',
+      'export{runWithVercelSentryRequestIsolation as r,initVercelTelemetry as t}',
+      'runWithVercelSentryRequestIsolation=(operation)=>operation();export{runWithVercelSentryRequestIsolation as r,initVercelTelemetry as t}',
+    ],
+    [
+      'request lifecycle owner',
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs',
+      'export{vercelRequestLifecycle}',
+      'vercelRequestLifecycle={onRequestSettled(){}};export{vercelRequestLifecycle}',
+    ],
+    [
+      'application entry owner',
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'export{createApplicationServerEntry}',
+      'createApplicationServerEntry=async()=>({fetch(){return new Response("decoy")}});export{createApplicationServerEntry}',
+    ],
+    [
+      'lifecycle helper',
+      '.vercel/output/functions/__server.func/_ssr/request-completion-fixture.mjs',
+      'export{forceFlushRequestTelemetry}',
+      'forceFlushRequestTelemetry=()=>Promise.resolve();export{forceFlushRequestTelemetry}',
+    ],
+  ])(
+    'rejects mutation of the linked Vercel %s',
+    (_label, file, search, replacement) => {
+      const root = fixture();
+      createVercelArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+      expect(() => verifyRuntimeProfile('vercel', root)).toThrow();
+    }
+  );
+
+  it.each([
+    [
+      'direct waitUntil receiver alias',
+      'const vercelRequestLifecycle=',
+      'const waitAlias=import_functions;waitAlias.waitUntil=()=>{};const vercelRequestLifecycle=',
+    ],
+    [
+      'wrapped waitUntil receiver alias',
+      'const vercelRequestLifecycle=',
+      'const box={value:import_functions};box.value.waitUntil=()=>{};const vercelRequestLifecycle=',
+    ],
+    [
+      'destructured waitUntil receiver alias',
+      'const vercelRequestLifecycle=',
+      'const {value:waitAlias}={value:import_functions};waitAlias.waitUntil=()=>{};const vercelRequestLifecycle=',
+    ],
+    [
+      'conditional waitUntil receiver alias',
+      'const vercelRequestLifecycle=',
+      'const waitAlias=true?import_functions:{};waitAlias.waitUntil=()=>{};const vercelRequestLifecycle=',
+    ],
+    [
+      'helper-mutated waitUntil receiver',
+      'const vercelRequestLifecycle=',
+      'const replaceWait=value=>{value.waitUntil=()=>{}};replaceWait(import_functions);const vercelRequestLifecycle=',
+    ],
+    [
+      'direct request lifecycle owner alias',
+      'export{vercelRequestLifecycle}',
+      'const lifecycleAlias=vercelRequestLifecycle;lifecycleAlias.onRequestSettled=()=>{};export{vercelRequestLifecycle}',
+    ],
+    [
+      'wrapped request lifecycle owner alias',
+      'export{vercelRequestLifecycle}',
+      'const box={value:vercelRequestLifecycle};box.value.onRequestSettled=()=>{};export{vercelRequestLifecycle}',
+    ],
+    [
+      'destructured request lifecycle owner alias',
+      'export{vercelRequestLifecycle}',
+      'const {value:lifecycleAlias}={value:vercelRequestLifecycle};lifecycleAlias.onRequestSettled=()=>{};export{vercelRequestLifecycle}',
+    ],
+    [
+      'conditional request lifecycle owner alias',
+      'export{vercelRequestLifecycle}',
+      'const lifecycleAlias=true?vercelRequestLifecycle:{};lifecycleAlias.onRequestSettled=()=>{};export{vercelRequestLifecycle}',
+    ],
+    [
+      'helper-mutated request lifecycle owner',
+      'export{vercelRequestLifecycle}',
+      'const replaceLifecycle=value=>{value.onRequestSettled=()=>{}};replaceLifecycle(vercelRequestLifecycle);export{vercelRequestLifecycle}',
+    ],
+  ])(
+    'rejects a top-level alias mutation of the Vercel %s',
+    (_label, search, replacement) => {
+      const root = fixture();
+      createVercelArtifact(root);
+      const file =
+        '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs';
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+      expect(() => verifyRuntimeProfile('vercel', root)).toThrow();
+    }
+  );
+
+  it.each([
+    [
+      'replacement default',
+      'export{vercel_web_default as default}',
+      'const replacement={fetch(){return new Response("decoy")}};export{replacement as default}',
+    ],
+    [
+      'aliased default mutation',
+      'export{vercel_web_default as default}',
+      'const defaultAlias=vercel_web_default;defaultAlias.fetch=()=>new Response("decoy");export{vercel_web_default as default}',
+    ],
+  ])(
+    'rejects a Vercel deployed entry with %s',
+    (_label, search, replacement) => {
+      const root = fixture();
+      createVercelArtifact(root);
+      const file = '.vercel/output/functions/__server.func/index.mjs';
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+      expect(() => verifyRuntimeProfile('vercel', root)).toThrow();
+    }
+  );
+
+  it.each([
+    [
+      'an unrelated request-scope result',
+      'return applicationResult};try{return requestScope',
+      'return new Response("decoy")};try{return requestScope',
+    ],
+    [
+      'a different lifecycle request',
+      'lifecycle?.onRequestSettled(request)',
+      'lifecycle?.onRequestSettled(new Request("https://invalid.example"))',
+    ],
+    [
+      'lifecycle settlement before the application result',
+      'try{return await tanstack.default.fetch(request,{context})}',
+      'lifecycle?.onRequestSettled(request);try{return await tanstack.default.fetch(request,{context})',
+    ],
+  ])(
+    'rejects a Vercel application returning through %s',
+    (_label, search, replacement) => {
+      const root = fixture();
+      createVercelArtifact(root);
+      const file =
+        '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs';
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+      expect(() => verifyRuntimeProfile('vercel', root)).toThrow();
+    }
+  );
+
+  it.each([
+    [
+      'TanStack handler receiver',
+      'tanstack.default.fetch(request,{context})',
+      '({fetch:()=>new Response()}).fetch(request)',
+    ],
+    [
+      'lifecycle receiver',
+      'lifecycle?.onRequestSettled(request)',
+      '({onRequestSettled(){}}).onRequestSettled(request)',
+    ],
+    [
+      'request-scope binding',
+      'async fetch(request){',
+      'async fetch(request){const requestScope=(operation)=>operation();',
+    ],
+  ])('rejects a decoy Vercel application %s', (_label, search, replacement) => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow();
+  });
+
+  it('rejects Vercel application evidence in an uninvoked nested function', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    write(
+      root,
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-proxy-fixture.mjs");const tanstack=await import("./entry-server-fixture.mjs");return tanstack.createServerEntry({async fetch(request){function decoy(){requestScope(()=>{});lifecycle.onRequestSettled(request);tanstack.default.fetch(request,{context:{runtimeProfile,telemetryProxy}})}return new Response("bypass")}})};export{createApplicationServerEntry};'
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow('universal');
+  });
+
+  it('rejects locally shadowed Vercel telemetry owners', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs
+        .readFileSync(filePath, 'utf8')
+        .replace(
+          'const contextManager=createSentryNodeRequestContextManager();initializeTraceOwner(config,contextManager);initializeSignalOwners();installServerTelemetry()',
+          'const createSentryNodeRequestContextManager=()=>{},initializeTraceOwner=()=>{},initializeSignalOwners=()=>{},installServerTelemetry=()=>{};const contextManager=createSentryNodeRequestContextManager();initializeTraceOwner(config,contextManager);initializeSignalOwners();installServerTelemetry()'
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'Vercel telemetry initializer must reach'
+    );
+  });
+
+  it.each([
+    [
+      'trace wrapper',
+      'const initializeTraceOwner=(config,contextManager)=>runWithNormalizedOtelSdkEnvironment(()=>registerOTel({config,contextManager}))',
+      'const initializeTraceOwner=(config,contextManager)=>{const runWithNormalizedOtelSdkEnvironment=(operation)=>operation();return runWithNormalizedOtelSdkEnvironment(()=>registerOTel({config,contextManager}))}',
+      'must delegate Vercel trace ownership to @vercel/otel',
+    ],
+    [
+      'Sentry isolation wrapper',
+      'const runWithSentryNodeRequestIsolation=(operation)=>withIsolationScope(operation)',
+      'const runWithSentryNodeRequestIsolation=(operation)=>{const withIsolationScope=(value)=>value();return withIsolationScope(operation)}',
+      'must implement Sentry request isolation',
+    ],
+  ])(
+    'rejects a locally shadowed Vercel %s',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createVercelArtifact(root);
+      const file =
+        '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs';
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() => verifyRuntimeProfile('vercel', root)).toThrow(error);
+    }
+  );
+
+  it.each([
+    ['return;', 'early return'],
+    [
+      'if(false){const contextManager=createSentryNodeRequestContextManager();initializeTraceOwner(config,contextManager);initializeSignalOwners();installServerTelemetry()}',
+      'dead branch',
+    ],
+  ])('rejects Vercel telemetry owners behind an %s', (replacement) => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const file =
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs';
+    const filePath = path.join(root, file);
+    write(
+      root,
+      file,
+      fs
+        .readFileSync(filePath, 'utf8')
+        .replace(
+          'const contextManager=createSentryNodeRequestContextManager();initializeTraceOwner(config,contextManager);initializeSignalOwners();installServerTelemetry()',
+          replacement
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'Vercel telemetry initializer must reach'
+    );
+  });
+
+  it.each([
+    [
+      'lifecycle owner',
+      '.vercel/output/functions/__server.func/_ssr/request-lifecycle-fixture.mjs',
+      'onRequestSettled(request){',
+      'onRequestSettled(request){if(true)return;',
+      'must flush Vercel request telemetry with waitUntil',
+    ],
+    [
+      'application handler',
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'async fetch(request){',
+      'async fetch(request){if(true)return new Response();',
+      'universal application server entry',
+    ],
+    [
+      'telemetry initializer',
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs',
+      'const initVercelTelemetry=()=>{',
+      'const initVercelTelemetry=()=>{if(true)return;',
+      'Vercel telemetry initializer must reach',
+    ],
+  ])(
+    'rejects a statically terminating Vercel %s',
+    (_label, file, search, replacement, error) => {
+      const root = fixture();
+      createVercelArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() => verifyRuntimeProfile('vercel', root)).toThrow(error);
+    }
+  );
+
+  it('rejects disconnected Vercel application-entry evidence', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    write(
+      root,
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-proxy-fixture.mjs");const tanstack=await import("./entry-server-fixture.mjs");if(false){return tanstack.createServerEntry({async fetch(request){const handle=()=>tanstack.default.fetch(request,{context:{runtimeProfile,telemetryProxy}});try{return requestScope(handle)}finally{lifecycle?.onRequestSettled(request)}}})}return tanstack.createServerEntry({})};export{createApplicationServerEntry};'
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow('universal');
+  });
+
+  it('rejects dead lifecycle and request-scope evidence in the returned Vercel fetch owner', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    write(
+      root,
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-proxy-fixture.mjs");const tanstack=await import("./entry-server-fixture.mjs");return tanstack.createServerEntry({async fetch(request){if(false){requestScope(()=>{});lifecycle.onRequestSettled(request)}void runtimeProfile;void telemetryProxy;return tanstack.default.fetch(request)}})};export{createApplicationServerEntry};'
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow('universal');
+  });
+
+  it('rejects an aliased mutable Vercel lifecycle owner', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const entry = '.vercel/output/functions/__server.func/_ssr/ssr.mjs';
+    const entryPath = path.join(root, entry);
+    write(
+      root,
+      entry,
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'var {createApplicationServerEntry}',
+          'const lifecycleAlias=vercelRequestLifecycle;lifecycleAlias.onRequestSettled=()=>{};var {createApplicationServerEntry}'
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must not alias mutable Vercel owners'
+    );
+  });
+
+  it.each([
+    'server_entry_default.fetch=()=>new Response("decoy");',
+    'Reflect.set(server_entry_default,"fetch",()=>new Response("decoy"));',
+    'const resultAlias=server_entry_default;resultAlias.fetch=()=>new Response("decoy");',
+  ])('rejects mutation of the exported Vercel application result', (attack) => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const entry = '.vercel/output/functions/__server.func/_ssr/ssr.mjs';
+    const entryPath = path.join(root, entry);
+    write(
+      root,
+      entry,
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'export{server_entry_default as default}',
+          `${attack}export{server_entry_default as default}`
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must immediately export one immutable Vercel application result'
+    );
+  });
+
+  it('rejects an assignment alias of a mutable Vercel lifecycle owner', () => {
+    const root = fixture();
+    createVercelArtifact(root);
+    const entry = '.vercel/output/functions/__server.func/_ssr/ssr.mjs';
+    const entryPath = path.join(root, entry);
+    write(
+      root,
+      entry,
+      fs
+        .readFileSync(entryPath, 'utf8')
+        .replace(
+          'var {createApplicationServerEntry}',
+          'var lifecycleAlias;lifecycleAlias=vercelRequestLifecycle;lifecycleAlias.onRequestSettled=()=>{};var {createApplicationServerEntry}'
+        )
+    );
+
+    expect(() => verifyRuntimeProfile('vercel', root)).toThrow(
+      'must not alias mutable Vercel owners'
+    );
   });
 
   it('rejects a Node artifact without its async-context owner', () => {
@@ -6218,20 +9743,24 @@ describe('runtime artifact verifier', () => {
     }
   );
 
-  it('rejects Worker identity drift and recursively leaked dev vars', () => {
-    const identityRoot = fixture();
-    createCloudflareArtifact(identityRoot);
+  it('rejects Worker identity drift', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+
     expect(() =>
-      verifyRuntimeProfile('cloudflare', identityRoot, {
+      verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'different-app',
       })
     ).toThrow('Cloudflare APP_SLUG identity');
+  });
 
-    const devVarsRoot = fixture();
-    createCloudflareArtifact(devVarsRoot);
-    write(devVarsRoot, 'dist/server/nested/.dev.vars.preview', 'SECRET=x\n');
+  it('rejects recursively leaked Worker dev vars', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    write(root, 'dist/server/nested/.dev.vars.preview', 'SECRET=x\n');
+
     expect(() =>
-      verifyRuntimeProfile('cloudflare', devVarsRoot, {
+      verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow('must not contain .dev.vars');
@@ -6334,69 +9863,59 @@ describe('runtime artifact verifier', () => {
     ).toThrow('Cloudflare generated compatibility date drift');
   });
 
-  it('rejects runtime-specific provider leakage recursively', () => {
-    const cloudflareRoot = fixture();
-    createCloudflareArtifact(cloudflareRoot);
-    write(
-      cloudflareRoot,
+  it.each([
+    [
+      'cloudflare',
+      createCloudflareArtifact,
       'dist/server/assets/leaked.js',
-      'const provider = new AsyncLocalStorageContextManager();'
-    );
-
-    expect(() =>
-      verifyRuntimeProfile('cloudflare', cloudflareRoot, {
-        expectedAppSlug: 'acme-app',
-      })
-    ).toThrow(
-      'forbidden cloudflare runtime token AsyncLocalStorageContextManager'
-    );
-
-    const localSqliteRoot = fixture();
-    createCloudflareArtifact(localSqliteRoot);
-    write(
-      localSqliteRoot,
+      'const provider = new AsyncLocalStorageContextManager();',
+      { expectedAppSlug: 'acme-app' },
+      'forbidden cloudflare runtime token AsyncLocalStorageContextManager',
+    ],
+    [
+      'cloudflare',
+      createCloudflareArtifact,
       'dist/server/assets/local-sqlite-sink.js',
-      'const localSqliteEnabled = true; CREATE TABLE telemetry_summary;'
-    );
-    expect(() =>
-      verifyRuntimeProfile('cloudflare', localSqliteRoot, {
-        expectedAppSlug: 'acme-app',
-      })
-    ).toThrow('forbidden cloudflare runtime token telemetry_summary');
-
-    const nodeRoot = fixture();
-    createNodeArtifact(nodeRoot);
-    write(
-      nodeRoot,
+      'const localSqliteEnabled = true; CREATE TABLE telemetry_summary;',
+      { expectedAppSlug: 'acme-app' },
+      'forbidden cloudflare runtime token telemetry_summary',
+    ],
+    [
+      'node',
+      createNodeArtifact,
       '.output/node/server/chunks/leaked.mjs',
-      'import "@vercel/otel";'
-    );
-    expect(() => verifyRuntimeProfile('node', nodeRoot)).toThrow(
-      'forbidden node runtime token @vercel/otel'
-    );
-
-    const vercelTraceRoot = fixture();
-    createVercelArtifact(vercelTraceRoot);
-    write(
-      vercelTraceRoot,
+      'import "@vercel/otel";',
+      undefined,
+      'forbidden node runtime token @vercel/otel',
+    ],
+    [
+      'vercel',
+      createVercelArtifact,
       '.vercel/output/functions/__server.func/chunks/leaked.mjs',
-      'initOpenTelemetryServer();'
-    );
-    expect(() => verifyRuntimeProfile('vercel', vercelTraceRoot)).toThrow(
-      'forbidden vercel runtime token initOpenTelemetryServer'
-    );
-
-    const vercelSqliteRoot = fixture();
-    createVercelArtifact(vercelSqliteRoot);
-    write(
-      vercelSqliteRoot,
+      'initOpenTelemetryServer();',
+      undefined,
+      'forbidden vercel runtime token initOpenTelemetryServer',
+    ],
+    [
+      'vercel',
+      createVercelArtifact,
       '.vercel/output/functions/__server.func/chunks/local-sqlite-sink.mjs',
-      'CREATE TABLE telemetry_summary;'
-    );
-    expect(() => verifyRuntimeProfile('vercel', vercelSqliteRoot)).toThrow(
-      'forbidden vercel runtime token telemetry_summary'
-    );
-  });
+      'CREATE TABLE telemetry_summary;',
+      undefined,
+      'forbidden vercel runtime token telemetry_summary',
+    ],
+  ])(
+    'rejects %s runtime-specific provider leakage recursively: %s',
+    (profile, create, file, source, options, message) => {
+      const root = fixture();
+      create(root);
+      write(root, file, source);
+
+      expect(() => verifyRuntimeProfile(profile, root, options)).toThrow(
+        message
+      );
+    }
+  );
 
   it('rejects malformed Vite manifest entries with a bounded diagnostic', () => {
     const root = fixture();
@@ -8386,7 +11905,9 @@ describe('runtime artifact verifier', () => {
       verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'acme-app',
       })
-    ).toThrow('must not escape to an unresolved runtime consumer');
+    ).toThrow(
+      /(?:must not escape to an unresolved runtime consumer|rejects a replaced intrinsic global)/u
+    );
   });
 
   it('rejects reviewed owner storage on an imported object', () => {
@@ -8406,7 +11927,9 @@ describe('runtime artifact verifier', () => {
       verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'acme-app',
       })
-    ).toThrow('must not escape to an unresolved runtime consumer');
+    ).toThrow(
+      /(?:must not escape to an unresolved runtime consumer|rejects a replaced intrinsic global)/u
+    );
   });
 
   it.each([
@@ -8537,7 +12060,7 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow(
-      /must not (?:escape to an unresolved runtime consumer|execute fetch, eval, or worker effects while loading)/u
+      /(?:rejects a replaced intrinsic global|must not (?:escape to an unresolved runtime consumer|execute fetch, eval, or worker effects while loading))/u
     );
   });
 
@@ -8652,7 +12175,9 @@ describe('runtime artifact verifier', () => {
       verifyRuntimeProfile('cloudflare', root, {
         expectedAppSlug: 'acme-app',
       })
-    ).toThrow('must not escape to an unresolved runtime consumer');
+    ).toThrow(
+      /(?:must not escape to an unresolved runtime consumer|rejects a replaced intrinsic global)/u
+    );
   });
 
   it('pins helper-based global descriptor installation for ambient consumers', () => {
@@ -8673,7 +12198,17 @@ describe('runtime artifact verifier', () => {
       'const descriptors=(value)=>({...value,Boolean:{value:()=>false}});Object.defineProperties(globalThis,descriptors({Temporal:{value:{}}}));const startInstance={};Boolean(startInstance);export{startInstance};'
     );
 
-    expectStartOwnerSubstitutionRejected(root, startOwnerClosure);
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        cloudflareTanStackOwnerDigests: {
+          ...fixtureTanStackOwnerDigests,
+          startOwnerClosure,
+        },
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow(
+      /(?:must use the reviewed startInstance artifact owner closure|must not execute fetch, eval, or worker effects while loading)/u
+    );
   });
 
   it('allows a symbol-keyed global cache without weakening ambient provenance', () => {
@@ -9572,6 +13107,404 @@ describe('runtime artifact verifier', () => {
       })
     ).toThrow('must not execute fetch, eval, or worker effects while loading');
   });
+
+  it('accepts safe root and terminal callbacks for an imported factory-result consumer', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{make}from"./router-effect-AAAAAAAA.js";make(()=>0).consume(()=>0);',
+      'const make=root=>({consume:terminal=>{root();terminal()}});export{make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  it('keeps an uncaptured imported factory root callback dormant', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{make}from"./router-effect-AAAAAAAA.js";make(()=>fetch("https://invalid.example"))();',
+      'const make=_effect=>()=>0;export{make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  it.each([
+    [
+      'root callback',
+      'import{make}from"./router-effect-AAAAAAAA.js";make(()=>fetch("https://invalid.example")).consume(()=>0);',
+    ],
+    [
+      'terminal callback',
+      'import{make}from"./router-effect-AAAAAAAA.js";make(()=>0).consume(()=>fetch("https://invalid.example"));',
+    ],
+  ])('keeps the imported factory-result %s distinct', (_label, caller) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      caller,
+      'const make=root=>({consume:terminal=>{root();terminal()}});export{make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not execute fetch, eval, or worker effects while loading');
+  });
+
+  it.each([
+    [
+      'a function-local imported alias',
+      'import{consume}from"./router-effect-AAAAAAAA.js";function run(effect){const invoke=consume;invoke(effect)}run(()=>fetch("https://invalid.example"));',
+      'const consume=effect=>effect();export{consume};',
+    ],
+    [
+      'a destructured namespace alias',
+      'import*as owner from"./router-effect-AAAAAAAA.js";function run(effect){const{consume:invoke}=owner;invoke(effect)}run(()=>fetch("https://invalid.example"));',
+      'const consume=effect=>effect();export{consume};',
+    ],
+    [
+      'an imported factory-result alias',
+      'import{make}from"./router-effect-AAAAAAAA.js";function run(effect){const service=make(),invoke=service.consume;invoke(effect)}run(()=>fetch("https://invalid.example"));',
+      'const make=()=>({consume:effect=>effect()});export{make};',
+    ],
+  ])('rejects a callback invoked through %s', (_label, caller, owner) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(root, caller, owner);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not execute fetch, eval, or worker effects while loading');
+  });
+
+  it.each([
+    [
+      'a function-local imported factory alias',
+      'import{make}from"./router-effect-AAAAAAAA.js";function run(){const alias=make;alias(()=>fetch("https://invalid.example"))()}run();',
+      'const make=effect=>()=>effect();export{make};',
+    ],
+    [
+      'a function-local imported factory member alias',
+      'import{make}from"./router-effect-AAAAAAAA.js";function run(){const alias=make;alias(()=>fetch("https://invalid.example")).consume()}run();',
+      'const make=effect=>({consume:()=>effect()});export{make};',
+    ],
+    [
+      'a function-local imported factory constructor alias',
+      'import{Factory}from"./router-effect-AAAAAAAA.js";function run(){const Alias=Factory;(new Alias())()}run();',
+      'function Factory(){return()=>fetch("https://invalid.example")}export{Factory};',
+    ],
+    [
+      'a function-local imported tagged factory alias',
+      'import{tag}from"./router-effect-AAAAAAAA.js";function run(){const alias=tag;alias``()}run();',
+      'const tag=()=>()=>fetch("https://invalid.example");export{tag};',
+    ],
+    [
+      'a nested imported factory origin',
+      'import{consume,make}from"./router-effect-AAAAAAAA.js";consume(make(()=>fetch("https://invalid.example")))();',
+      'const make=effect=>()=>effect(),consume=action=>()=>action();export{consume,make};',
+    ],
+    [
+      'a stored nested imported factory origin',
+      'import{consume,make}from"./router-effect-AAAAAAAA.js";const nested=make(()=>fetch("https://invalid.example"));consume(nested)();',
+      'const make=effect=>()=>effect(),consume=action=>()=>action();export{consume,make};',
+    ],
+    [
+      'the hazardous second nested imported factory sibling',
+      'import{compose,make}from"./router-effect-AAAAAAAA.js";compose(make(()=>0),make(()=>fetch("https://invalid.example")))();',
+      'const make=effect=>()=>effect(),compose=(_first,second)=>()=>second();export{compose,make};',
+    ],
+    [
+      'the hazardous first nested imported factory sibling',
+      'import{compose,make}from"./router-effect-AAAAAAAA.js";compose(make(()=>fetch("https://invalid.example")),make(()=>0))();',
+      'const make=effect=>()=>effect(),compose=(first,_second)=>()=>first();export{compose,make};',
+    ],
+    [
+      'a two-level nested imported factory origin',
+      'import{consume,wrap,make}from"./router-effect-AAAAAAAA.js";consume(wrap(make(()=>fetch("https://invalid.example"))))();',
+      'const make=effect=>()=>effect(),wrap=action=>()=>action(),consume=action=>()=>action();export{consume,wrap,make};',
+    ],
+    [
+      'the hazardous first two-level nested imported factory sibling',
+      'import{consume,wrap,make}from"./router-effect-AAAAAAAA.js";consume(wrap(make(()=>fetch("https://invalid.example")),make(()=>0)))();',
+      'const make=effect=>()=>effect(),wrap=(first,_second)=>()=>first(),consume=action=>()=>action();export{consume,wrap,make};',
+    ],
+    [
+      'a two-level nested imported factory member path',
+      'import{consume,wrap,make}from"./router-effect-AAAAAAAA.js";consume(wrap(make(()=>fetch("https://invalid.example")))).run();',
+      'const make=effect=>()=>effect(),wrap=action=>()=>action(),consume=action=>({run:()=>action()});export{consume,wrap,make};',
+    ],
+    [
+      'a three-level nested imported factory origin',
+      'import{consume,outer,inner,make}from"./router-effect-AAAAAAAA.js";consume(outer(inner(make(()=>fetch("https://invalid.example")))))();',
+      'const make=effect=>()=>effect(),inner=action=>()=>action(),outer=action=>()=>action(),consume=action=>()=>action();export{consume,outer,inner,make};',
+    ],
+  ])('rejects a callback invoked through %s', (_label, caller, owner) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(root, caller, owner);
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not execute fetch, eval, or worker effects while loading');
+  });
+
+  it('keeps an unused hazardous imported factory sibling dormant', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{compose,make}from"./router-effect-AAAAAAAA.js";compose(make(()=>fetch("https://invalid.example")),make(()=>0))();',
+      'const make=effect=>()=>effect(),compose=(_first,second)=>()=>second();export{compose,make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts a consumed nested imported factory without a load effect', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{consume,make}from"./router-effect-AAAAAAAA.js";consume(make(()=>0))();',
+      'const make=effect=>()=>effect(),consume=action=>()=>action();export{consume,make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  it('keeps an unused two-level hazardous factory sibling dormant', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{consume,wrap,make}from"./router-effect-AAAAAAAA.js";consume(wrap(make(()=>fetch("https://invalid.example")),make(()=>0)))();',
+      'const make=effect=>()=>effect(),wrap=(_first,second)=>()=>second(),consume=action=>()=>action();export{consume,wrap,make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  it('executes a nested root callback while preserving a terminal callback', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{consume,make}from"./router-effect-AAAAAAAA.js";consume(make(()=>fetch("https://invalid.example")))(()=>0);',
+      'const make=effect=>()=>effect(),consume=action=>terminal=>{action();terminal()};export{consume,make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not execute fetch, eval, or worker effects while loading');
+  });
+
+  it('ignores an unused nested root callback while preserving a terminal callback', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{consume,make}from"./router-effect-AAAAAAAA.js";consume(make(()=>fetch("https://invalid.example")))(()=>0);',
+      'const make=effect=>()=>effect(),consume=_action=>terminal=>terminal();export{consume,make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  it('keeps a dormant nested imported factory call site inert', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{consume,wrap,make}from"./router-effect-AAAAAAAA.js";const dormant=wrap(make(()=>fetch("https://invalid.example")));consume(()=>0)();void dormant;',
+      'const make=effect=>()=>effect(),wrap=action=>()=>action(),consume=action=>()=>action();export{consume,wrap,make};'
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).not.toThrow();
+  });
+
+  const localSharedFactoryDagSource = (layerCount) => {
+    const layers = [
+      'const layer0=make(()=>0);',
+      ...Array.from(
+        { length: layerCount },
+        (_unused, index) =>
+          `const layer${index + 1}=fan(layer${index},layer${index});`
+      ),
+    ].join('');
+    return `const make=effect=>()=>effect(),fan=(left,right)=>()=>{left();right()},consume=action=>()=>action();${layers}consume(layer${layerCount})();`;
+  };
+
+  it.each([8, 10])(
+    'accepts a bounded local shared factory DAG with %s layers',
+    (layerCount) => {
+      expect(
+        inspectCloudflareLoadEffectsForTesting(
+          localSharedFactoryDagSource(layerCount)
+        )
+      ).toEqual([]);
+    }
+  );
+
+  it('fails at the target-resolution depth bound for a 14-layer local shared factory DAG', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(localSharedFactoryDagSource(14))
+    ).toThrow('bounded target candidate resolution depth');
+  });
+
+  it('clears bounded factory specializations after repeated analyses', () => {
+    const runs = inspectCloudflareFactorySpecializationLifecycleForTesting(
+      localSharedFactoryDagSource(10),
+      3
+    );
+
+    expect(runs).toHaveLength(3);
+    expect(runs.every(({ effects }) => effects.length === 0)).toBe(true);
+    expect(runs.every(({ clearCount }) => clearCount === 1)).toBe(true);
+    expect(runs.every(({ entriesAfterClear }) => entriesAfterClear === 0)).toBe(
+      true
+    );
+    expect(
+      runs.every(({ inProgressAfterClear }) => inProgressAfterClear === 0)
+    ).toBe(true);
+    expect(runs.every(({ peakEntries }) => peakEntries > 0)).toBe(true);
+    expect(runs.every(({ peakEntries }) => peakEntries <= 1_024)).toBe(true);
+  });
+
+  const verifySharedNestedImportedFactoryDag = (
+    leaf,
+    layerCount = 8,
+    cloudflareOriginFactStats
+  ) => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    const layers = [
+      `const layer0=make(${leaf});`,
+      ...Array.from(
+        { length: layerCount },
+        (_unused, index) =>
+          `const layer${index + 1}=fan(layer${index},layer${index});`
+      ),
+    ].join('');
+    addCloudflareRouterEffectModule(
+      root,
+      `import{consume,fan,make}from"./router-effect-AAAAAAAA.js";${layers}consume(layer${layerCount})();`,
+      'const make=effect=>()=>effect(),fan=(left,right)=>()=>{left();right()},consume=action=>()=>action();export{consume,fan,make};'
+    );
+    return () =>
+      verifyRuntimeProfile('cloudflare', root, {
+        cloudflareOriginFactStats,
+        expectedAppSlug: 'acme-app',
+      });
+  };
+
+  it('rejects a shared nested imported factory DAG without duplicate fact expansion', () => {
+    expect(
+      verifySharedNestedImportedFactoryDag(
+        '()=>fetch("https://invalid.example")'
+      )
+    ).toThrow('must not execute fetch, eval, or worker effects while loading');
+  }, 10_000);
+
+  it('accepts a safe shared nested imported factory DAG without duplicate fact expansion', () => {
+    expect(verifySharedNestedImportedFactoryDag('()=>0')).not.toThrow();
+  }, 10_000);
+
+  it('bounds a deep shared nested imported factory DAG by unique work', () => {
+    const stats = {};
+
+    expect(
+      verifySharedNestedImportedFactoryDag('()=>0', 18, stats)
+    ).not.toThrow();
+    expect(stats).toMatchObject({ cacheHits: expect.any(Number) });
+    expect(stats.cacheHits).toBeGreaterThan(0);
+    expect(stats.uniqueFacts).toBeLessThanOrEqual(stats.attemptedFacts);
+    expect(stats.work).toBeLessThan(1_024);
+  }, 10_000);
+
+  it('rejects a consumed nested factory callback in a non-app owner', () => {
+    const root = fixture();
+    createCloudflareArtifact(root);
+    addCloudflareRouterEffectModule(
+      root,
+      'import{consume,make}from"./router-effect-AAAAAAAA.js";consume(make(()=>fetch("https://invalid.example")))();',
+      'const make=effect=>()=>effect(),consume=action=>()=>action();export{consume,make};',
+      null
+    );
+
+    expect(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    ).toThrow('must not execute fetch, eval, or worker effects while loading');
+  });
+
+  it.each([
+    [
+      'a destructured factory owner',
+      'import{consume}from"./router-effect-AAAAAAAA.js";consume(()=>fetch("https://invalid.example"));',
+      'function create(){if(flag)return{consume:effect=>({effect})};return getUnknown()}const{consume}=create();export{consume};',
+      'rejects unresolved destructured factory branches',
+    ],
+    [
+      'a returned factory owner',
+      'import{make}from"./router-effect-AAAAAAAA.js";make().consume(()=>fetch("https://invalid.example"));',
+      'function make(){if(flag)return{consume:effect=>({effect})};return getUnknown()}export{make};',
+      'rejects unresolved imported factory branches',
+    ],
+  ])(
+    'fails closed for an unresolved branch in %s',
+    (_label, caller, owner, error) => {
+      const root = fixture();
+      createCloudflareArtifact(root);
+      addCloudflareRouterEffectModule(root, caller, owner);
+
+      expect(() =>
+        verifyRuntimeProfile('cloudflare', root, {
+          expectedAppSlug: 'acme-app',
+        })
+      ).toThrow(error);
+    }
+  );
 
   it('tracks a callback owner through a destructured factory result', () => {
     const root = fixture();
@@ -11699,10 +15632,394 @@ describe('runtime artifact verifier', () => {
     'const target={run:()=>0};function mutate(){target.run=()=>fetch("https://invalid.example")}Reflect.apply(mutate,null,[]);target.run();',
     'const target={run:()=>0};const api={mutate(){target.run=()=>fetch("https://invalid.example")}};Reflect.apply(api.mutate,api,[]);target.run();',
     'const target={run:()=>0};Reflect.construct(class{constructor(){target.run=()=>fetch("https://invalid.example")}},[]);target.run();',
+    'const target={run:()=>0};function Factory(){target.run=()=>fetch("https://invalid.example")}Reflect.construct.call(null,Factory,[]);target.run();',
+    'const target={run:()=>0};function Factory(){target.run=()=>fetch("https://invalid.example")}Reflect.construct.apply(null,[Factory,[]]);target.run();',
+    'const target={run:()=>0};function Factory(){target.run=()=>fetch("https://invalid.example")}Reflect.apply(Reflect.construct,null,[Factory,[]]);target.run();',
   ])('orders a mutation invoked through Reflect', (source) => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
       'fetch("https://invalid.example")'
     );
+  });
+
+  it.each([
+    'const target={run:()=>0},source={get value(){target.run=()=>fetch("https://invalid.example");return 1}};source.value;target.run();',
+    'const target={run:()=>0},source={set value(next){target.run=()=>fetch("https://invalid.example")}};source.value=1;target.run();',
+    'const target={run:()=>0};function tag(){target.run=()=>fetch("https://invalid.example")}tag`value`;target.run();',
+    'const target={run:()=>0};const proxy=new Proxy({},{get(){target.run=()=>fetch("https://invalid.example");return 1}});proxy.value;target.run();',
+    'const target={run:()=>0};function* generate(){target.run=()=>fetch("https://invalid.example")}const iterator=generate();iterator.next();target.run();',
+    'const target={run:()=>0};function* generate(){target.run=()=>fetch("https://invalid.example")}const iterator=generate();for(const value of iterator){}target.run();',
+    'const target={run:()=>0};class Source{value=(target.run=()=>fetch("https://invalid.example"))}new Source();target.run();',
+    'const target={run:()=>0};class Source{value=(()=>{target.run=()=>fetch("https://invalid.example")})()}new Source();target.run();',
+  ])('orders a mutation from a synchronous implicit invocation', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    [
+      'assignment apply',
+      'const handler={apply(){return 0}},proxy=new Proxy(()=>0,handler);handler.apply=()=>fetch("https://invalid.example");proxy()',
+    ],
+    [
+      'defineProperty apply',
+      'const handler={apply(){return 0}},proxy=new Proxy(()=>0,handler);Object.defineProperty(handler,"apply",{value:()=>fetch("https://invalid.example")});proxy()',
+    ],
+    [
+      'Object.assign apply',
+      'const handler={apply(){return 0}},proxy=new Proxy(()=>0,handler);Object.assign(handler,{apply:()=>fetch("https://invalid.example")});proxy()',
+    ],
+    [
+      'Object.create apply',
+      'const handler=Object.create({apply(){return fetch("https://invalid.example")}}),proxy=new Proxy(()=>0,handler);proxy()',
+    ],
+    [
+      'literal prototype apply',
+      'const handler={__proto__:{apply(){return fetch("https://invalid.example")}}},proxy=new Proxy(()=>0,handler);proxy()',
+    ],
+    [
+      'class apply',
+      'class Handler{apply(){return fetch("https://invalid.example")}}const proxy=new Proxy(()=>0,new Handler());proxy()',
+    ],
+    [
+      'assignment get',
+      'const handler={get(){return 0}},proxy=new Proxy({},handler);handler.get=()=>fetch("https://invalid.example");proxy.value',
+    ],
+    [
+      'inherited get',
+      'const handler=Object.create({get(){return fetch("https://invalid.example")}}),proxy=new Proxy({},handler);proxy.value',
+    ],
+    [
+      'transparent static get',
+      'const target={run:()=>fetch("https://invalid.example")},handler={get(target){return target.run}},proxy=new Proxy(target,handler);proxy.run()',
+    ],
+    [
+      'transparent computed get',
+      'const target={run:()=>fetch("https://invalid.example")},handler={get(target,key){return target[key]}},proxy=new Proxy(target,handler);proxy.run()',
+    ],
+    [
+      'transparent computed get executes target getter',
+      'const target={get value(){fetch("https://invalid.example");return 1}},handler={get(target,key){return target[key]}},proxy=new Proxy(target,handler);proxy.value',
+    ],
+    [
+      'Reflect.get executes target getter',
+      'const target={get value(){fetch("https://invalid.example");return 1}},handler={get(target,key,receiver){return Reflect.get(target,key,receiver)}},proxy=new Proxy(target,handler);proxy.value',
+    ],
+    [
+      'default get forwarding',
+      'const proxy=new Proxy({run:()=>fetch("https://invalid.example")},{});proxy.run()',
+    ],
+    [
+      'default set forwarding',
+      'const proxy=new Proxy({set value(next){fetch("https://invalid.example")}},{}) ;proxy.value=1',
+    ],
+    [
+      'set trap assignment',
+      'const proxy=new Proxy({}, {set(){fetch("https://invalid.example");return true}});proxy.value=1',
+    ],
+    [
+      'replaced set trap',
+      'const handler={set(){return true}},proxy=new Proxy({},handler);handler.set=()=>{fetch("https://invalid.example");return true};proxy.value=1',
+    ],
+    [
+      'inherited set trap',
+      'const handler=Object.create({set(){fetch("https://invalid.example");return true}}),proxy=new Proxy({},handler);proxy.value=1',
+    ],
+    [
+      'set trap getter',
+      'const handler={get set(){fetch("https://invalid.example");return ()=>true}},proxy=new Proxy({},handler);proxy.value=1',
+    ],
+    [
+      'absent set trap getter',
+      'const handler={get set(){fetch("https://invalid.example")}},proxy=new Proxy({},handler);proxy.value=1',
+    ],
+    [
+      'set trap assigned value',
+      'const proxy=new Proxy({}, {set(_target,_key,value){value();return true}});proxy.value=()=>fetch("https://invalid.example")',
+    ],
+    [
+      'set trap Reflect.set',
+      'const proxy=new Proxy({}, {set(){fetch("https://invalid.example");return true}});Reflect.set(proxy,"value",1)',
+    ],
+    [
+      'set trap Reflect.set assigned value',
+      'const proxy=new Proxy({}, {set(_target,_key,value){value();return true}});Reflect.set(proxy,"value",()=>fetch("https://invalid.example"))',
+    ],
+    [
+      'set trap update',
+      'const proxy=new Proxy({value:0}, {set(){fetch("https://invalid.example");return true}});proxy.value++',
+    ],
+    [
+      'revocable get forwarding',
+      'const proxy=Proxy.revocable({get value(){fetch("https://invalid.example");return 1}},{}).proxy;proxy.value',
+    ],
+    [
+      'revocable set forwarding',
+      'const proxy=Proxy.revocable({set value(next){fetch("https://invalid.example")}},{}).proxy;proxy.value=1',
+    ],
+    [
+      'deleteProperty trap',
+      'const proxy=new Proxy({value:1},{deleteProperty(){fetch("https://invalid.example");return true}});delete proxy.value',
+    ],
+    [
+      'Reflect.deleteProperty trap',
+      'const proxy=new Proxy({value:1},{deleteProperty(){fetch("https://invalid.example");return true}});Reflect.deleteProperty(proxy,"value")',
+    ],
+    [
+      'defineProperty trap',
+      'const proxy=new Proxy({},{defineProperty(){fetch("https://invalid.example");return true}});Object.defineProperty(proxy,"value",{value:1})',
+    ],
+    [
+      'ownKeys trap',
+      'const proxy=new Proxy({},{ownKeys(){fetch("https://invalid.example");return []}});Reflect.ownKeys(proxy)',
+    ],
+    [
+      'Object.keys ownKeys trap',
+      'const proxy=new Proxy({},{ownKeys(){fetch("https://invalid.example");return []}});Object.keys(proxy)',
+    ],
+    [
+      'getOwnPropertyDescriptor trap',
+      'const proxy=new Proxy({},{getOwnPropertyDescriptor(){fetch("https://invalid.example")}});Object.getOwnPropertyDescriptor(proxy,"value")',
+    ],
+    [
+      'has trap',
+      'const proxy=new Proxy({},{has(){fetch("https://invalid.example");return false}});"value" in proxy',
+    ],
+    [
+      'Reflect.has trap',
+      'const proxy=new Proxy({},{has(){fetch("https://invalid.example");return false}});Reflect.has(proxy,"value")',
+    ],
+    [
+      'getPrototypeOf trap',
+      'const proxy=new Proxy({},{getPrototypeOf(){fetch("https://invalid.example");return null}});Object.getPrototypeOf(proxy)',
+    ],
+    [
+      'deleteProperty trap getter',
+      'const proxy=new Proxy({},{get deleteProperty(){fetch("https://invalid.example");return ()=>true}});delete proxy.value',
+    ],
+    [
+      'get trap compound assignment',
+      'const proxy=new Proxy({value:0}, {get(){fetch("https://invalid.example");return 0},set(){return true}});proxy.value+=1',
+    ],
+    [
+      'get trap logical assignment',
+      'const proxy=new Proxy({value:0}, {get(){fetch("https://invalid.example");return 0},set(){return true}});proxy.value||=1',
+    ],
+  ])('resolves the current Proxy trap (%s)', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('fails closed for a Proxy handler with a replaced prototype', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const handler={},proxy=new Proxy(()=>0,handler);Object.setPrototypeOf(handler,{apply(){return fetch("https://invalid.example")}});proxy()'
+      )
+    ).toThrow('rejects opaque aggregate member mutations');
+  });
+
+  it('forwards Proxy construction when the construct trap is absent', () => {
+    const source =
+      'class Target{constructor(){fetch("https://invalid.example")}}const ProxyTarget=new Proxy(Target,{});new ProxyTarget()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('uses the current Proxy apply trap after a safe overwrite', () => {
+    const source =
+      'const handler={apply(){return fetch("https://invalid.example")}},proxy=new Proxy(()=>0,handler);handler.apply=()=>0;proxy()';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('uses the current Proxy set trap after a safe overwrite', () => {
+    const source =
+      'const handler={set(){fetch("https://invalid.example");return true}},proxy=new Proxy({},handler);handler.set=()=>true;proxy.value=1';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'apply trap',
+      'const target=()=>fetch("https://invalid.example"),proxy=new Proxy(target,{apply(){return 1}});proxy()',
+    ],
+    [
+      'construct trap',
+      'class Target{constructor(){fetch("https://invalid.example")}}const ProxyTarget=new Proxy(Target,{construct(){return {}}});new ProxyTarget()',
+    ],
+    [
+      'revocable apply trap',
+      'const target=()=>fetch("https://invalid.example"),proxy=Proxy.revocable(target,{apply(){return 1}}).proxy;proxy()',
+    ],
+    [
+      'Function.prototype.call through apply trap',
+      'const target=()=>fetch("https://invalid.example"),proxy=new Proxy(target,{apply(){return 1}});proxy.call(null)',
+    ],
+    [
+      'Reflect.apply through apply trap',
+      'const target=()=>fetch("https://invalid.example"),proxy=new Proxy(target,{apply(){return 1}});Reflect.apply(proxy,null,[])',
+    ],
+    [
+      'assigned safe construct trap',
+      'class Target{}const handler={construct(){fetch("https://invalid.example");return {}}},ProxyTarget=new Proxy(Target,handler);handler.construct=(target,args,newTarget)=>Reflect.construct(target,args,newTarget);new ProxyTarget()',
+    ],
+    [
+      'Reflect.set safe construct trap',
+      'class Target{}const handler={construct(){fetch("https://invalid.example");return {}}},ProxyTarget=new Proxy(Target,handler);Reflect.set(handler,"construct",(target,args,newTarget)=>Reflect.construct(target,args,newTarget));new ProxyTarget()',
+    ],
+    [
+      'own construct shadows inherited trap',
+      'class Target{}const prototype={construct(){fetch("https://invalid.example");return {}}},handler=Object.create(prototype),ProxyTarget=new Proxy(Target,handler);handler.construct=(target,args,newTarget)=>Reflect.construct(target,args,newTarget);new ProxyTarget()',
+    ],
+  ])('does not execute a suppressed Proxy target (%s)', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'const target={run:()=>0};function* generate(){target.run=()=>fetch("https://invalid.example")}const iterator=generate();target.run();for(const value of iterator){}',
+    'const target={run:()=>0};class Source{value=(target.run=()=>fetch("https://invalid.example"))}target.run();',
+  ])('keeps a later or dormant implicit mutation inactive', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'const arguments_={get length(){fetch("https://invalid.example");return 0}};Reflect.construct(function(){},arguments_)',
+    'const arguments_={length:1,get 0(){fetch("https://invalid.example");return 1}};Reflect.construct(function(){},arguments_)',
+  ])('models Reflect.construct ArrayLike accessors', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'const arguments_={get length(){fetch("https://invalid.example");return 0}};Reflect.apply(function(){},null,arguments_)',
+    'const arguments_={length:1,get 0(){fetch("https://invalid.example");return 1}};(function(){}).apply(null,arguments_)',
+    'const arguments_={get length(){fetch("https://invalid.example");return 0}};Function.prototype.apply.call(function(){},null,arguments_)',
+    'const arguments_={length:1,get 0(){fetch("https://invalid.example");return 1}};Reflect.apply.call(null,function(){},null,arguments_)',
+  ])('models intrinsic apply ArrayLike accessors', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'const Reflect={apply(){}};const arguments_={get length(){fetch("https://invalid.example");return 0}};Reflect.apply(function(){},null,arguments_)',
+    'const api={apply(){}};const arguments_={get length(){fetch("https://invalid.example");return 0}};api.apply(null,arguments_)',
+  ])('does not model non-intrinsic apply ArrayLike accessors', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto,mutate(){}};delete api.mutate;api.mutate();target.run();',
+    'const target={run:()=>0};const proto={Factory:function(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto,Factory:function(){}};Reflect.deleteProperty(api,"Factory");new api.Factory();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto,get mutate(){return()=>0}};delete api.mutate;api.mutate();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto,...{mutate(){}}};delete api.mutate;api.mutate();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api=Object.create(proto,{mutate:{configurable:true,value(){}}});Reflect.deleteProperty(api,"mutate");api.mutate();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto,get mutate(){return()=>0}};function remove(value){delete value.mutate}remove(api);api.mutate();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto};api.mutate=()=>0;delete api.mutate;api.mutate();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto};Object.assign(api,{mutate(){}});Reflect.deleteProperty(api,"mutate");api.mutate();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto};Object.defineProperty(api,"mutate",{configurable:true,value(){}});delete api.mutate;api.mutate();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto};api.mutate=()=>0;function remove(value){delete value.mutate}remove(api);api.mutate();target.run();',
+    'const target={run:()=>0};const proto={mutate(){target.run=()=>fetch("https://invalid.example")}};const api={__proto__:proto};api.mutate=()=>0;function remove(value){Reflect.deleteProperty(value,"mutate")}remove(api);api.mutate();target.run();',
+  ])('resolves a callable exposed by member deletion', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'const proto={run(){return 0}},api={__proto__:proto};Object.defineProperty(api,"run",{value:()=>fetch("https://invalid.example")});Reflect.deleteProperty(api,"run");api.run()',
+    'const proto={run(){return 0}},api={__proto__:proto};Object.defineProperties(api,{run:{value:()=>fetch("https://invalid.example")}});Reflect.deleteProperty(api,"run");api.run()',
+    'const proto={run(){return 0}},api={__proto__:proto};Object.defineProperty(api,"run",{configurable:false,value:()=>0,writable:true});api.run=()=>fetch("https://invalid.example");Reflect.deleteProperty(api,"run");api.run()',
+    'const proto={run(){return 0}},api={__proto__:proto};Object.defineProperty(api,"run",{configurable:true,value:()=>0});Object.defineProperty(api,"run",{configurable:false,value:()=>fetch("https://invalid.example")});Reflect.deleteProperty(api,"run");api.run()',
+  ])('retains a non-configurable own member after deletion fails', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'const proto={run(){return fetch("https://invalid.example")}},api={__proto__:proto};Object.defineProperty(api,"run",{value:()=>0});Reflect.deleteProperty(api,"run");api.run()',
+    'const proto={run(){return fetch("https://invalid.example")}},api={__proto__:proto};Object.defineProperties(api,{run:{value:()=>0}});Reflect.deleteProperty(api,"run");api.run()',
+  ])(
+    'does not expose a prototype after non-configurable deletion',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it.each([
+    [
+      'defineProperty retains a safe latest own value',
+      'const proto={run(){return fetch("https://invalid.example")}},api=Object.create(proto);Object.defineProperty(api,"run",{value:()=>0});Reflect.deleteProperty(api,"run");api.run()',
+      [],
+    ],
+    [
+      'defineProperty retains a hazardous latest own value',
+      'const proto={run(){}},api=Object.create(proto);Object.defineProperty(api,"run",{value:()=>fetch("https://invalid.example")});Reflect.deleteProperty(api,"run");api.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'defineProperties retains a safe latest own value',
+      'const proto={run(){return fetch("https://invalid.example")}},api=Object.create(proto);Object.defineProperties(api,{run:{value:()=>0}});Reflect.deleteProperty(api,"run");api.run()',
+      [],
+    ],
+    [
+      'defineProperties retains a hazardous latest own value',
+      'const proto={run(){}},api=Object.create(proto);Object.defineProperties(api,{run:{value:()=>fetch("https://invalid.example")}});Reflect.deleteProperty(api,"run");api.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'configurable-to-non-configurable retains the hazardous replacement',
+      'const proto={run(){}},api=Object.create(proto,{run:{configurable:true,value:()=>0}});Object.defineProperty(api,"run",{configurable:false,value:()=>fetch("https://invalid.example")});Reflect.deleteProperty(api,"run");api.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'configurable-to-non-configurable retains the safe replacement',
+      'const proto={run(){return fetch("https://invalid.example")}},api=Object.create(proto,{run:{configurable:true,value:()=>fetch("https://invalid.example")}});Object.defineProperty(api,"run",{configurable:false,value:()=>0});Reflect.deleteProperty(api,"run");api.run()',
+      [],
+    ],
+    [
+      'omitted configurable preserves a successful future delete',
+      'const proto={run(){return fetch("https://invalid.example")}},api=Object.create(proto,{run:{configurable:true,value:()=>0}});Object.defineProperty(api,"run",{value:()=>0});Reflect.deleteProperty(api,"run");api.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'successful delete then safe redefine survives a failed delete',
+      'const proto={run(){return fetch("https://invalid.example")}},api=Object.create(proto,{run:{configurable:true,value:()=>0}});Reflect.deleteProperty(api,"run");Object.defineProperty(api,"run",{value:()=>0});Reflect.deleteProperty(api,"run");api.run()',
+      [],
+    ],
+    [
+      'successful delete then hazardous redefine survives a failed delete',
+      'const proto={run(){}},api=Object.create(proto,{run:{configurable:true,value:()=>0}});Reflect.deleteProperty(api,"run");Object.defineProperty(api,"run",{value:()=>fetch("https://invalid.example")});Reflect.deleteProperty(api,"run");api.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'failed delete then hazardous writable redefine is retained',
+      'const proto={run(){}},api=Object.create(proto,{run:{configurable:false,writable:true,value:()=>0}});Reflect.deleteProperty(api,"run");Object.defineProperty(api,"run",{value:()=>fetch("https://invalid.example")});Reflect.deleteProperty(api,"run");api.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'failed delete then safe writable redefine is retained',
+      'const proto={run(){return fetch("https://invalid.example")}},api=Object.create(proto,{run:{configurable:false,writable:true,value:()=>fetch("https://invalid.example")}});Reflect.deleteProperty(api,"run");Object.defineProperty(api,"run",{value:()=>0});Reflect.deleteProperty(api,"run");api.run()',
+      [],
+    ],
+    [
+      'class instance deletion exposes a hazardous prototype method',
+      'class API{run(){return fetch("https://invalid.example")}}const api=new API();api.run=()=>0;Reflect.deleteProperty(api,"run");api.run()',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'class instance deletion drops a hazardous assignment before a safe prototype method',
+      'class API{run(){}}const api=new API();api.run=()=>fetch("https://invalid.example");Reflect.deleteProperty(api,"run");api.run()',
+      [],
+    ],
+  ])('folds own-property deletion state: %s', (_label, source, effects) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(effects);
   });
 
   it.each([
@@ -11809,6 +16126,41 @@ describe('runtime artifact verifier', () => {
     ).toEqual([{ name: 'effect', path: [] }]);
   });
 
+  it.each([
+    [
+      'direct bound Object.assign',
+      'const target={run:()=>0};Object.assign.bind(null,target,{run:()=>fetch("https://invalid.example")})();target.run();',
+    ],
+    [
+      'aliased bound Object.assign',
+      'const target={run:()=>0};const mutate=Object.assign.bind(null,target,{run:()=>fetch("https://invalid.example")});mutate();target.run();',
+    ],
+    [
+      'nested Function.prototype.call dispatch',
+      'const target={};Function.prototype.call.call(Object.assign,null,target,{run:()=>fetch("https://invalid.example")});target.run();',
+    ],
+    [
+      'nested Object.assign.call dispatch with a source getter',
+      'Object.assign.call.call(Object.assign,null,{}, {get x(){fetch("https://invalid.example");return 1}});',
+    ],
+    [
+      'nested Reflect.apply dispatch with a source getter',
+      'Reflect.apply(Reflect.apply,null,[Object.assign,null,[{}, {get x(){fetch("https://invalid.example");return 1}}]]);',
+    ],
+    [
+      'bound Object.assign with a target setter',
+      'const target={set x(value){fetch("https://invalid.example")}};Object.assign.bind(null,target,{x:1})();',
+    ],
+    [
+      'nested Reflect.apply dispatch with a target setter',
+      'const target={set x(value){fetch("https://invalid.example")}};Reflect.apply(Reflect.set,null,[target,"x",1]);',
+    ],
+  ])('normalizes %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
   it('bounds local class hierarchy traversal', () => {
     const classes = [
       'class C0{run(){}}',
@@ -11847,6 +16199,229 @@ describe('runtime artifact verifier', () => {
     'Object.getOwnPropertyDescriptor(globalThis,"globalThis").value.fetch("https://invalid.example")',
   ])('normalizes a chained global identity alias', (source) => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([source]);
+  });
+
+  it.each([
+    [
+      'the exact adapter factory',
+      'import{custom}from"./reviewed.js";const fallback=(schema,fallback)=>custom().pipe(schema.catch(fallback));',
+    ],
+    [
+      'a direct top-level alias chain',
+      'import{custom}from"./reviewed.js";const first=custom,second=first;const fallback=(schema,value)=>second().pipe(schema.catch(value));',
+    ],
+    [
+      'an unrelated deep call graph',
+      `import{custom}from"./reviewed.js";const unrelated=${'Object.assign({},'.repeat(
+        64
+      )}{}${')'.repeat(
+        64
+      )};const fallback=(schema,value)=>custom().pipe(schema.catch(value));`,
+    ],
+  ])(
+    'proves a reviewed imported factory root is direct: %s',
+    (_label, source) => {
+      expect(
+        inspectCloudflareReviewedOriginDirectAliasProofForTesting(
+          source,
+          'fallback'
+        )
+      ).toBe(true);
+    }
+  );
+
+  it('requires an exact reviewed result policy for a composed factory path', () => {
+    const zodRecord = {
+      modules: [
+        {
+          id: 'node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js',
+          owner: 'non-app',
+        },
+      ],
+      ownership: 'non-app',
+      sha256:
+        'b58b76143de945661f801945b38db191e2fbe55ecd29e98f6d30fd9d54cec758',
+    };
+    const call = { callResult: true };
+    const branded = ['trim', call, 'min', call, 'brand', call];
+
+    expect(
+      inspectCloudflareReviewedFactoryResultPathForTesting(
+        zodRecord,
+        'string',
+        branded,
+        ['optional']
+      )
+    ).toBe(true);
+    expect(
+      inspectCloudflareReviewedFactoryResultPathForTesting(
+        zodRecord,
+        'string',
+        branded,
+        ['nullish']
+      )
+    ).toBe(true);
+    const displayName = ['trim', call, 'max', call, 'brand', call];
+    expect(
+      inspectCloudflareReviewedFactoryResultPathForTesting(
+        zodRecord,
+        'string',
+        displayName,
+        ['nullish']
+      )
+    ).toBe(true);
+    expect(
+      inspectCloudflareReviewedFactoryResultPathForTesting(
+        zodRecord,
+        'string',
+        displayName,
+        ['optional']
+      )
+    ).toBe(false);
+    for (const siblingPath of [
+      ['trim', call, 'length', call, 'brand', call],
+      ['trim', call, 'pipe', call, 'brand', call],
+    ]) {
+      expect(
+        inspectCloudflareReviewedFactoryResultPathForTesting(
+          zodRecord,
+          'string',
+          siblingPath,
+          []
+        )
+      ).toBe(true);
+    }
+    for (const suffix of [
+      ['optional', call],
+      ['optional', call, call],
+      ['parse', call],
+      ['pipe', call],
+      ['transform', call],
+    ]) {
+      expect(
+        inspectCloudflareReviewedFactoryResultPathForTesting(
+          zodRecord,
+          'string',
+          branded,
+          suffix
+        )
+      ).toBe(false);
+    }
+  });
+
+  it('proves one instantiated top-level factory alias without wrapper calls', () => {
+    const source =
+      'import{custom}from"./reviewed.js";const branded=()=>custom().brand(),first=branded,second=branded;export{first,second};';
+
+    expect(
+      inspectCloudflareReviewedOriginDirectAliasProofForTesting(
+        source,
+        'branded'
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    'custom=()=>0;',
+    'custom.member=()=>0;',
+    'delete custom.member;',
+    'custom.member++;',
+    'Object.assign(custom,{member(){}});',
+    'Object.defineProperty(custom,"member",{value(){}});',
+    'Object.setPrototypeOf(custom,{member(){}});',
+    'Reflect.set(custom,"member",()=>0);',
+    'poison(custom);',
+    'holder.value=custom;',
+    'const {call}=custom;',
+  ])('rejects a hostile reviewed import-root use: %s', (attack) => {
+    const source = `import{custom}from"./reviewed.js";${attack}const fallback=()=>custom();`;
+    expect(
+      inspectCloudflareReviewedOriginDirectAliasProofForTesting(
+        source,
+        'fallback'
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    'alias=()=>0;',
+    'alias.member=()=>0;',
+    'delete alias.member;',
+    'Object.assign(alias,{member(){}});',
+    'Reflect.set(alias,"member",()=>0);',
+    'poison(alias);',
+    'holder.value=alias;',
+  ])('rejects a hostile reviewed import alias use: %s', (attack) => {
+    const source = `import{custom}from"./reviewed.js";let alias=custom;${attack}const fallback=()=>alias();`;
+    expect(
+      inspectCloudflareReviewedOriginDirectAliasProofForTesting(
+        source,
+        'fallback'
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    'export{custom};const fallback=()=>custom();',
+    'export{custom as publicCustom};const fallback=()=>custom();',
+    'const alias=custom;export{alias};const fallback=()=>alias();',
+    'const alias=custom;export{alias as publicAlias};const fallback=()=>alias();',
+    'const alias=custom;export default alias;const fallback=()=>alias();',
+  ])('rejects an exported reviewed import identity: %s', (body) => {
+    const source = `import{custom}from"./reviewed.js";${body}`;
+    expect(
+      inspectCloudflareReviewedOriginDirectAliasProofForTesting(
+        source,
+        'fallback'
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    'const fallback=()=>(()=>{const result=custom();result.pipe=()=>fetch("https://invalid.example");return result})()',
+    'const result=custom();result.pipe=()=>fetch("https://invalid.example");const fallback=()=>result.pipe()',
+    'const result=custom();Object.assign(result,{pipe:()=>fetch("https://invalid.example")});const fallback=()=>result.pipe()',
+    'const result=custom();Object.defineProperty(result,"pipe",{value:()=>fetch("https://invalid.example")});const fallback=()=>result.pipe()',
+    'const result=custom();Reflect.set(result,"pipe",()=>fetch("https://invalid.example"));const fallback=()=>result.pipe()',
+  ])('rejects a poisoned reviewed factory result: %s', (body) => {
+    const source = `import{custom}from"./reviewed.js";${body}`;
+    expect(
+      inspectCloudflareReviewedOriginDirectAliasProofForTesting(
+        source,
+        'fallback'
+      )
+    ).toBe(false);
+  });
+
+  it('defers a conditional reviewed-origin alias to the generic proof', () => {
+    const source =
+      'import{custom}from"./reviewed.js";const alias=flag?custom:custom;const fallback=()=>alias();';
+    expect(
+      inspectCloudflareReviewedOriginDirectAliasProofForTesting(
+        source,
+        'fallback'
+      )
+    ).toBeUndefined();
+  });
+
+  it('fails closed for a cached reviewed factory result', () => {
+    const source =
+      'import{custom}from"./reviewed.js";const cached=custom();const fallback=()=>cached;';
+    expect(
+      inspectCloudflareReviewedOriginDirectAliasProofForTesting(
+        source,
+        'fallback'
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    'const custom=()=>({pipe(){return{optional(){}}}}),fallback=(schema,value)=>custom().pipe(schema.catch(value));fallback({catch(){fetch("https://method.invalid");return{}}},"").optional()',
+    'const custom=()=>({pipe(){return{optional(){}}}}),fallback=(schema,value)=>custom().pipe(schema.catch(value));fallback({catch(callback){callback();return{}}},()=>fetch("https://callback.invalid")).optional()',
+  ])('preserves a caller-owned fallback schema effect', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContainEqual(
+      expect.stringContaining('fetch(')
+    );
   });
 
   it('rejects unknown profiles', () => {
