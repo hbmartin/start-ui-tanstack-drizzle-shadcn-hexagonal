@@ -3137,6 +3137,28 @@ describe('runtime artifact verifier', () => {
   );
 
   it.each([
+    'const value=unknown();const[first]=value;const fn=flag?value:first;fn()',
+    'const value=unknown();const[first]=value;const fn=flag?first:value;fn()',
+  ])(
+    'retains an opaque iterator marker beside its unmarked source (%s)',
+    (source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'requires a statically analyzable iterator element'
+      );
+    }
+  );
+
+  it.each([
+    'const [value]=unknown();new value()',
+    'const [value]=unknown();value`template`',
+    'const [value]=unknown();value.run()',
+  ])('propagates an opaque iterator element to a %s sink', (source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'requires a statically analyzable iterator element'
+    );
+  });
+
+  it.each([
     'function* values(){yield()=>fetch("https://invalid.example")}const [value]=values();value()',
     'const values=()=>[()=>fetch("https://invalid.example")];const [value]=values();value()',
   ])('retains a precise callable iterator element (%s)', (source) => {

@@ -5008,6 +5008,8 @@ const cloudflareOpaqueSpreadArgumentsMessage =
   'Cloudflare load-effect analysis requires statically analyzable spread arguments';
 const cloudflareOpaqueAggregateSpreadMessage =
   'Cloudflare load-effect analysis requires statically analyzable aggregate spreads';
+const cloudflareOpaqueIteratorElementMessage =
+  'Cloudflare load-effect analysis requires a statically analyzable iterator element';
 const cloudflareAggregateAccessorMessage =
   'Cloudflare load-effect analysis rejects accessor properties in aggregate spreads';
 const cloudflareAccessorAmbiguityMessage =
@@ -19953,6 +19955,8 @@ const cloudflareCandidateSemanticValue = (
         ]
       ),
       invocationKind: candidate.invocationKind,
+      opaqueIteratorElement:
+        candidate.target?.cloudflareOpaqueIteratorElement === true,
       parameterName: candidate.parameterName,
       parameterPath: candidate.parameterPath,
       safeFalsyShortCircuit: candidate.safeFalsyShortCircuit === true,
@@ -27228,8 +27232,11 @@ const isCloudflareLoadEffectCandidateAt = (
   lexicalContext
 ) => {
   assert(
+    candidate.target?.cloudflareOpaqueIteratorElement !== true,
+    `${cloudflareOpaqueIteratorElementMessage} reaches a callable position in ${lexicalContext.analysisLabel} (${nodeType(node)}@${String(node?.start)}:${String(node?.end)}; candidate ${nodeType(candidate.target)}@${String(candidate.target?.start)}:${String(candidate.target?.end)})`
+  );
+  assert(
     candidate.target?.cloudflareOpaqueSpreadElement !== true &&
-      candidate.target?.cloudflareOpaqueIteratorElement !== true &&
       !(candidate.parameterPath ?? []).some(
         isCloudflareOpaqueArraySpreadProjection
       ),
