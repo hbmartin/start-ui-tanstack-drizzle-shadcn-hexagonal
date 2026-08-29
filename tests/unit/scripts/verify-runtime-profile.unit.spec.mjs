@@ -3125,6 +3125,27 @@ describe('runtime artifact verifier', () => {
   });
 
   it.each([
+    'const [value]=unknown();value()',
+    'class Values{};const [value]=new Values();value()',
+  ])(
+    'fails closed when an opaque iterator element is invoked (%s)',
+    (source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'reaches a callable position'
+      );
+    }
+  );
+
+  it.each([
+    'function* values(){yield()=>fetch("https://invalid.example")}const [value]=values();value()',
+    'const values=()=>[()=>fetch("https://invalid.example")];const [value]=values();value()',
+  ])('retains a precise callable iterator element (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
     'const values={[Symbol.iterator](){return {next(){return {get done(){fetch("https://done.invalid.example");return true}}}}}};for(const value of values){}',
     'const values={[Symbol.iterator](){return {next(){return {done:false,get value(){fetch("https://value.invalid.example");return 1}}}}}};const [value]=values',
     'const values={[Symbol.iterator](){fetch("https://array-from.invalid.example");return [][Symbol.iterator]()}};Array.from(values)',

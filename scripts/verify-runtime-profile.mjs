@@ -7192,17 +7192,50 @@ const cloudflareMemberCandidate = (
 
 const cloudflareIteratorValueCandidates = (node, target, context, seen) => {
   if (!target.cloudflareIteratorSource) return undefined;
+  const iteratorSource = unwrapCloudflareExecutionTarget(
+    target.cloudflareIteratorSource
+  );
+  if (
+    nodeType(iteratorSource) === 'CallExpression' &&
+    !cloudflareStaticLocalFunctionOwner(iteratorSource, context)
+  ) {
+    return [
+      {
+        target: {
+          ...iteratorSource,
+          cloudflareOpaqueIteratorElement: true,
+        },
+      },
+    ];
+  }
+  if (nodeType(iteratorSource) === 'NewExpression') {
+    return [
+      {
+        target: {
+          ...iteratorSource,
+          cloudflareOpaqueIteratorElement: true,
+        },
+      },
+    ];
+  }
   const sources = cloudflareLexicalTargetCandidates(
     node,
-    target.cloudflareIteratorSource,
+    iteratorSource,
     context,
     seen
   );
+  // A statically known generator has precise yield candidates in the generic
+  // `.next().value` resolver below. An unresolved ordinary call/new result is
+  // already the end of useful value resolution: its iterator element is
+  // opaque, and carrying that marker to a callable sink remains fail-closed.
+  // Re-expanding the synthetic iterator member as another factory result only
+  // chases provider/runtime internals without learning an element value.
   if (
-    sources.some((candidate) =>
-      new Set(['CallExpression', 'NewExpression']).has(
-        nodeType(candidate.target)
-      )
+    sources.some(
+      (candidate) =>
+        nodeType(candidate.target) === 'CallExpression' &&
+        cloudflareStaticLocalFunctionOwner(candidate.target, context)
+          ?.generator === true
     )
   ) {
     return undefined;
