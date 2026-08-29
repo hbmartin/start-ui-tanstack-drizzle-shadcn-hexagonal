@@ -16,32 +16,31 @@ import {
   BOOK_TITLE_MAX_LENGTH,
 } from './book-policy';
 
-export const zBookTitleSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(BOOK_TITLE_MAX_LENGTH)
-  .brand<'BookTitle'>();
-export const zBookAuthorSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(BOOK_AUTHOR_MAX_LENGTH)
-  .brand<'BookAuthor'>();
-export const zPublisherNameSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(BOOK_PUBLISHER_MAX_LENGTH)
-  .brand<'PublisherName'>();
+const createBookTitleSchema = () =>
+  z.string().trim().min(1).max(BOOK_TITLE_MAX_LENGTH).brand<'BookTitle'>();
+
+const createBookAuthorSchema = () =>
+  z.string().trim().min(1).max(BOOK_AUTHOR_MAX_LENGTH).brand<'BookAuthor'>();
+
+const createPublisherNameSchema = () =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(BOOK_PUBLISHER_MAX_LENGTH)
+    .brand<'PublisherName'>();
+
+const zBookTitleSchema = createBookTitleSchema();
+const zBookAuthorSchema = createBookAuthorSchema();
+const zPublisherNameSchema = createPublisherNameSchema();
 
 export type BookTitle = z.infer<typeof zBookTitleSchema>;
 export type BookAuthor = z.infer<typeof zBookAuthorSchema>;
 export type PublisherName = z.infer<typeof zPublisherNameSchema>;
 
-export const zBookTitle = () => zBookTitleSchema;
-export const zBookAuthor = () => zBookAuthorSchema;
-export const zPublisherName = () => zPublisherNameSchema;
+export const zBookTitle = createBookTitleSchema;
+export const zBookAuthor = createBookAuthorSchema;
+export const zPublisherName = createPublisherNameSchema;
 
 const parseBookString = <TSchema extends z.ZodType>(
   schema: TSchema,

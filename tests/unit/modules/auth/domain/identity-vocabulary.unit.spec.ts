@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
-import { isInviteUsable, toAuthIdentityId, toInviteId } from '@/modules/auth';
+import {
+  isInviteUsable,
+  toAuthIdentityId,
+  toInviteId,
+  zAuthIdentityId,
+  zInviteId,
+} from '@/modules/auth';
 import { toEmailAddress, toUserId } from '@/modules/kernel';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 
 describe('authentication identity vocabulary', () => {
+  it('creates fresh identity schemas for each consumer', () => {
+    expect(zAuthIdentityId()).not.toBe(zAuthIdentityId());
+    expect(zInviteId()).not.toBe(zInviteId());
+  });
+
   it('keeps provider identities and signup invites as distinct branded IDs', () => {
     expect(unwrapParseResult(toAuthIdentityId(' better-auth:user-1 '))).toBe(
       'better-auth:user-1'

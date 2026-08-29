@@ -5,19 +5,20 @@ import { IdValidationError, type ParseResult } from '@/modules/kernel';
 
 import { PROFILE_NAME_MAX_LENGTH } from './profile-policy';
 
-export const zProfileIdSchema = z.string().trim().min(1).brand<'ProfileId'>();
-export const zProfileNameSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(PROFILE_NAME_MAX_LENGTH)
-  .brand<'ProfileName'>();
+const createProfileIdSchema = () =>
+  z.string().trim().min(1).brand<'ProfileId'>();
+
+const createProfileNameSchema = () =>
+  z.string().trim().min(1).max(PROFILE_NAME_MAX_LENGTH).brand<'ProfileName'>();
+
+const zProfileIdSchema = createProfileIdSchema();
+const zProfileNameSchema = createProfileNameSchema();
 
 export type ProfileId = z.infer<typeof zProfileIdSchema>;
 export type ProfileName = z.infer<typeof zProfileNameSchema>;
 
-export const zProfileId = () => zProfileIdSchema;
-export const zProfileName = () => zProfileNameSchema;
+export const zProfileId = createProfileIdSchema;
+export const zProfileName = createProfileNameSchema;
 
 export const toProfileId = (value: string): ParseResult<ProfileId> => {
   const result = zProfileIdSchema.safeParse(value);

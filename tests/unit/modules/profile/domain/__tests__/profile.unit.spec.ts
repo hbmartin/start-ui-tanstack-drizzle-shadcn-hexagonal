@@ -5,10 +5,17 @@ import {
   normalizeProfileName,
   toProfileId,
   toProfileName,
+  zProfileId,
+  zProfileName,
 } from '@/modules/profile/domain/profile';
 import { PROFILE_NAME_MAX_LENGTH } from '@/modules/profile/domain/profile-policy';
 
 describe('profile domain', () => {
+  it('creates fresh profile schemas for each consumer', () => {
+    expect(zProfileId()).not.toBe(zProfileId());
+    expect(zProfileName()).not.toBe(zProfileName());
+  });
+
   it('keeps the Profile identifier distinct and non-empty', () => {
     expect(testProfileId(' profile-1 ')).toBe('profile-1');
     expect(toProfileId(' ').isError()).toBe(true);

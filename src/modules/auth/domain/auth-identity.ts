@@ -7,11 +7,10 @@ import type { ParseResult, UserId } from '@/modules/kernel/domain/ids';
 export const authProviders = ['better-auth', 'workos'] as const;
 export type AuthProvider = (typeof authProviders)[number];
 
-const zAuthIdentityIdSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .brand<'AuthIdentityId'>();
+const createAuthIdentityIdSchema = () =>
+  z.string().trim().min(1).brand<'AuthIdentityId'>();
+
+const zAuthIdentityIdSchema = createAuthIdentityIdSchema();
 
 export type AuthIdentityId = z.infer<typeof zAuthIdentityIdSchema>;
 
@@ -22,7 +21,7 @@ export type AuthIdentity = {
   providerSubject: string;
 };
 
-export const zAuthIdentityId = () => zAuthIdentityIdSchema;
+export const zAuthIdentityId = createAuthIdentityIdSchema;
 
 export const toAuthIdentityId = (
   value: string

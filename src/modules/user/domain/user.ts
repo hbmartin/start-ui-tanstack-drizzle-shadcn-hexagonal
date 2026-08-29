@@ -11,15 +11,16 @@ import type {
 
 import { USER_NAME_MAX_LENGTH } from './user-policy';
 
-export const zUserDisplayNameSchema = z
-  .string()
-  .trim()
-  .max(USER_NAME_MAX_LENGTH)
-  .brand<'UserDisplayName'>();
+const createUserDisplayNameSchema = () =>
+  z.string().trim().max(USER_NAME_MAX_LENGTH).brand<'UserDisplayName'>();
+
+const zUserDisplayNameSchema = createUserDisplayNameSchema();
 
 export type UserDisplayName = z.infer<typeof zUserDisplayNameSchema>;
 
-export const zUserDisplayName = () => zUserDisplayNameSchema;
+// Consumers compose a fresh schema so a caller cannot mutate the shared domain
+// parser through an exported schema factory result.
+export const zUserDisplayName = createUserDisplayNameSchema;
 
 export const toUserDisplayName = (
   name: string

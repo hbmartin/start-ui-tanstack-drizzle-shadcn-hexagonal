@@ -8,7 +8,9 @@ import type {
   UserId,
 } from '@/modules/kernel/domain/ids';
 
-const zInviteIdSchema = z.string().trim().min(1).brand<'InviteId'>();
+const createInviteIdSchema = () => z.string().trim().min(1).brand<'InviteId'>();
+
+const zInviteIdSchema = createInviteIdSchema();
 
 export type InviteId = z.infer<typeof zInviteIdSchema>;
 
@@ -20,7 +22,7 @@ export type Invite = {
   acceptedAt: Date | null;
 };
 
-export const zInviteId = () => zInviteIdSchema;
+export const zInviteId = createInviteIdSchema;
 
 export const toInviteId = (value: string): ParseResult<InviteId> => {
   const result = zInviteIdSchema.safeParse(value);
