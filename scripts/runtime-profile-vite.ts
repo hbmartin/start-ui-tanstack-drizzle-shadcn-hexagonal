@@ -7,6 +7,7 @@ import {
   parseRuntimeProfile,
   type RuntimeProfile,
 } from '../src/platform/runtime/runtime-profile.js';
+import type { TelemetryMode } from '../src/platform/telemetry/mode.js';
 
 export const RUNTIME_PROFILE_ENV_KEY = 'START_UI_RUNTIME_PROFILE';
 export const RUNTIME_SERVER_ENTRY_MODULE =
@@ -282,6 +283,17 @@ export const createCanonicalOriginVitePlugin = (
     // the resolved allowlist so client and SSR bundles consume the same
     // profile-selected origin that startup validation approved.
     config.env.VITE_BASE_URL = canonicalOrigin;
+  },
+});
+
+export const createTelemetryModeVitePlugin = (
+  telemetryMode: TelemetryMode
+): Plugin => ({
+  name: 'start-ui:telemetry-mode',
+  configResolved(config) {
+    // Vite envPrefix entries are prefix matches. Project the one reviewed
+    // public policy value without exposing similarly named server secrets.
+    config.env.TELEMETRY_MODE = telemetryMode;
   },
 });
 

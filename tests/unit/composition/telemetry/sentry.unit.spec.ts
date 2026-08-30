@@ -16,6 +16,7 @@ const otelMocks = vi.hoisted(() => ({
 }));
 
 const envClientMock = vi.hoisted(() => ({
+  TELEMETRY_MODE: 'optional' as 'off' | 'optional' | 'required',
   VITE_OTEL_BROWSER_ENABLED: false,
   VITE_SENTRY_DSN: '',
   VITE_SENTRY_ENVIRONMENT: undefined as string | undefined,
@@ -48,6 +49,8 @@ describe('Sentry telemetry composition', () => {
     vi.clearAllMocks();
     vi.resetModules();
     envClientMock.VITE_SENTRY_DSN = '';
+    envClientMock.TELEMETRY_MODE = 'optional';
+    envClientMock.VITE_OTEL_BROWSER_ENABLED = false;
     envClientMock.VITE_SENTRY_ENVIRONMENT = undefined;
     envClientMock.VITE_SENTRY_TUNNEL_PATH = '/api/telemetry/sentry-tunnel';
     otelMocks.initOpenTelemetryClient.mockReturnValue(undefined);
@@ -98,6 +101,19 @@ describe('Sentry telemetry composition', () => {
     expect(options).not.toHaveProperty('tracesSampleRate');
     expect(options).not.toHaveProperty('tracesSampler');
     expect(options?.beforeSendTransaction()).toBeNull();
+  });
+
+  it('keeps browser Sentry active while off mode skips browser OTel', async () => {
+    envClientMock.TELEMETRY_MODE = 'off';
+    envClientMock.VITE_OTEL_BROWSER_ENABLED = true;
+    envClientMock.VITE_SENTRY_DSN = 'https://example.com/1';
+    const { initTelemetryClient } =
+      await import('@/composition/telemetry/sentry.client');
+
+    initTelemetryClient();
+
+    expect(otelMocks.initOpenTelemetryClient).not.toHaveBeenCalled();
+    expect(sentryMocks.init).toHaveBeenCalledOnce();
   });
 
   it('does not abort optional browser bootstrap when Sentry initialization fails', async () => {

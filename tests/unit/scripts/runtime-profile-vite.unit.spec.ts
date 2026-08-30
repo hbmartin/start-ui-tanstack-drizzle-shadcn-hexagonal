@@ -10,6 +10,7 @@ import {
   createCloudflareAppChunkProvenanceEnvelope,
   createCloudflareAppChunkProvenancePlugin,
   createCanonicalOriginVitePlugin,
+  createTelemetryModeVitePlugin,
   createRuntimeServerEntrySource,
   isPathWithinDirectory,
   resolveViteRuntimeProfile,
@@ -284,6 +285,16 @@ describe('runtime profile Vite selection', () => {
     hook(config as never);
 
     expect(config.env.VITE_BASE_URL).toBe('https://canonical.example.test');
+  });
+
+  it('projects exactly one validated telemetry mode into the client env', () => {
+    const plugin = createTelemetryModeVitePlugin('off');
+    const config = { env: {} as Record<string, string> };
+    const hook = plugin.configResolved as (config: never) => void;
+
+    hook(config as never);
+
+    expect(config.env).toEqual({ TELEMETRY_MODE: 'off' });
   });
 
   it.each([

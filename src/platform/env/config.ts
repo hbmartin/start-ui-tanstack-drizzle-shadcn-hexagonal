@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { applicationIdentitySchema } from './application-identity';
 import { resolveCanonicalOrigin } from './canonical-origin';
 import type { RuntimeProfile } from '../runtime/runtime-profile';
+import { telemetryModes } from '../telemetry/mode';
 
 import {
   isDevRuntimeEnvironment,
@@ -71,6 +72,7 @@ const clientSchema = (isProduction: boolean, isDevelopment: boolean) =>
       })
       .optional(),
     VITE_SENTRY_ENVIRONMENT: z.string().optional(),
+    TELEMETRY_MODE: z.enum(telemetryModes).optional().prefault('optional'),
     VITE_OTEL_BROWSER_ENABLED: z
       .enum(['true', 'false'])
       .optional()

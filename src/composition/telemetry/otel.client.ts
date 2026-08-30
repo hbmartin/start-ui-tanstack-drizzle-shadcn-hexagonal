@@ -51,7 +51,10 @@ export const initOpenTelemetryClient = (): TelemetryAdapter | undefined => {
   if (initialized) return adapter;
   initialized = true;
 
-  if (!envClient.VITE_OTEL_BROWSER_ENABLED) {
+  if (
+    envClient.TELEMETRY_MODE === 'off' ||
+    !envClient.VITE_OTEL_BROWSER_ENABLED
+  ) {
     return undefined;
   }
 

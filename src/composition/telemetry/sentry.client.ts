@@ -52,10 +52,12 @@ export const initTelemetryClient = (_router?: unknown) => {
   initialized = true;
 
   let otelAdapter: TelemetryAdapter | undefined;
-  try {
-    otelAdapter = initOpenTelemetryClient();
-  } catch (failure) {
-    reportTelemetryFailure('otel.client.initialize', failure);
+  if (envClient.TELEMETRY_MODE !== 'off') {
+    try {
+      otelAdapter = initOpenTelemetryClient();
+    } catch (failure) {
+      reportTelemetryFailure('otel.client.initialize', failure);
+    }
   }
   const adapters = [otelAdapter].filter(isTelemetryAdapter);
 

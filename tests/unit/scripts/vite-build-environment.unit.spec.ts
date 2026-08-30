@@ -27,6 +27,8 @@ describe('loadViteBuildEnvironment', () => {
         'VITE_HOSTILE_LOCAL_SENTINEL=must-not-enter-build',
         'VITE_S3_BUCKET_PUBLIC_URL=https://hostile.example.test',
         'APP_DOMAIN=https://hostile-origin.example.test',
+        'TELEMETRY_MODE=off',
+        'TELEMETRY_MODE_SECRET=must-not-enter-client',
       ].join('\n')
     );
 
@@ -45,9 +47,27 @@ describe('loadViteBuildEnvironment', () => {
     expect(isolated.env.VITE_HOSTILE_LOCAL_SENTINEL).toBeUndefined();
     expect(isolated.env.VITE_S3_BUCKET_PUBLIC_URL).toBeUndefined();
     expect(isolated.env.APP_DOMAIN).toBeUndefined();
+    expect(isolated.telemetryMode).toBe('optional');
     expect(ordinary.env.VITE_HOSTILE_LOCAL_SENTINEL).toBe(
       'must-not-enter-build'
     );
     expect(ordinary.env.APP_DOMAIN).toBe('https://hostile-origin.example.test');
+    expect(ordinary.env.TELEMETRY_MODE).toBe('off');
+    expect(ordinary.env.TELEMETRY_MODE_SECRET).toBeUndefined();
+    expect(ordinary.telemetryMode).toBe('off');
+  });
+
+  it('rejects an invalid telemetry mode before client projection', () => {
+    vi.stubEnv('TELEMETRY_MODE', 'disabled');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'start-ui-vite-env-'));
+    temporaryDirectories.push(root);
+
+    expect(() =>
+      loadViteBuildEnvironment({
+        isolated: true,
+        mode: 'production',
+        root,
+      })
+    ).toThrow(/TELEMETRY_MODE must be one of/);
   });
 });

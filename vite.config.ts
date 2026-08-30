@@ -14,6 +14,7 @@ import {
   cloudflareAppChunkProvenanceKeyEnvironment,
   createCloudflareAppChunkProvenancePlugin,
   createCanonicalOriginVitePlugin,
+  createTelemetryModeVitePlugin,
   resolveViteRuntimeProfile,
   RUNTIME_PROFILE_ENV_KEY,
   runtimeServerEntryPlugin,
@@ -125,7 +126,7 @@ export default defineConfig(({ command, mode }) => {
   );
   const cloudBuildPluginsDisabled =
     process.env.START_UI_DISABLE_CLOUD_BUILD_PLUGINS === 'true';
-  const { env, envDir } = loadViteBuildEnvironment({
+  const { env, envDir, telemetryMode } = loadViteBuildEnvironment({
     isolated: cloudBuildPluginsDisabled,
     mode,
     root,
@@ -192,6 +193,7 @@ export default defineConfig(({ command, mode }) => {
       ...(isTestRuntime ? [] : devtools()),
       srcJsonImportPlugin(),
       createCanonicalOriginVitePlugin(canonicalOrigin),
+      createTelemetryModeVitePlugin(telemetryMode),
       runtimeServerEntryPlugin({ profile: runtimeProfile, root }),
       ...runtimeBuildPlugins,
       // react's vite plugin must come after start's vite plugin
