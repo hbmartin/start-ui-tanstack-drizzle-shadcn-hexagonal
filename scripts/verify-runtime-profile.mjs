@@ -19957,8 +19957,12 @@ const cloudflareCandidateSemanticValue = (
       invocationKind: candidate.invocationKind,
       opaqueIteratorElement:
         candidate.target?.cloudflareOpaqueIteratorElement === true,
+      opaqueSpreadElement:
+        candidate.target?.cloudflareOpaqueSpreadElement === true,
       parameterName: candidate.parameterName,
       parameterPath: candidate.parameterPath,
+      safeOpaqueSpreadIteration:
+        candidate.target?.cloudflareSafeOpaqueSpreadIteration === true,
       safeFalsyShortCircuit: candidate.safeFalsyShortCircuit === true,
       target: cloudflareNodeSemanticKey(candidate.target),
     };

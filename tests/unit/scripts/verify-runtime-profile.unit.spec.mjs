@@ -3149,6 +3149,18 @@ describe('runtime artifact verifier', () => {
   );
 
   it.each([
+    'const value=new Map();const first=[...value][0];const fn=(flag?value:first).run;fn()',
+    'const value=new Map();const first=[...value][0];const fn=(flag?first:value).run;fn()',
+  ])(
+    'retains an opaque spread marker beside its unmarked receiver (%s)',
+    (source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'requires statically analyzable aggregate spreads'
+      );
+    }
+  );
+
+  it.each([
     'const [value]=unknown();new value()',
     'const [value]=unknown();value`template`',
     'const [value]=unknown();value.run()',
