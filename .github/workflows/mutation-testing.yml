@@ -41,6 +41,9 @@ jobs:
         with:
           node-version: 24
 
+      - name: Verify TypeScript 7 mutation compatibility
+        run: pnpm mutation:compat
+
       - name: Run scoped mutation tests
         run: node scripts/run-mutation.mjs --scope=${{ matrix.scope }}
 

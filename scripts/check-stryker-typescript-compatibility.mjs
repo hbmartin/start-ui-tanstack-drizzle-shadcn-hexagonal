@@ -70,5 +70,5 @@ if (classification['compile-error-fixture']?.status !== 'compileError') {
 }
 
 console.log(
-  'Stryker compatibility passed: root TS7, isolated TS6 preprocessing, native TS7, and compile-error classification.'
+  `Stryker compatibility passed: root TS${rootTypeScript.version}, isolated preprocessing TS${preprocessingTypeScript.version}, native TS${nativePackage.version}, and compile-error classification.`
 );
