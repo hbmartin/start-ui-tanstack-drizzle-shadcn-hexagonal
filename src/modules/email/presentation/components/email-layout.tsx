@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Body, Head, Html, Preview } from 'react-email';
 
-import { AVAILABLE_LANGUAGES } from '@/platform/lib/i18n/constants';
+import { getLanguagePresentation } from '@/platform/lib/i18n/constants';
 
 import { styles } from '@/modules/email/presentation/styles';
 
@@ -14,18 +14,17 @@ export const EmailLayout = ({
   children: ReactNode;
   language: string;
 }) => {
+  const { dir } = getLanguagePresentation(language);
+
   return (
-    <Html
-      lang={language}
-      dir={
-        AVAILABLE_LANGUAGES.find(({ key }) => key === language)?.dir ?? 'ltr'
-      }
-    >
+    <Html lang={language} dir={dir}>
       <Head>
         <meta name="viewport" content="width=device-width" />
       </Head>
       <Preview>{preview}</Preview>
-      <Body style={styles.main}>{children}</Body>
+      <Body lang={language} dir={dir} style={styles.main}>
+        {children}
+      </Body>
     </Html>
   );
 };

@@ -15,7 +15,7 @@ import { getPageTitle } from '@/platform/lib/get-page-title';
 import '@/app/i18n/setup';
 
 import i18n from '@/platform/lib/i18n';
-import { AVAILABLE_LANGUAGES } from '@/platform/lib/i18n/constants';
+import { getLanguagePresentation } from '@/platform/lib/i18n/constants';
 
 import { PageError } from '@/platform/components/errors/page-error';
 import { RouteError } from '@/platform/components/errors/route-error';
@@ -131,19 +131,16 @@ function RootComponent() {
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   const { i18n } = useTranslation();
-
-  const languageConfig = AVAILABLE_LANGUAGES.find(
-    ({ key }) => key === i18n.language
-  );
+  const languagePresentation = getLanguagePresentation(i18n.language);
 
   return (
     <html
       suppressHydrationWarning
       lang={i18n.language}
-      dir={languageConfig?.dir ?? 'ltr'}
+      dir={languagePresentation.dir}
       style={{
-        fontSize: languageConfig?.fontScale
-          ? `${languageConfig.fontScale * 100}%`
+        fontSize: languagePresentation.fontScale
+          ? `${languagePresentation.fontScale * 100}%`
           : undefined,
       }}
     >
