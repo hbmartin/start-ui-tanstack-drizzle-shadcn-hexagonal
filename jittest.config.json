@@ -1,0 +1,68 @@
+{
+  "llm": {
+    "provider": "openrouter",
+    "model": "anthropic/claude-sonnet-4",
+    "maxTokens": 4096,
+    "budget": {
+      "maxCostUsd": 5,
+      "maxTokens": 200000
+    }
+  },
+  "riskThreshold": 0,
+  "testsPerFunction": 3,
+  "maxTotalTests": 50,
+  "workflow": "both",
+  "testTimeout": 30000,
+  "batchSize": 10,
+  "parallelWorktrees": true,
+  "assessConcurrency": 4,
+  "flakeGuardRuns": 3,
+  "reportThreshold": -1,
+  "rubfakeEnabled": true,
+  "llmJudgeEnabled": true,
+  "cache": {
+    "enabled": false,
+    "dir": ".jittest/cache"
+  },
+  "outputFormat": "console",
+  "feedbackPath": ".jittest/assessment-records.jsonl",
+  "contextFiles": ["CONTEXT.md", "docs/audit-remediation-ledger.md"],
+  "autoContext": true,
+  "autoContextFiles": ["AGENTS.md", "README.md"],
+  "sensitivityGlobs": [
+    {
+      "label": "authentication",
+      "pattern": "src/modules/auth/**",
+      "weight": 1
+    },
+    {
+      "label": "authorization-and-audit",
+      "pattern": "src/modules/{auth,audit,user}/**",
+      "weight": 1
+    },
+    {
+      "label": "http-security",
+      "pattern": "src/platform/http/**",
+      "weight": 1
+    },
+    {
+      "label": "runtime-and-composition",
+      "pattern": "src/{runtime,composition}/**",
+      "weight": 1
+    },
+    {
+      "label": "database-migrations",
+      "pattern": "src/modules/kernel/infrastructure/db/**",
+      "weight": 1
+    }
+  ],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/node_modules/**",
+    "tests/**"
+  ]
+}

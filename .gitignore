@@ -9,6 +9,7 @@ tools/*/node_modules
 # testing
 /coverage
 /reports
+/.jittest
 /.stryker-tmp
 **/__screenshots__/**
 .github/codeql/**/*.actual
