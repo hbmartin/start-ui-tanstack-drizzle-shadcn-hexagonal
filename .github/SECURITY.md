@@ -22,7 +22,7 @@ Report privately through GitHub's coordinated disclosure flow:
 
 1. Go to the repository's **Security** tab → **Report a vulnerability**
    (GitHub Private Vulnerability Reporting), or open
-   <https://github.com/hbmartin/start-ui-tanstack-drizzle-shadcn-hexagonal/security/advisories/new>.
+   <https://github.com/hbmartin/start-ui-web/security/advisories/new>.
 2. Include affected version/commit, reproduction steps, impact, and any PoC.
 
 If you cannot use GitHub advisories, contact the repository author through the
@@ -86,5 +86,5 @@ The SBOMs and normalized security evidence published from `main` carry signed
 build provenance. Verify an artifact with the GitHub CLI:
 
 ```bash
-gh attestation verify sbom.spdx.json --repo hbmartin/start-ui-tanstack-drizzle-shadcn-hexagonal
+gh attestation verify sbom.spdx.json --repo hbmartin/start-ui-web
 ```

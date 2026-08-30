@@ -15,8 +15,12 @@ const packageManifest = JSON.parse(
 ) as {
   dependencies: Readonly<Record<string, string>>;
   devDependencies: Readonly<Record<string, string>>;
+  repository: { readonly url: string };
   scripts: Readonly<Record<string, string>>;
 };
+const repositorySlug = new URL(
+  packageManifest.repository.url.replace(/^git\+/u, '')
+).pathname.replace(/^\/|\.git$/gu, '');
 const trackedMarkdown = execFileSync(
   resolveTrustedTool('git'),
   ['ls-files', '-z', '--', '*.md'],
@@ -231,9 +235,10 @@ describe('public documentation claims', () => {
     expect(read('.vscode/extensions.json')).not.toMatch(/eslint|prisma/iu);
 
     const security = read('.github/SECURITY.md');
-    expect(security).toMatch(
-      /<https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/security\/advisories\/new>/u
+    expect(security).toContain(
+      `<https://github.com/${repositorySlug}/security/advisories/new>`
     );
+    expect(security).toContain(`--repo ${repositorySlug}`);
     expect(security).toContain('tracked `package.json` metadata');
     expect(security).toContain('| 5.x');
     expect(security).not.toContain('| 4.x');
