@@ -15,12 +15,8 @@ const packageManifest = JSON.parse(
 ) as {
   dependencies: Readonly<Record<string, string>>;
   devDependencies: Readonly<Record<string, string>>;
-  repository: { readonly url: string };
   scripts: Readonly<Record<string, string>>;
 };
-const repositorySlug = new URL(
-  packageManifest.repository.url.replace(/^git\+/u, '')
-).pathname.replace(/^\/|\.git$/gu, '');
 const trackedMarkdown = execFileSync(
   resolveTrustedTool('git'),
   ['ls-files', '-z', '--', '*.md'],
@@ -236,9 +232,13 @@ describe('public documentation claims', () => {
 
     const security = read('.github/SECURITY.md');
     expect(security).toContain(
-      `<https://github.com/${repositorySlug}/security/advisories/new>`
+      '<https://github.com/hbmartin/start-ui-tanstack-drizzle-shadcn-hexagonal/security/advisories/new>'
     );
-    expect(security).toContain(`--repo ${repositorySlug}`);
+    expect(security).toContain(
+      '--repo hbmartin/start-ui-tanstack-drizzle-shadcn-hexagonal'
+    );
+    expect(security).not.toContain('github.com/hbmartin/start-ui-web');
+    expect(security).not.toContain('--repo hbmartin/start-ui-web');
     expect(security).toContain('tracked `package.json` metadata');
     expect(security).toContain('| 5.x');
     expect(security).not.toContain('| 4.x');
