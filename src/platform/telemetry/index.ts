@@ -1,5 +1,11 @@
 export { forceFlushTelemetry } from './flush';
 export type { TelemetryFlushOutcome } from './flush';
+export {
+  telemetryModes,
+  telemetrySignals,
+  type TelemetryMode,
+  type TelemetrySignal,
+} from './mode';
 export { createNoOpTelemetry } from './no-op';
 export {
   reportTelemetryFailure,

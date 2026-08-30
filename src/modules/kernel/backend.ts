@@ -21,6 +21,12 @@ export {
   type TelemetryConfig,
 } from './infrastructure/config/telemetry';
 export {
+  telemetryModes,
+  telemetrySignals,
+  type TelemetryMode,
+  type TelemetrySignal,
+} from '@/platform/telemetry';
+export {
   validateServerBuildConfig,
   validateServerConfig,
 } from './infrastructure/config/server';

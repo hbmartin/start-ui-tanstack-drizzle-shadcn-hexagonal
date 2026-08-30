@@ -835,8 +835,9 @@ describe('server config accessors', () => {
     });
   });
 
-  it('exposes the Vercel SDK disabled state through validated telemetry config', async () => {
+  it('accepts the Vercel SDK disabled state with explicit off mode', async () => {
     vi.stubEnv('OTEL_SDK_DISABLED', 'true');
+    vi.stubEnv('TELEMETRY_MODE', 'off');
     const { getTelemetryConfig } =
       await import('@/modules/kernel/infrastructure/config/telemetry');
 
