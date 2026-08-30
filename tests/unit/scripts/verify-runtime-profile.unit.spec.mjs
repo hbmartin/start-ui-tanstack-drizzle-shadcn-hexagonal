@@ -4125,6 +4125,42 @@ describe('runtime artifact verifier', () => {
     ]);
   });
 
+  it('resolves a locally shadowed globalThis object that retains native Object.assign', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const globalThis={Object};const target={};globalThis.Object.assign(target,{run:()=>fetch("https://shadowed-global-this.invalid.example")});target.run()'
+      )
+    ).toEqual(['fetch("https://shadowed-global-this.invalid.example")']);
+  });
+
+  it.each([
+    [
+      'target setter',
+      'const target={set run(value){value()}},args=[target,{run:()=>fetch("https://spread.invalid.example")}];Object.assign(...args)',
+    ],
+    [
+      'returned target',
+      'const args=[{run:()=>0},{run:()=>fetch("https://spread.invalid.example")}];Object.assign(...args).run()',
+    ],
+    [
+      'later target read',
+      'const target={run:()=>0},args=[target,{run:()=>fetch("https://spread.invalid.example")}];Object.assign(...args);target.run()',
+    ],
+  ])(
+    'expands direct Object.assign spread arguments for a %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+        'fetch("https://spread.invalid.example")',
+      ]);
+    }
+  );
+
+  it('rejects opaque direct Object.assign spread arguments', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting('Object.assign(...getArgs())')
+    ).toThrow('statically analyzable spread arguments');
+  });
+
   it.each([
     [
       'Object.defineProperty',
@@ -4146,6 +4182,14 @@ describe('runtime artifact verifier', () => {
       ]);
     }
   );
+
+  it('executes an ambient Object.prototype setter during Object.assign', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const prototype=Object.prototype;Object.defineProperty(prototype,"run",{set(value){fetch("https://ambient-setter.invalid.example")}});const target={};Object.assign(target,{run:1})'
+      )
+    ).toEqual(['fetch("https://ambient-setter.invalid.example")']);
+  });
 
   it.each([
     [
@@ -4185,6 +4229,149 @@ describe('runtime artifact verifier', () => {
     }
   );
 
+  it.each([
+    [
+      'own getter/setter with a hazardous retained getter',
+      'const target={get run(){return()=>fetch("https://retained-getter.invalid.example")},set run(value){}};Object.assign(target,{run:()=>0});target.run()',
+    ],
+    [
+      'inherited getter/setter with a hazardous retained getter',
+      'const prototype={get run(){return()=>fetch("https://retained-getter.invalid.example")},set run(value){}};const target=Object.create(prototype);Object.assign(target,{run:()=>0});target.run()',
+    ],
+    [
+      'own setter consuming a hazardous source value',
+      'const target={set run(value){}};Object.assign(target,{run:()=>fetch("https://consumed-value.invalid.example")});target.run()',
+    ],
+    [
+      'inherited setter consuming a hazardous source value',
+      'const prototype={set run(value){}};const target=Object.create(prototype);Object.assign(target,{run:()=>fetch("https://consumed-value.invalid.example")});target.run()',
+    ],
+    [
+      'local factory target with an inherited getter/setter',
+      'const make=()=>{const prototype={get run(){return()=>fetch("https://retained-getter.invalid.example")},set run(value){}};return Object.create(prototype)};const target=make();Object.assign(target,{run:()=>0});target.run()',
+    ],
+    [
+      'unresolved target',
+      'const target=getTarget();Object.assign(target,{run:()=>0});target.run()',
+    ],
+    [
+      'ambient Object.prototype setter',
+      'const prototype=Object.prototype;Object.defineProperty(prototype,"run",{set(value){fetch("https://ambient-setter.invalid.example")}});const target={};Object.assign(target,{run:1});target.run()',
+    ],
+  ])(
+    'fails closed when Object.assign post-state is intercepted by an %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
+  it('enumerates a source member installed by an earlier Object.assign', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const source={};Object.assign(source,{run:()=>fetch("https://prior-source.invalid.example")});const target={set run(value){value()}};Object.assign(target,source)'
+      )
+    ).toEqual(['fetch("https://prior-source.invalid.example")']);
+  });
+
+  it('uses the latest value of a source member installed by earlier Object.assign calls', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const source={};Object.assign(source,{run:()=>fetch("https://overwritten.invalid.example")});Object.assign(source,{run:()=>0});const target={set run(value){value()}};Object.assign(target,source)'
+      )
+    ).toEqual([]);
+  });
+
+  it('enumerates a member installed on an Object.create result source', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const source=Object.create({});Object.assign(source,{run:1});const target={set run(value){fetch("https://created-source.invalid.example")}};Object.assign(target,source)'
+      )
+    ).toEqual(['fetch("https://created-source.invalid.example")']);
+  });
+
+  it('enumerates static string indices copied by Object.assign', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={set 0(value){fetch("https://string-source.invalid.example")}};Object.assign(target,"a")'
+      )
+    ).toEqual(['fetch("https://string-source.invalid.example")']);
+  });
+
+  it.each([
+    'const target={};Object.assign(target,getSource())',
+    'const target=Object.create(null);Object.assign(target,getSource())',
+    'const target=Object.create(null,{});Object.assign(target,getSource())',
+  ])(
+    'allows an unresolved Object.assign source for a proven setter-free target (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it('does not enumerate colon-form __proto__ syntax as an own source property', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={set __proto__(value){fetch("https://not-copied.invalid.example")}};Object.assign(target,{__proto__:{}})'
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
+      'unresolved call',
+      'const target={set run(value){fetch("https://opaque.invalid.example")}};Object.assign(target,getSource())',
+    ],
+    [
+      'unresolved member',
+      'const target={set run(value){fetch("https://opaque.invalid.example")}};Object.assign(target,globalThis.source)',
+    ],
+    [
+      'class instance fields',
+      'class Source{run=1}const target={set run(value){fetch("https://opaque.invalid.example")}};Object.assign(target,new Source())',
+    ],
+    [
+      'Object.create descriptors',
+      'const source=Object.create(null,{run:{value:1,enumerable:true}});const target={set run(value){fetch("https://opaque.invalid.example")}};Object.assign(target,source)',
+    ],
+    [
+      'Object.create undefined prototype',
+      'const target=Object.create(undefined);Object.assign(target,getSource())',
+    ],
+    [
+      'Object.create void prototype',
+      'const target=Object.create(void 0);Object.assign(target,getSource())',
+    ],
+    [
+      'conditionally deleted source member',
+      'const source={run:1};if(globalThis.flag)delete source.run;const target={set run(value){fetch("https://conditional-delete.invalid.example")}};Object.assign(target,source)',
+    ],
+    [
+      'source member conditionally deleted by an invoked helper',
+      'function maybeDelete(value){if(globalThis.flag)delete value.run}const source={run:1};maybeDelete(source);const target={set run(value){fetch("https://conditional-delete.invalid.example")}};Object.assign(target,source)',
+    ],
+    [
+      'mutated target prototype',
+      'const prototype={set run(value){fetch("https://prototype.invalid.example")}};const target={};Object.setPrototypeOf(target,prototype);Object.assign(target,getSource())',
+    ],
+    [
+      'aliased Object.prototype descriptor',
+      'const prototype=Object.prototype;Object.defineProperty(prototype,"run",{set(value){fetch("https://prototype.invalid.example")}});const target={};Object.assign(target,getSource())',
+    ],
+    [
+      'ambient Object.prototype descriptor with a shadowed Object binding',
+      'const Object={prototype:{}};const prototype=globalThis.Object.prototype;globalThis.Object.defineProperty(prototype,"run",{set(value){fetch("https://prototype.invalid.example")}});const target={};globalThis.Object.assign(target,getSource())',
+    ],
+  ])(
+    'rejects Object.assign key enumeration for an unsupported %s source',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
   it.each(['undefined', 'null'])(
     'treats a %s Object.assign source as a no-op',
     (source) => {
@@ -4195,6 +4382,30 @@ describe('runtime artifact verifier', () => {
       ).toEqual(['fetch("https://invalid.example")']);
     }
   );
+
+  it.each(['1', 'true', '1n'])(
+    'preserves an Object.assign member through a static %s source',
+    (source) => {
+      expect(
+        inspectCloudflareLoadEffectsForTesting(
+          `const target={run:()=>fetch("https://preserved.invalid.example")};Object.assign(target,${source});target.run()`
+        )
+      ).toEqual(['fetch("https://preserved.invalid.example")']);
+    }
+  );
+
+  it('copies only canonical string indices through Object.assign', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'Object.assign({run:()=>fetch("https://preserved.invalid.example")},"a").run()'
+      )
+    ).toEqual(['fetch("https://preserved.invalid.example")']);
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'Object.assign({"01":()=>fetch("https://preserved.invalid.example")},"a")["01"]()'
+      )
+    ).toEqual(['fetch("https://preserved.invalid.example")']);
+  });
 
   it('preserves an existing member when static Object.assign sources omit it', () => {
     expect(
@@ -4369,6 +4580,14 @@ describe('runtime artifact verifier', () => {
     ).toEqual([]);
   });
 
+  it('allows a prior mutation of an unrelated Object.assign source member', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const source={run:()=>fetch("https://retained.invalid.example")};source.meta=1;const target={};Object.assign(target,source);target.run()'
+      )
+    ).toEqual(['fetch("https://retained.invalid.example")']);
+  });
+
   it.each([
     [
       'ordinary target',
@@ -4447,6 +4666,23 @@ describe('runtime artifact verifier', () => {
       );
     }
   );
+
+  it('validates every returned-target Object.assign source before selecting the last writer', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'Object.assign({},source(),{run:()=>0}).run()'
+      )
+    ).toThrow('rejects opaque aggregate member mutations');
+  });
+
+  it.each([
+    'const source={run:()=>0};const target={};Object.assign(target,Object.assign(source,{run:()=>fetch("https://nested.invalid.example")}));target.run()',
+    'const source={run:()=>fetch("https://nested.invalid.example")};const target={};Object.assign(target,Object.assign(source,{run:()=>0}));target.run()',
+  ])('fails closed on nested Object.assign result state (%s)', (source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects opaque aggregate member mutations'
+    );
+  });
 
   it('does not propagate an exact Object.assign mutation to an unrelated receiver', () => {
     expect(
