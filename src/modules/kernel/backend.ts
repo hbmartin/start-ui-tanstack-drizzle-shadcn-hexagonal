@@ -25,7 +25,15 @@ export {
   telemetrySignals,
   type TelemetryMode,
   type TelemetrySignal,
+  type TelemetrySignalReadiness,
 } from '@/platform/telemetry';
+export {
+  assertRequiredTelemetrySignals,
+  configuredTelemetrySignalReadiness,
+  createTelemetrySignalReadiness,
+  isTelemetrySignalRequired,
+  type TelemetryReadinessPhase,
+} from './infrastructure/config/telemetry-readiness';
 export {
   validateServerBuildConfig,
   validateServerConfig,

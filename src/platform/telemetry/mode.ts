@@ -8,3 +8,7 @@ export const telemetrySignals = [
   'exceptions',
 ] as const;
 export type TelemetrySignal = (typeof telemetrySignals)[number];
+
+export type TelemetrySignalReadiness = Readonly<
+  Record<TelemetrySignal, boolean>
+>;

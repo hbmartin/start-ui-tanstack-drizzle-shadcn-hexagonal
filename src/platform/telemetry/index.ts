@@ -1,10 +1,12 @@
 export { forceFlushTelemetry } from './flush';
 export type { TelemetryFlushOutcome } from './flush';
+export { isServerSentryInstrumentationReady } from './instrumentation-readiness';
 export {
   telemetryModes,
   telemetrySignals,
   type TelemetryMode,
   type TelemetrySignal,
+  type TelemetrySignalReadiness,
 } from './mode';
 export { createNoOpTelemetry } from './no-op';
 export {

@@ -8,8 +8,15 @@ import {
   runWithSentryNodeRequestIsolation,
 } from '@/composition/telemetry/sentry-node-request-context';
 import { installServerTelemetry } from '@/composition/telemetry/sentry.server';
-import { getTelemetryConfig } from '@/modules/kernel/backend';
-import { reportTelemetryFailure } from '@/platform/telemetry';
+import {
+  assertRequiredTelemetrySignals,
+  createTelemetrySignalReadiness,
+  getTelemetryConfig,
+} from '@/modules/kernel/backend';
+import {
+  isServerSentryInstrumentationReady,
+  reportTelemetryFailure,
+} from '@/platform/telemetry';
 
 import {
   createPersistentTelemetryRuntime,
@@ -23,8 +30,17 @@ export const runWithNodeSentryRequestIsolation =
 
 const initNodeTelemetry = async () => {
   const telemetryConfig = getTelemetryConfig();
-  setLocalTelemetrySummaryRecorder(persistLocalTelemetrySummary);
-  const requestContext = await initializeSentryNodeRequestContext();
+  if (telemetryConfig.mode !== 'off') {
+    setLocalTelemetrySummaryRecorder(persistLocalTelemetrySummary);
+  }
+  let requestContext: Awaited<
+    ReturnType<typeof initializeSentryNodeRequestContext>
+  >;
+  try {
+    requestContext = await initializeSentryNodeRequestContext();
+  } catch (failure) {
+    reportTelemetryFailure('sentry.node.context_initialize', failure);
+  }
   let openTelemetry: ReturnType<typeof initOpenTelemetryServer>;
   if (!telemetryConfig.otelSdkDisabled && requestContext) {
     try {
@@ -39,9 +55,40 @@ const initNodeTelemetry = async () => {
     );
   }
 
+  const sentryReady = Boolean(
+    telemetryConfig.dsn &&
+    requestContext &&
+    isServerSentryInstrumentationReady()
+  );
+  try {
+    assertRequiredTelemetrySignals({
+      config: telemetryConfig,
+      phase: 'initialization',
+      profile: 'node',
+      readiness: createTelemetrySignalReadiness({
+        exceptions: sentryReady,
+        logs: Boolean(openTelemetry),
+        metrics: Boolean(openTelemetry),
+        traces: Boolean(openTelemetry),
+      }),
+    });
+  } catch (failure) {
+    try {
+      await openTelemetry?.shutdown();
+    } catch (cleanupFailure) {
+      reportTelemetryFailure('otel.node.required_cleanup', cleanupFailure);
+    }
+    try {
+      requestContext?.release();
+    } catch (cleanupFailure) {
+      reportTelemetryFailure('sentry.node.required_cleanup', cleanupFailure);
+    }
+    throw failure;
+  }
+
   const installedTelemetry = installServerTelemetry({
     openTelemetry: openTelemetry?.adapter,
-    sentry: telemetryConfig.dsn && requestContext ? Sentry : undefined,
+    sentry: sentryReady ? Sentry : undefined,
   });
   const shutdownProviders =
     openTelemetry || requestContext

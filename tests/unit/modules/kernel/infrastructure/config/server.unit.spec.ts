@@ -3,9 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const configMock = vi.hoisted(() => ({
   assertDatabaseDriverForRuntimeProfile: vi.fn(),
   getEnvClient: vi.fn(),
+  getTelemetryConfig: vi.fn(),
   getDatabaseConfig: vi.fn(() => ({ driver: 'node-pg' })),
   production: true,
   skipEnvValidation: false,
+  telemetry: {
+    collectorUrl: undefined as string | undefined,
+    dsn: undefined as string | undefined,
+    mode: 'optional' as 'off' | 'optional' | 'required',
+    requiredSignals: [] as Array<'exceptions' | 'logs' | 'metrics' | 'traces'>,
+  },
   trustedProxyDepth: undefined as number | undefined,
 }));
 
@@ -46,7 +53,7 @@ vi.mock('@/modules/kernel/infrastructure/config/storage', () => ({
   getStorageConfig: vi.fn(),
 }));
 vi.mock('@/modules/kernel/infrastructure/config/telemetry', () => ({
-  getTelemetryConfig: vi.fn(),
+  getTelemetryConfig: configMock.getTelemetryConfig,
 }));
 
 describe('runtime-profile server configuration', () => {
@@ -54,8 +61,16 @@ describe('runtime-profile server configuration', () => {
     configMock.getEnvClient.mockClear();
     configMock.assertDatabaseDriverForRuntimeProfile.mockClear();
     configMock.getDatabaseConfig.mockClear();
+    configMock.getTelemetryConfig.mockReset();
+    configMock.getTelemetryConfig.mockImplementation(
+      () => configMock.telemetry
+    );
     configMock.production = true;
     configMock.skipEnvValidation = false;
+    configMock.telemetry.collectorUrl = undefined;
+    configMock.telemetry.dsn = undefined;
+    configMock.telemetry.mode = 'optional';
+    configMock.telemetry.requiredSignals = [];
     configMock.trustedProxyDepth = undefined;
   });
 
@@ -122,6 +137,7 @@ describe('runtime-profile server configuration', () => {
       configMock.assertDatabaseDriverForRuntimeProfile
     ).not.toHaveBeenCalled();
     expect(configMock.getDatabaseConfig).not.toHaveBeenCalled();
+    expect(configMock.getTelemetryConfig).not.toHaveBeenCalled();
   });
 
   it('requires a positive Node proxy depth in production', async () => {
@@ -137,5 +153,46 @@ describe('runtime-profile server configuration', () => {
     expect(
       configMock.assertDatabaseDriverForRuntimeProfile
     ).toHaveBeenCalledWith('node', { driver: 'node-pg' });
+  });
+
+  it('fails Node live validation when a required OTel signal lacks a collector', async () => {
+    configMock.production = false;
+    configMock.telemetry.mode = 'required';
+    configMock.telemetry.requiredSignals = ['traces'];
+    const { validateServerConfig } =
+      await import('@/modules/kernel/infrastructure/config/server');
+    const { validateServerBuildConfig } =
+      await import('@/modules/kernel/infrastructure/config/server');
+
+    expect(() => validateServerBuildConfig('node')).not.toThrow();
+    expect(() => validateServerConfig('node')).toThrow(
+      'node during configuration: traces'
+    );
+    configMock.telemetry.collectorUrl = 'https://collector.example.test';
+    expect(() => validateServerConfig('node')).not.toThrow();
+  });
+
+  it('keeps Vercel trace readiness independent of collector configuration', async () => {
+    configMock.telemetry.mode = 'required';
+    configMock.telemetry.requiredSignals = ['traces'];
+    const { validateServerConfig } =
+      await import('@/modules/kernel/infrastructure/config/server');
+
+    expect(() => validateServerConfig('vercel')).not.toThrow();
+  });
+
+  it('requires exception configuration for live profile validation', async () => {
+    configMock.production = false;
+    configMock.telemetry.mode = 'required';
+    configMock.telemetry.requiredSignals = ['exceptions'];
+    const { validateServerConfig } =
+      await import('@/modules/kernel/infrastructure/config/server');
+    const { validateServerBuildConfig } =
+      await import('@/modules/kernel/infrastructure/config/server');
+
+    expect(() => validateServerBuildConfig('node')).not.toThrow();
+    expect(() => validateServerConfig('node')).toThrow('exceptions');
+    configMock.telemetry.dsn = 'https://public@example.test/1';
+    expect(() => validateServerConfig('node')).not.toThrow();
   });
 });

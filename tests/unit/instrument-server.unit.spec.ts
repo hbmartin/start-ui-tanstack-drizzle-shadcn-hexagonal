@@ -200,6 +200,8 @@ describe('server instrumentation', () => {
 
   it('initializes exception-only Sentry without installing OTel or loader hooks', async () => {
     await import('../../instrument.server.mjs');
+    const { isServerSentryInstrumentationReady } =
+      await import('@/platform/telemetry/instrumentation-readiness');
 
     expect(sentry.init).toHaveBeenCalledOnce();
     expect(sentry.setNodeAsyncContextStrategy).toHaveBeenCalledOnce();
@@ -226,6 +228,7 @@ describe('server instrumentation', () => {
     expect(options?.beforeSendTransaction()).toBeNull();
     expect(options).not.toHaveProperty('tracesSampleRate');
     expect(options).not.toHaveProperty('tracesSampler');
+    expect(isServerSentryInstrumentationReady()).toBe(true);
   });
 
   it('is process-global idempotent when the built artifact contains two module copies', async () => {
@@ -338,6 +341,8 @@ describe('server instrumentation', () => {
     });
 
     await expect(import('../../instrument.server.mjs')).resolves.toBeDefined();
+    const { isServerSentryInstrumentationReady } =
+      await import('@/platform/telemetry/instrumentation-readiness');
 
     expect(globalThis.console.error).toHaveBeenCalledWith(
       'telemetry.report_failure',
@@ -352,6 +357,7 @@ describe('server instrumentation', () => {
     expect(process.listenerCount('unhandledRejection')).toBe(
       originalUnhandledRejectionListeners.size + 1
     );
+    expect(isServerSentryInstrumentationReady()).toBe(false);
   });
 
   it('does not initialize server Sentry from the browser-public DSN', async () => {

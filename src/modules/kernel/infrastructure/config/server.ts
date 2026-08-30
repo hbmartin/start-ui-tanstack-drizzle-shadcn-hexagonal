@@ -22,6 +22,10 @@ import { getLoggerConfig } from './logger';
 import { getRedisConfig } from './redis';
 import { getStorageConfig } from './storage';
 import { getTelemetryConfig } from './telemetry';
+import {
+  assertRequiredTelemetrySignals,
+  configuredTelemetrySignalReadiness,
+} from './telemetry-readiness';
 
 const validateTrustedClientIpConfiguration = (
   runtimeProfile: RuntimeProfile,
@@ -75,6 +79,7 @@ const validateServerConfiguration = (
     );
   }
   if (shouldSkipEnvValidation()) return;
+  const telemetry = getTelemetryConfig();
 
   if (runtimeProfile) getEnvClient(runtimeProfile);
   const application = getApplicationConfig();
@@ -99,7 +104,18 @@ const validateServerConfiguration = (
   getLoggerConfig();
   getRedisConfig({ requiredInProduction: requiredRuntimeServices });
   if (application.preset === 'demo') getStorageConfig();
-  getTelemetryConfig();
+  if (
+    requiredRuntimeServices &&
+    runtimeProfile &&
+    runtimeProfile !== 'cloudflare'
+  ) {
+    assertRequiredTelemetrySignals({
+      config: telemetry,
+      phase: 'configuration',
+      profile: runtimeProfile,
+      readiness: configuredTelemetrySignalReadiness(telemetry, runtimeProfile),
+    });
+  }
 };
 
 export const validateServerBuildConfig = (runtimeProfile: RuntimeProfile) =>
