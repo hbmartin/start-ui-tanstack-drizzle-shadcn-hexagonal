@@ -7,9 +7,11 @@ const mocks = vi.hoisted(() => ({
     collectorBearerToken: undefined as string | undefined,
     collectorUrl: undefined as string | undefined,
     dsn: undefined as string | undefined,
+    mode: 'optional' as 'off' | 'optional' | 'required',
     otelEnvironment: 'tests',
     otelSdkDisabled: false,
     otelTracesSampleRate: 1,
+    requiredSignals: [] as Array<'exceptions' | 'logs' | 'metrics' | 'traces'>,
     serviceName: 'test-service',
     serviceVersion: undefined as string | undefined,
   },
@@ -17,8 +19,12 @@ const mocks = vi.hoisted(() => ({
   createOpenTelemetryAdapter: vi.fn(),
   createSentryNodeRequestContextManager: vi.fn(),
   installServerTelemetry: vi.fn(),
+  isServerSentryInstrumentationReady: vi.fn(),
   isSentryNodeRequestContextActive: vi.fn(),
   registerOTel: vi.fn(),
+  claimTelemetryProviderOwnership: vi.fn(),
+  cleanupTelemetryProviders: vi.fn(() => Promise.resolve('cleaned')),
+  releaseSignalOwnership: vi.fn(),
   reportTelemetryFailure: vi.fn(),
   requestContext: {
     contextManager: { name: 'claimed-sentry-context' },
@@ -44,15 +50,23 @@ vi.mock('@/composition/telemetry/sentry-node-request-context', () => ({
 vi.mock('@/composition/telemetry/otel-adapter', () => ({
   createOpenTelemetryAdapter: mocks.createOpenTelemetryAdapter,
 }));
+vi.mock('@/composition/telemetry/provider-cleanup', () => ({
+  cleanupTelemetryProviders: mocks.cleanupTelemetryProviders,
+}));
+vi.mock('@/composition/telemetry/provider-ownership', () => ({
+  claimTelemetryProviderOwnership: mocks.claimTelemetryProviderOwnership,
+}));
 vi.mock('@/composition/telemetry/sentry.server', () => ({
   installServerTelemetry: mocks.installServerTelemetry,
 }));
 vi.mock('@/modules/kernel/backend', async () => ({
+  ...(await import('@/modules/kernel/infrastructure/config/telemetry-readiness')),
   getTelemetryConfig: () => mocks.config,
   ...(await import('@/modules/kernel/infrastructure/config/otel-sdk-environment')),
 }));
 vi.mock('@/platform/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/platform/telemetry')>()),
+  isServerSentryInstrumentationReady: mocks.isServerSentryInstrumentationReady,
   reportTelemetryFailure: mocks.reportTelemetryFailure,
 }));
 
@@ -62,13 +76,19 @@ describe('Vercel telemetry owner', () => {
     vi.clearAllMocks();
     mocks.config.collectorUrl = undefined;
     mocks.config.dsn = undefined;
+    mocks.config.mode = 'optional';
     mocks.config.otelSdkDisabled = false;
+    mocks.config.requiredSignals = [];
     mocks.createOpenTelemetryAdapter.mockReturnValue(createNoOpTelemetry());
     mocks.createSentryNodeRequestContextManager.mockReturnValue(
       mocks.requestContextManager
     );
     mocks.claimSentryNodeRequestContext.mockReturnValue(mocks.requestContext);
     mocks.isSentryNodeRequestContextActive.mockReturnValue(true);
+    mocks.isServerSentryInstrumentationReady.mockReturnValue(true);
+    mocks.claimTelemetryProviderOwnership.mockReturnValue(
+      mocks.releaseSignalOwnership
+    );
   });
 
   afterEach(() => {
@@ -119,6 +139,7 @@ describe('Vercel telemetry owner', () => {
       mocks.requestContextManager,
       { acceptAlreadyInstalledByProvider: true }
     );
+    expect(mocks.requestContext.release).toHaveBeenCalledOnce();
   });
 
   it('keeps Sentry request isolation when the trace owner fails', async () => {
@@ -139,6 +160,7 @@ describe('Vercel telemetry owner', () => {
   });
 
   it('keeps Sentry request isolation when the standard OTel SDK is disabled', async () => {
+    mocks.config.mode = 'off';
     mocks.config.otelSdkDisabled = true;
     mocks.config.collectorUrl = 'https://collector.example.invalid';
     mocks.config.dsn = 'https://public@example.invalid/1';
@@ -156,6 +178,23 @@ describe('Vercel telemetry owner', () => {
       sentry: expect.objectContaining({
         captureException: expect.any(Function),
       }),
+    });
+  });
+
+  it('releases off-mode request isolation when Sentry is not configured', async () => {
+    mocks.config.mode = 'off';
+    mocks.config.otelSdkDisabled = true;
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    initVercelTelemetry();
+
+    expect(mocks.claimSentryNodeRequestContext).toHaveBeenCalledWith(
+      mocks.requestContextManager
+    );
+    expect(mocks.requestContext.release).toHaveBeenCalledOnce();
+    expect(mocks.installServerTelemetry).toHaveBeenCalledWith({
+      openTelemetry: undefined,
+      sentry: undefined,
     });
   });
 
@@ -198,6 +237,148 @@ describe('Vercel telemetry owner', () => {
     expect(mocks.installServerTelemetry).toHaveBeenCalledWith({
       openTelemetry: expect.any(Object),
       sentry: undefined,
+    });
+  });
+
+  it('omits optional Sentry when instrumentation is unavailable', async () => {
+    mocks.config.dsn = 'https://public@example.invalid/1';
+    mocks.isServerSentryInstrumentationReady.mockReturnValueOnce(false);
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    expect(() => initVercelTelemetry()).not.toThrow();
+    expect(mocks.installServerTelemetry).toHaveBeenCalledWith({
+      openTelemetry: expect.any(Object),
+      sentry: undefined,
+    });
+  });
+
+  it('degrades and releases signal owners when adapter creation fails', async () => {
+    mocks.config.collectorUrl = 'https://collector.example.invalid';
+    mocks.createOpenTelemetryAdapter.mockImplementationOnce(() => {
+      throw new Error('adapter unavailable');
+    });
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    expect(() => initVercelTelemetry()).not.toThrow();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledWith(
+      'otel.vercel.adapter.initialize',
+      expect.any(Error)
+    );
+    expect(mocks.releaseSignalOwnership).toHaveBeenCalledOnce();
+    expect(mocks.cleanupTelemetryProviders).toHaveBeenCalledOnce();
+    expect(mocks.installServerTelemetry).toHaveBeenCalledWith({
+      openTelemetry: undefined,
+      sentry: undefined,
+    });
+  });
+
+  it('caches a required adapter failure without cleaning signal owners twice', async () => {
+    mocks.config.collectorUrl = 'https://collector.example.invalid';
+    mocks.config.mode = 'required';
+    mocks.config.requiredSignals = ['logs', 'metrics'];
+    mocks.createOpenTelemetryAdapter.mockImplementationOnce(() => {
+      throw new Error('adapter unavailable');
+    });
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    expect(() => initVercelTelemetry()).toThrow(
+      'vercel during initialization: metrics, logs'
+    );
+    expect(() => initVercelTelemetry()).toThrow(
+      'vercel during initialization: metrics, logs'
+    );
+    expect(mocks.releaseSignalOwnership).toHaveBeenCalledOnce();
+    expect(mocks.cleanupTelemetryProviders).toHaveBeenCalledOnce();
+    expect(mocks.installServerTelemetry).not.toHaveBeenCalled();
+  });
+
+  it('fails and caches required trace-owner initialization', async () => {
+    mocks.config.mode = 'required';
+    mocks.config.requiredSignals = ['traces'];
+    mocks.registerOTel.mockImplementationOnce(() => {
+      throw new Error('trace owner unavailable');
+    });
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    expect(() => initVercelTelemetry()).toThrow(
+      'vercel during initialization: traces'
+    );
+    expect(() => initVercelTelemetry()).toThrow(
+      'vercel during initialization: traces'
+    );
+    expect(mocks.registerOTel).toHaveBeenCalledOnce();
+    expect(mocks.installServerTelemetry).not.toHaveBeenCalled();
+    expect(mocks.requestContext.release).toHaveBeenCalledOnce();
+  });
+
+  it('fails required collector-signal initialization', async () => {
+    mocks.config.collectorUrl = 'https://collector.example.invalid';
+    mocks.config.mode = 'required';
+    mocks.config.requiredSignals = ['logs', 'metrics'];
+    mocks.claimTelemetryProviderOwnership.mockImplementationOnce(() => {
+      throw new Error('signal owners unavailable');
+    });
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    expect(() => initVercelTelemetry()).toThrow(
+      'vercel during initialization: metrics, logs'
+    );
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledWith(
+      'otel.vercel.signals.initialize',
+      expect.any(Error)
+    );
+    expect(mocks.cleanupTelemetryProviders).toHaveBeenCalledOnce();
+  });
+
+  it('fails required exceptions when instrumentation is unavailable', async () => {
+    mocks.config.collectorUrl = 'https://collector.example.invalid';
+    mocks.config.dsn = 'https://public@example.invalid/1';
+    mocks.config.mode = 'required';
+    mocks.config.requiredSignals = ['exceptions'];
+    mocks.isServerSentryInstrumentationReady.mockReturnValueOnce(false);
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    expect(() => initVercelTelemetry()).toThrow(
+      'vercel during initialization: exceptions'
+    );
+    expect(mocks.installServerTelemetry).not.toHaveBeenCalled();
+    expect(mocks.releaseSignalOwnership).toHaveBeenCalledOnce();
+    expect(mocks.cleanupTelemetryProviders).toHaveBeenCalledOnce();
+  });
+
+  it('caches even an undefined initialization failure', async () => {
+    mocks.installServerTelemetry.mockImplementationOnce(() => {
+      // JavaScript dependencies can throw any value at this boundary.
+      // oxlint-disable-next-line no-throw-literal
+      throw undefined;
+    });
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    const failures: unknown[] = [];
+    for (const initialize of [initVercelTelemetry, initVercelTelemetry]) {
+      try {
+        initialize();
+      } catch (failure) {
+        failures.push(failure);
+      }
+    }
+
+    expect(failures).toEqual([undefined, undefined]);
+    expect(mocks.registerOTel).toHaveBeenCalledOnce();
+    expect(mocks.installServerTelemetry).toHaveBeenCalledOnce();
+  });
+
+  it('starts when every required Vercel owner is ready', async () => {
+    mocks.config.collectorUrl = 'https://collector.example.invalid';
+    mocks.config.dsn = 'https://public@example.invalid/1';
+    mocks.config.mode = 'required';
+    mocks.config.requiredSignals = ['traces', 'metrics', 'logs', 'exceptions'];
+    const { initVercelTelemetry } = await import('@/runtime/vercel/telemetry');
+
+    expect(() => initVercelTelemetry()).not.toThrow();
+    expect(mocks.installServerTelemetry).toHaveBeenCalledWith({
+      openTelemetry: expect.any(Object),
+      sentry: expect.any(Object),
     });
   });
 });
