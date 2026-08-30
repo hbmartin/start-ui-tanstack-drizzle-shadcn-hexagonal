@@ -4136,6 +4136,153 @@ describe('runtime artifact verifier', () => {
     }
   );
 
+  it('preserves an existing member when static Object.assign sources omit it', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>fetch("https://preserved.invalid.example")};Object.assign(target,null,{metadata:true},undefined);target.run()'
+      )
+    ).toEqual(['fetch("https://preserved.invalid.example")']);
+  });
+
+  it.each([
+    [
+      'retains an earlier source write when a later source omits the member',
+      'const target={run:()=>0};Object.assign(target,{run:()=>fetch("https://earlier.invalid.example")},{metadata:true});target.run()',
+      ['fetch("https://earlier.invalid.example")'],
+    ],
+    [
+      'uses a later safe source write',
+      'const target={run:()=>0};Object.assign(target,{run:()=>fetch("https://earlier.invalid.example")},{run:()=>0});target.run()',
+      [],
+    ],
+    [
+      'uses a later hazardous source write',
+      'const target={run:()=>0};Object.assign(target,{run:()=>0},{run:()=>fetch("https://later.invalid.example")});target.run()',
+      ['fetch("https://later.invalid.example")'],
+    ],
+    [
+      'uses the last duplicate property in one source',
+      'const target={run:()=>0};Object.assign(target,{run:()=>fetch("https://earlier.invalid.example"),run:()=>0});target.run()',
+      [],
+    ],
+  ])('%s', (_label, source, expected) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(expected);
+  });
+
+  it.each([
+    [
+      'computed member',
+      'const target={run:()=>fetch("https://preserved.invalid.example")};Object.assign(target,{[globalThis.key]:()=>0});target.run()',
+    ],
+    [
+      'spread member',
+      'const target={run:()=>fetch("https://preserved.invalid.example")};Object.assign(target,{...globalThis.source});target.run()',
+    ],
+    [
+      'alternative source membership',
+      'const target={run:()=>fetch("https://preserved.invalid.example")};const source=globalThis.flag?{run:()=>0}:{metadata:true};Object.assign(target,source);target.run()',
+    ],
+  ])('rejects ambiguous Object.assign %s semantics', (_label, source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects opaque aggregate member mutations'
+    );
+  });
+
+  it.each([
+    [
+      'member assignment',
+      'const source={};source.run=()=>fetch("https://installed.invalid.example");const target={run:()=>0};Object.assign(target,source);target.run()',
+    ],
+    [
+      'member deletion',
+      'const source={run:()=>0};delete source.run;const target={run:()=>fetch("https://preserved.invalid.example")};Object.assign(target,source);target.run()',
+    ],
+    [
+      'property definition on a returned target',
+      'const source={};Object.defineProperty(source,"run",{enumerable:true,value:()=>fetch("https://defined.invalid.example")});Object.assign({},source).run()',
+    ],
+    [
+      'conditional member deletion',
+      'const source={run:()=>0};if(globalThis.flag)delete source.run;const target={run:()=>fetch("https://preserved.invalid.example")};Object.assign(target,source);target.run()',
+    ],
+    [
+      'nested Object.assign mutation',
+      'const source={};Object.assign(source,{run:()=>fetch("https://nested.invalid.example")});Object.assign({},source).run()',
+    ],
+    [
+      'unresolved computed assignment',
+      'const source={run:()=>0};source[globalThis.key]=()=>fetch("https://computed.invalid.example");Object.assign({},source).run()',
+    ],
+  ])(
+    'rejects Object.assign source state changed by a prior %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
+  it('does not apply Object.assign source mutations that occur after the copy', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const source={run:()=>0};const target={};Object.assign(target,source);source.run=()=>fetch("https://later.invalid.example");target.run()'
+      )
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
+      'ordinary target',
+      'const target={run:()=>0};Object.assign(target,{run:()=>fetch("https://first.invalid.example")},target);target.run()',
+    ],
+    [
+      'returned target',
+      'const target={run:()=>0};Object.assign(target,{run:()=>fetch("https://first.invalid.example")},target).run()',
+    ],
+    [
+      'preexisting target alias',
+      'const target={run:()=>0},alias=target;Object.assign(target,{run:()=>fetch("https://first.invalid.example")},alias);target.run()',
+    ],
+  ])(
+    'rejects Object.assign source-target aliasing through a %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects opaque aggregate member mutations'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'later argument assignment',
+      'const source={run:()=>0};const target={};Object.assign(target,source,(source.run=()=>fetch("https://later.invalid.example"),{}));target.run()',
+    ],
+    [
+      'later argument assignment with a returned target',
+      'const source={run:()=>0};Object.assign({},source,(source.run=()=>fetch("https://later.invalid.example"),{})).run()',
+    ],
+  ])('rejects Object.assign source state changed by a %s', (_label, source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects opaque aggregate member mutations'
+    );
+  });
+
+  it.each([
+    [
+      'ordinary target',
+      'const target={};Object.assign(target,{run:()=>fetch("https://overwritten.invalid.example")},{set run(value){}});target.run()',
+    ],
+    [
+      'returned target',
+      'Object.assign({},{run:()=>fetch("https://overwritten.invalid.example")},{set run(value){}}).run()',
+    ],
+  ])(
+    'treats a setter-only Object.assign source as an undefined overwrite for a %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
   it.each([
     [
       'direct target',
