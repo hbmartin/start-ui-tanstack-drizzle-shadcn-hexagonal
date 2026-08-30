@@ -3161,6 +3161,51 @@ describe('runtime artifact verifier', () => {
   );
 
   it.each([
+    [
+      'const safe={};const receiver=globalThis.flag?safe:globalThis;receiver.fetch("https://invalid.example")',
+      'receiver.fetch("https://invalid.example")',
+    ],
+    [
+      'const safe={};const receiver=globalThis.flag?globalThis:safe;receiver.fetch("https://invalid.example")',
+      'receiver.fetch("https://invalid.example")',
+    ],
+    [
+      'const safe={};const receiver=globalThis.flag?safe:globalThis;receiver["fetch"]("https://invalid.example")',
+      'receiver["fetch"]("https://invalid.example")',
+    ],
+    [
+      'const safe={};const receiver=globalThis.flag?globalThis:safe;receiver["fetch"]("https://invalid.example")',
+      'receiver["fetch"]("https://invalid.example")',
+    ],
+    [
+      'const safe={api:{}};const hazardous={api:globalThis};const receiver=globalThis.flag?safe:hazardous;receiver.api.fetch("https://invalid.example")',
+      'receiver.api.fetch("https://invalid.example")',
+    ],
+    [
+      'const safe={api:{}};const hazardous={api:globalThis};const receiver=globalThis.flag?hazardous:safe;receiver.api.fetch("https://invalid.example")',
+      'receiver.api.fetch("https://invalid.example")',
+    ],
+  ])('retains substituted member receiver identity (%s)', (source, effect) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(effect);
+  });
+
+  it.each([
+    'const key=globalThis.flag?"noop":"fetch";globalThis[key]("https://invalid.example")',
+    'const key=globalThis.flag?"fetch":"noop";globalThis[key]("https://invalid.example")',
+  ])('retains normalized computed member identity (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'globalThis[key]("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    'const safe={};const receiver=globalThis.flag?safe:{};receiver.fetch("https://invalid.example")',
+    'const key=globalThis.flag?"noop":"toString";globalThis[key]("https://invalid.example")',
+  ])('keeps a non-effectful member alternative clean (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
     'const [value]=unknown();new value()',
     'const [value]=unknown();value`template`',
     'const [value]=unknown();value.run()',

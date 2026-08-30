@@ -5244,6 +5244,7 @@ const createCloudflareLexicalContext = (program, analysisLabel) => ({
   targetResolutionCycleKeyIds: new Map(),
   targetResolutionDependencyFrames: [],
   targetResolutionCycleRevision: 0,
+  targetResolutionMemberSemanticKeyMemo: new WeakMap(),
   targetResolutionNextCycleKeyId: 0,
   targetResolutionStableCandidateMemo: new Map(),
   targetResolutionReachabilityInProgress: new WeakMap(),
@@ -16967,17 +16968,25 @@ function resolveCloudflareLexicalTargetCandidates(node, target, context, seen) {
     context.targetResolutionCandidateMemo = new Map();
   }
   const revision = cloudflareTargetResolutionRevision(context);
+  const resolutionNodeKey = cloudflareTargetResolutionSemanticKey(
+    node,
+    context.targetResolutionMemberSemanticKeyMemo
+  );
+  const resolutionTargetKey = cloudflareTargetResolutionSemanticKey(
+    target,
+    context.targetResolutionMemberSemanticKeyMemo
+  );
   const resolutionKey = JSON.stringify([
     revision,
-    cloudflareNodeSemanticKey(node),
-    cloudflareNodeSemanticKey(target),
+    resolutionNodeKey,
+    resolutionTargetKey,
     cloudflareTargetResolutionTransientState(context),
     cloudflareMutationOperandSeenKey(seen, context),
   ]);
   const cycleKey = JSON.stringify([
     revision,
-    cloudflareNodeSemanticKey(node),
-    cloudflareNodeSemanticKey(target),
+    resolutionNodeKey,
+    resolutionTargetKey,
   ]);
   const cycleId = cloudflareTargetResolutionCycleId(context, cycleKey);
   addCloudflareTargetResolutionDependency(
@@ -19921,6 +19930,55 @@ const cloudflareNodeSemanticKey = (node) => {
     : `${nodeType(node)}#${astDigest(node)}`;
 };
 
+const cloudflareCandidateMemberSemanticKey = (
+  target,
+  memo = new WeakMap(),
+  active = new WeakSet(),
+  depth = 0
+) => {
+  if (nodeType(target) !== 'MemberExpression') {
+    return cloudflareNodeSemanticKey(target);
+  }
+  assert(
+    depth <= cloudflareFactoryResolutionLimit,
+    cloudflareFactoryResolutionMessage
+  );
+  const cached = memo.get(target);
+  if (cached) return cached;
+  if (active.has(target)) {
+    return `cycle:${cloudflareNodeSemanticKey(target)}`;
+  }
+  active.add(target);
+  const value = {
+    computed: target.computed === true,
+    object: cloudflareCandidateMemberSemanticKey(
+      target.object,
+      memo,
+      active,
+      depth + 1
+    ),
+    property: cloudflareCandidateMemberSemanticKey(
+      target.property,
+      memo,
+      active,
+      depth + 1
+    ),
+    target: cloudflareNodeSemanticKey(target),
+    wildcardMember: target.cloudflareWildcardMember === true,
+  };
+  active.delete(target);
+  const digest = createHash('sha256')
+    .update(JSON.stringify(value))
+    .digest('hex');
+  memo.set(target, digest);
+  return digest;
+};
+
+const cloudflareTargetResolutionSemanticKey = (target, memo = new WeakMap()) =>
+  nodeType(target) === 'MemberExpression'
+    ? cloudflareCandidateMemberSemanticKey(target, memo)
+    : cloudflareNodeSemanticKey(target);
+
 const cloudflareCandidateSemanticValue = (
   candidate,
   memo = new WeakMap(),
@@ -19955,6 +20013,10 @@ const cloudflareCandidateSemanticValue = (
         ]
       ),
       invocationKind: candidate.invocationKind,
+      memberTarget:
+        nodeType(candidate.target) === 'MemberExpression'
+          ? cloudflareCandidateMemberSemanticKey(candidate.target)
+          : undefined,
       opaqueIteratorElement:
         candidate.target?.cloudflareOpaqueIteratorElement === true,
       opaqueSpreadElement:
