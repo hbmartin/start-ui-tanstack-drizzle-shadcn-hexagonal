@@ -18,6 +18,7 @@ export { runWithNormalizedOtelSdkEnvironment } from './infrastructure/config/ote
 export { getRedisConfig } from './infrastructure/config/redis';
 export {
   getTelemetryConfig,
+  parseTelemetryConfig,
   type TelemetryConfig,
 } from './infrastructure/config/telemetry';
 export {

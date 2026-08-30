@@ -7,12 +7,10 @@ const mocks = vi.hoisted(() => ({
     await telemetry.forceFlush();
     return 'flushed';
   }),
-  getTelemetry: vi.fn(() => ({ forceFlush: mocks.adapterForceFlush })),
 }));
 
 vi.mock('@/platform/telemetry', () => ({
   forceFlushTelemetry: mocks.forceFlushTelemetry,
-  getTelemetry: mocks.getTelemetry,
   reportTelemetryFailure: vi.fn(),
 }));
 
@@ -24,13 +22,22 @@ describe('Cloudflare request telemetry lifecycle', () => {
     const request = new Request('https://app.example/');
     registerRequestCompletion(request, Promise.resolve());
     const waitUntil = vi.fn();
+    const requestTelemetry = { forceFlush: mocks.adapterForceFlush };
 
-    scheduleCloudflareRequestFlush(request, waitUntil);
+    scheduleCloudflareRequestFlush(
+      request,
+      requestTelemetry as never,
+      waitUntil
+    );
 
     expect(waitUntil).toHaveBeenCalledOnce();
     await waitUntil.mock.calls[0]?.[0];
-    expect(mocks.getTelemetry).toHaveBeenCalledOnce();
     expect(mocks.forceFlushTelemetry).toHaveBeenCalledOnce();
+    expect(mocks.forceFlushTelemetry).toHaveBeenCalledWith(
+      requestTelemetry,
+      undefined,
+      expect.any(Object)
+    );
     expect(mocks.adapterForceFlush).toHaveBeenCalledOnce();
   });
 });

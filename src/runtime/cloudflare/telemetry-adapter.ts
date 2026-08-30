@@ -28,6 +28,41 @@ export type CloudflareAnalyticsEngine = {
   }): void;
 };
 
+const noOpNativeSpan: NativeSpan = {
+  end: () => {},
+  setAttribute: () => noOpNativeSpan,
+  setAttributes: () => noOpNativeSpan,
+};
+
+const noOpTracing: CloudflareTracing = {
+  enterSpan: (_name, callback) => callback(noOpNativeSpan),
+  startActiveSpan: (_name, callback) => callback(noOpNativeSpan),
+  startSpan: () => noOpNativeSpan,
+};
+
+const hasFunction = (value: unknown, property: string) => {
+  try {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      typeof (value as Record<string, unknown>)[property] === 'function'
+    );
+  } catch {
+    return false;
+  }
+};
+
+export const isCloudflareAnalyticsEngine = (
+  value: unknown
+): value is CloudflareAnalyticsEngine => hasFunction(value, 'writeDataPoint');
+
+export const isCloudflareTracing = (
+  value: unknown
+): value is CloudflareTracing =>
+  hasFunction(value, 'enterSpan') &&
+  hasFunction(value, 'startActiveSpan') &&
+  hasFunction(value, 'startSpan');
+
 const EVENT_NAME = /^[a-z][a-z0-9_.-]{0,127}$/u;
 const SAFE_TEXT = /^[a-zA-Z0-9_./:$-]{1,256}$/u;
 const MAX_TEXT_LENGTH = 256;
@@ -151,68 +186,71 @@ export const createCloudflareTelemetryAdapter = ({
   tracing,
 }: {
   analytics?: CloudflareAnalyticsEngine;
-  tracing: CloudflareTracing;
-}): TelemetryAdapter => ({
-  captureException: (failure, context) => {
-    writeStructuredConsoleLog({
-      level: 'error',
-      message: 'telemetry.cloudflare',
-      record: {
-        errorType: errorType(failure),
-        event: eventName(context?.tags?.event, 'exception.captured'),
-      },
-    });
-  },
-  currentCorrelation: () => ({}),
-  emitLog: (record) => {
-    writeStructuredConsoleLog({
-      level: record.level,
-      message: 'telemetry.cloudflare',
-      record: {
-        attributes: compactAttributes(record.attributes),
-        direction: record.direction,
-        event: eventName(record.event, 'application.log'),
-      },
-    });
-  },
-  forceFlush: () => Promise.resolve(),
-  recordMetric: (input) => {
-    if (!analytics || !Number.isFinite(input.value)) return;
-    const name = SAFE_METRIC_NAMES.has(input.name)
-      ? input.name
-      : input.type === 'counter'
-        ? 'application.counter'
-        : 'application.histogram';
-    analytics.writeDataPoint({
-      blobs: [
-        input.type ?? 'histogram',
-        JSON.stringify(compactAttributes(input.attributes)),
-      ],
-      doubles: [input.value],
-      indexes: [name],
-    });
-  },
-  setUser: () => {},
-  startManualSpan: (options) => {
-    const span = tracing.startSpan(spanName(options));
-    span.setAttributes(compactAttributes(options.attributes));
-    return spanHandle(span);
-  },
-  startSpan: (options, work) =>
-    tracing.enterSpan(spanName(options), (span) => {
+  tracing?: CloudflareTracing;
+}): TelemetryAdapter => {
+  const requestTracing = tracing ?? noOpTracing;
+  return {
+    captureException: (failure, context) => {
+      writeStructuredConsoleLog({
+        level: 'error',
+        message: 'telemetry.cloudflare',
+        record: {
+          errorType: errorType(failure),
+          event: eventName(context?.tags?.event, 'exception.captured'),
+        },
+      });
+    },
+    currentCorrelation: () => ({}),
+    emitLog: (record) => {
+      writeStructuredConsoleLog({
+        level: record.level,
+        message: 'telemetry.cloudflare',
+        record: {
+          attributes: compactAttributes(record.attributes),
+          direction: record.direction,
+          event: eventName(record.event, 'application.log'),
+        },
+      });
+    },
+    forceFlush: () => Promise.resolve(),
+    recordMetric: (input) => {
+      if (!analytics || !Number.isFinite(input.value)) return;
+      const name = SAFE_METRIC_NAMES.has(input.name)
+        ? input.name
+        : input.type === 'counter'
+          ? 'application.counter'
+          : 'application.histogram';
+      analytics.writeDataPoint({
+        blobs: [
+          input.type ?? 'histogram',
+          JSON.stringify(compactAttributes(input.attributes)),
+        ],
+        doubles: [input.value],
+        indexes: [name],
+      });
+    },
+    setUser: () => {},
+    startManualSpan: (options) => {
+      const span = requestTracing.startSpan(spanName(options));
       span.setAttributes(compactAttributes(options.attributes));
-      try {
-        const result = work();
-        if (isPromiseLike(result)) {
-          return Promise.resolve(result).catch((failure: unknown) => {
-            span.setAttribute('error.type', errorType(failure));
-            throw failure;
-          }) as typeof result;
+      return spanHandle(span);
+    },
+    startSpan: (options, work) =>
+      requestTracing.enterSpan(spanName(options), (span) => {
+        span.setAttributes(compactAttributes(options.attributes));
+        try {
+          const result = work();
+          if (isPromiseLike(result)) {
+            return Promise.resolve(result).catch((failure: unknown) => {
+              span.setAttribute('error.type', errorType(failure));
+              throw failure;
+            }) as typeof result;
+          }
+          return result;
+        } catch (failure) {
+          span.setAttribute('error.type', errorType(failure));
+          throw failure;
         }
-        return result;
-      } catch (failure) {
-        span.setAttribute('error.type', errorType(failure));
-        throw failure;
-      }
-    }),
-});
+      }),
+  };
+};

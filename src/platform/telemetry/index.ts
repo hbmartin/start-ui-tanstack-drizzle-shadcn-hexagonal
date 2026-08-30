@@ -24,6 +24,7 @@ export {
 export type { RequestExceptionCaptureState } from './request-exception-state';
 export {
   getTelemetry,
+  installTelemetryScopeResolver,
   isTelemetryAvailable,
   setTelemetry,
   telemetryProxy,

@@ -3,14 +3,35 @@ import { reportTelemetryFailure } from './report-failure';
 import type { TelemetryAdapter } from './types';
 
 let activeAdapter: TelemetryAdapter = createNoOpTelemetry();
+type TelemetryScopeResolver = () => TelemetryAdapter | undefined;
+let telemetryScopeResolver: TelemetryScopeResolver | undefined;
 
 export const setTelemetry = (adapter: TelemetryAdapter) => {
   activeAdapter = adapter;
 };
 
-export const getTelemetry = (): TelemetryAdapter => activeAdapter;
+export const installTelemetryScopeResolver = (
+  resolver: TelemetryScopeResolver
+): void => {
+  if (telemetryScopeResolver && telemetryScopeResolver !== resolver) {
+    throw new Error('Telemetry scope resolver is already installed');
+  }
+  telemetryScopeResolver = resolver;
+};
 
-export const isTelemetryAvailable = () => !isNoOpTelemetry(activeAdapter);
+const resolveTelemetry = (): TelemetryAdapter => {
+  if (!telemetryScopeResolver) return activeAdapter;
+  try {
+    return telemetryScopeResolver() ?? activeAdapter;
+  } catch (failure) {
+    reportTelemetryFailure('telemetry.resolve_scope', failure);
+    return activeAdapter;
+  }
+};
+
+export const getTelemetry = (): TelemetryAdapter => resolveTelemetry();
+
+export const isTelemetryAvailable = () => !isNoOpTelemetry(resolveTelemetry());
 
 const noOpManualSpan = createNoOpTelemetry().startManualSpan({
   name: 'telemetry.noop',
@@ -70,7 +91,7 @@ const startSpanSafely = <T>(
 
   let providerResult: unknown;
   try {
-    providerResult = activeAdapter.startSpan(options, runWorkOnce);
+    providerResult = resolveTelemetry().startSpan(options, runWorkOnce);
   } catch (providerFailure) {
     if (getWorkState() !== 'threw' || providerFailure !== workFailure) {
       reportTelemetryFailure('telemetry.start_span', providerFailure);
@@ -138,16 +159,16 @@ const guardManualSpan = (
 export const telemetryProxy: TelemetryAdapter = {
   captureException: (error, context) => {
     reportOnly('telemetry.capture_exception', () =>
-      activeAdapter.captureException(error, context)
+      resolveTelemetry().captureException(error, context)
     );
   },
   setUser: (user) => {
-    reportOnly('telemetry.set_user', () => activeAdapter.setUser(user));
+    reportOnly('telemetry.set_user', () => resolveTelemetry().setUser(user));
   },
   startSpan: startSpanSafely,
   startManualSpan: (options) => {
     try {
-      return guardManualSpan(activeAdapter.startManualSpan(options));
+      return guardManualSpan(resolveTelemetry().startManualSpan(options));
     } catch (failure) {
       reportTelemetryFailure('telemetry.start_manual_span', failure);
       return noOpManualSpan;
@@ -155,18 +176,18 @@ export const telemetryProxy: TelemetryAdapter = {
   },
   currentCorrelation: () => {
     try {
-      return activeAdapter.currentCorrelation();
+      return resolveTelemetry().currentCorrelation();
     } catch (failure) {
       reportTelemetryFailure('telemetry.current_correlation', failure);
       return {};
     }
   },
   emitLog: (record) => {
-    reportOnly('telemetry.emit_log', () => activeAdapter.emitLog(record));
+    reportOnly('telemetry.emit_log', () => resolveTelemetry().emitLog(record));
   },
   forceFlush: async () => {
     try {
-      await activeAdapter.forceFlush();
+      await resolveTelemetry().forceFlush();
     } catch (failure) {
       reportTelemetryFailure('telemetry.force_flush', failure);
       throw failure;
@@ -174,7 +195,7 @@ export const telemetryProxy: TelemetryAdapter = {
   },
   recordMetric: (input) => {
     reportOnly('telemetry.record_metric', () =>
-      activeAdapter.recordMetric(input)
+      resolveTelemetry().recordMetric(input)
     );
   },
 };

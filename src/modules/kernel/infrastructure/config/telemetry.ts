@@ -12,6 +12,7 @@ import {
   isProdRuntimeEnvironment,
   parseEnv,
 } from './env-schema';
+import type { RuntimeEnv } from '@/platform/env/runtime';
 import { assertSecureUrlInProduction } from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
@@ -116,10 +117,8 @@ export type TelemetryConfig = {
 
 let cachedTelemetryConfig: TelemetryConfig | undefined;
 
-export function getTelemetryConfig(): TelemetryConfig {
-  if (cachedTelemetryConfig) return cachedTelemetryConfig;
-
-  const env = parseEnv(telemetryEnvSchema);
+export function parseTelemetryConfig(source?: RuntimeEnv): TelemetryConfig {
+  const env = parseEnv(telemetryEnvSchema, source);
   const isProduction = isProdRuntimeEnvironment(env);
   const mode = env.TELEMETRY_MODE ?? 'optional';
   if (env.OTEL_SDK_DISABLED && mode !== 'off') {
@@ -158,7 +157,7 @@ export function getTelemetryConfig(): TelemetryConfig {
     env,
   });
 
-  cachedTelemetryConfig = {
+  return {
     mode,
     requiredSignals: env.TELEMETRY_REQUIRED_SIGNALS,
     dsn: env.SENTRY_DSN,
@@ -185,5 +184,9 @@ export function getTelemetryConfig(): TelemetryConfig {
     rateLimitPerMinute: env.TELEMETRY_RATE_LIMIT_PER_MINUTE ?? 600,
     requireAuth: env.TELEMETRY_REQUIRE_AUTH,
   };
+}
+
+export function getTelemetryConfig(): TelemetryConfig {
+  cachedTelemetryConfig ??= parseTelemetryConfig();
   return cachedTelemetryConfig;
 }

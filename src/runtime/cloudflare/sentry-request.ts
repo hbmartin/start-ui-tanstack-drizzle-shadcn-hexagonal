@@ -97,11 +97,13 @@ export const runWithCloudflareSentry = async ({
   handle,
   request,
   requestOptions,
+  requireSentryOwner = false,
 }: {
   api: CloudflareSentryRequestApi;
   handle: () => Promise<Response> | Response;
   request: Request;
   requestOptions: RequestHandlerOptions;
+  requireSentryOwner?: boolean;
 }): Promise<Response> => {
   let applicationOutcome: ApplicationOutcome | undefined;
   let applicationWork: Promise<ApplicationOutcome> | undefined;
@@ -152,6 +154,7 @@ export const runWithCloudflareSentry = async ({
       throw applicationOutcome.failure;
     }
     reportTelemetryFailure('sentry.cloudflare.request', failure);
+    if (requireSentryOwner && applicationWork === undefined) throw failure;
   }
 
   if (applicationOutcome?.type === 'responded') {
@@ -165,6 +168,11 @@ export const runWithCloudflareSentry = async ({
     'sentry.cloudflare.request',
     new Error('Sentry request wrapper skipped application handler')
   );
+  if (requireSentryOwner && applicationWork === undefined) {
+    throw new Error(
+      'Required Sentry request owner skipped application handler'
+    );
+  }
   applicationOutcome = await runApplicationOnce();
   if (applicationOutcome.type === 'failed') {
     throw applicationOutcome.failure;

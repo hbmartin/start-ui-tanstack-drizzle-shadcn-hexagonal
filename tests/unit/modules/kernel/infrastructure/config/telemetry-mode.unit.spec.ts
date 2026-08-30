@@ -24,6 +24,38 @@ describe('telemetry mode configuration', () => {
     });
   });
 
+  it('parses independent trusted runtime sources without ambient cache state', async () => {
+    const { getTelemetryConfig, parseTelemetryConfig } =
+      await import('@/modules/kernel/infrastructure/config/telemetry');
+
+    expect(
+      parseTelemetryConfig({
+        PROD: true,
+        TELEMETRY_MODE: 'required',
+        TELEMETRY_REQUIRED_SIGNALS: 'exceptions,traces,exceptions',
+      })
+    ).toMatchObject({
+      mode: 'required',
+      requiredSignals: ['traces', 'exceptions'],
+    });
+    expect(
+      parseTelemetryConfig({ PROD: true, TELEMETRY_MODE: 'off' })
+    ).toMatchObject({ mode: 'off', requiredSignals: [] });
+    expect(getTelemetryConfig()).toMatchObject({ mode: 'optional' });
+  });
+
+  it('applies production URL policy to an explicit runtime source', async () => {
+    const { parseTelemetryConfig } =
+      await import('@/modules/kernel/infrastructure/config/telemetry');
+
+    expect(() =>
+      parseTelemetryConfig({
+        PROD: true,
+        SENTRY_DSN: 'http://sentry.example.test/1',
+      })
+    ).toThrow(/SENTRY_DSN/);
+  });
+
   it.each(['mandatory', ' REQUIRED ', 'Optional'])(
     'rejects invalid closed telemetry mode %j',
     async (mode) => {

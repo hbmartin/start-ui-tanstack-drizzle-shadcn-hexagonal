@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createCloudflareTelemetryAdapter } from '@/runtime/cloudflare/telemetry-adapter';
+import {
+  createCloudflareTelemetryAdapter,
+  isCloudflareAnalyticsEngine,
+  isCloudflareTracing,
+} from '@/runtime/cloudflare/telemetry-adapter';
 
 const createTracing = () => {
   const span = {
@@ -21,6 +25,31 @@ const createTracing = () => {
 };
 
 describe('Cloudflare native telemetry adapter', () => {
+  it('validates native capability shapes without invoking provider methods', () => {
+    const { tracing } = createTracing();
+    const analytics = { writeDataPoint: vi.fn() };
+
+    expect(isCloudflareTracing(tracing)).toBe(true);
+    expect(isCloudflareAnalyticsEngine(analytics)).toBe(true);
+    expect(tracing.enterSpan).not.toHaveBeenCalled();
+    expect(tracing.startActiveSpan).not.toHaveBeenCalled();
+    expect(tracing.startSpan).not.toHaveBeenCalled();
+    expect(analytics.writeDataPoint).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing and hostile capability shapes', () => {
+    const hostile = Object.defineProperty({}, 'enterSpan', {
+      get: () => {
+        throw new Error('hostile getter');
+      },
+    });
+
+    expect(isCloudflareTracing({})).toBe(false);
+    expect(isCloudflareTracing(hostile)).toBe(false);
+    expect(isCloudflareAnalyticsEngine({})).toBe(false);
+    expect(isCloudflareAnalyticsEngine(undefined)).toBe(false);
+  });
+
   it('emits a closed exception record without raw failure text', () => {
     const consoleError = vi
       .spyOn(console, 'error')

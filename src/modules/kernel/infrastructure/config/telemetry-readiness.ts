@@ -8,7 +8,10 @@ import {
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 import type { TelemetryConfig } from './telemetry';
 
-export type TelemetryReadinessPhase = 'configuration' | 'initialization';
+export type TelemetryReadinessPhase =
+  | 'configuration'
+  | 'initialization'
+  | 'request';
 
 export const createTelemetrySignalReadiness = (
   readiness: Partial<TelemetrySignalReadiness> = {}

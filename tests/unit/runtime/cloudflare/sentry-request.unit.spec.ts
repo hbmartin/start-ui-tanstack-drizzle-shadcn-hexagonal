@@ -147,6 +147,68 @@ describe('Cloudflare Sentry request isolation', () => {
     expect(handle).toHaveBeenCalledOnce();
   });
 
+  it('fails closed before application work when the required owner throws', async () => {
+    const request = new Request('https://app.example.test');
+    const providerFailure = new Error('provider unavailable');
+    const handle = vi.fn(async () => new Response('must not run'));
+    const api = requestApi(
+      vi.fn(async () => {
+        throw providerFailure;
+      }) as never
+    );
+
+    await expect(
+      runWithCloudflareSentry({
+        api: api as never,
+        handle,
+        request,
+        requestOptions,
+        requireSentryOwner: true,
+      })
+    ).rejects.toBe(providerFailure);
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the required owner skips its application callback', async () => {
+    const request = new Request('https://app.example.test');
+    const handle = vi.fn(async () => new Response('must not run'));
+    const api = requestApi(vi.fn(async () => new Response('skipped')) as never);
+
+    await expect(
+      runWithCloudflareSentry({
+        api: api as never,
+        handle,
+        request,
+        requestOptions,
+        requireSentryOwner: true,
+      })
+    ).rejects.toThrow('Required Sentry request owner skipped');
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it('preserves the application response after the required owner starts work', async () => {
+    const request = new Request('https://app.example.test');
+    const applicationResponse = new Response('available');
+    const handle = vi.fn(async () => applicationResponse);
+    const api = requestApi(
+      vi.fn(async (_options, handler) => {
+        await handler();
+        throw new Error('provider teardown failed');
+      }) as never
+    );
+
+    await expect(
+      runWithCloudflareSentry({
+        api: api as never,
+        handle,
+        request,
+        requestOptions,
+        requireSentryOwner: true,
+      })
+    ).resolves.toBe(applicationResponse);
+    expect(handle).toHaveBeenCalledOnce();
+  });
+
   it('rethrows the exact application failure without retrying', async () => {
     const request = new Request('https://app.example.test');
     const applicationFailure = new Error('application failed');

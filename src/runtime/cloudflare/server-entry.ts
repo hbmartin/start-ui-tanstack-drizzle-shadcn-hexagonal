@@ -1,20 +1,23 @@
 import type { ServerEntry } from '@tanstack/react-start/server-entry';
 import type { CloudflareOptions } from '@sentry/cloudflare';
 
-import type { CloudflareSentryEnvironment } from '@/composition/telemetry/sentry-cloudflare-options';
 import type { HyperdriveBinding } from '@/modules/kernel/backend';
 
-import type { CloudflareAnalyticsEngine } from './telemetry-adapter';
+import type { CloudflareRequestTelemetryEnvironment } from './request-telemetry';
 
-type CloudflareEnvironment = CloudflareSentryEnvironment & {
+type CloudflareEnvironment = CloudflareRequestTelemetryEnvironment & {
   START_UI_DATABASE: HyperdriveBinding;
-  START_UI_TELEMETRY_METRICS?: CloudflareAnalyticsEngine;
 };
 
 type CloudflareExecutionContext = {
   waitUntil(completion: Promise<unknown>): void;
 };
 
+const {
+  initializeCloudflareTelemetryRequestScope,
+  runWithCloudflareTelemetry,
+} = await import('./telemetry-request-scope');
+initializeCloudflareTelemetryRequestScope();
 const Sentry = await import('@sentry/cloudflare');
 const { initializeCloudflareSentryApplication, runWithCloudflareSentry } =
   await import('./sentry-request');
@@ -28,25 +31,21 @@ const { application, sentryRequestIsolationReady } =
     return createApplicationServerEntry('cloudflare');
   });
 const { tracing } = await import('cloudflare:workers');
-const { createNoOpTelemetry, reportTelemetryFailure } =
-  await import('@/platform/telemetry');
-const { createCloudflareTelemetryAdapter } =
-  await import('./telemetry-adapter');
 const { runWithCloudflareDatabase } = await import('./database-request');
 const { configureCloudflareRequestTelemetry } =
   await import('./request-telemetry');
 const { scheduleCloudflareRequestFlush } = await import('./request-lifecycle');
-let lastKnownNativeTelemetry = createNoOpTelemetry();
-
 const fetchCloudflareApplication = ({
   context,
   handle,
   request,
+  requireSentryOwner,
   sentryOptions,
 }: {
   context: CloudflareExecutionContext;
   handle: () => Promise<Response> | Response;
   request: Request;
+  requireSentryOwner: boolean;
   sentryOptions?: CloudflareOptions;
 }) =>
   sentryOptions
@@ -54,6 +53,7 @@ const fetchCloudflareApplication = ({
         api: Sentry,
         handle,
         request,
+        requireSentryOwner,
         requestOptions: {
           captureErrors: false,
           context: context as never,
@@ -69,23 +69,14 @@ const entry = {
     environment: CloudflareEnvironment,
     context: CloudflareExecutionContext
   ) {
-    let nativeTelemetry = lastKnownNativeTelemetry;
-    try {
-      nativeTelemetry = createCloudflareTelemetryAdapter({
-        analytics: environment.START_UI_TELEMETRY_METRICS,
+    const { requireSentryOwner, sentryOptions, telemetry } =
+      configureCloudflareRequestTelemetry({
+        environment,
+        request,
+        sentry: Sentry,
+        sentryRequestIsolationReady,
         tracing,
       });
-      lastKnownNativeTelemetry = nativeTelemetry;
-    } catch (failure) {
-      reportTelemetryFailure('otel.cloudflare.configure', failure);
-    }
-    const { sentryOptions } = configureCloudflareRequestTelemetry({
-      environment,
-      nativeTelemetry,
-      request,
-      sentry: Sentry,
-      sentryRequestIsolationReady,
-    });
 
     const handleApplication = () =>
       application.fetch(request, { context: undefined as never });
@@ -96,14 +87,17 @@ const entry = {
         request,
       });
     try {
-      return await fetchCloudflareApplication({
-        context,
-        handle: handleDatabase,
-        request,
-        sentryOptions,
-      });
+      return await runWithCloudflareTelemetry(telemetry, () =>
+        fetchCloudflareApplication({
+          context,
+          handle: handleDatabase,
+          request,
+          requireSentryOwner,
+          sentryOptions,
+        })
+      );
     } finally {
-      scheduleCloudflareRequestFlush(request, (completion) =>
+      scheduleCloudflareRequestFlush(request, telemetry, (completion) =>
         context.waitUntil(completion)
       );
     }
