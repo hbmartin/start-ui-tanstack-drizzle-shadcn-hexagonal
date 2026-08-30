@@ -4146,6 +4146,85 @@ describe('runtime artifact verifier', () => {
 
   it.each([
     [
+      'later read',
+      'const target={run:()=>fetch("https://preserved.invalid.example")};Object.assign(target,null,{metadata:true});target.run()',
+    ],
+    [
+      'returned target',
+      'Object.assign({run:()=>fetch("https://preserved.invalid.example")},null,{metadata:true}).run()',
+    ],
+    [
+      'no sources',
+      'Object.assign({run:()=>fetch("https://preserved.invalid.example")}).run()',
+    ],
+  ])(
+    'preserves an Object.assign target member through a %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+        'fetch("https://preserved.invalid.example")',
+      ]);
+    }
+  );
+
+  it.each([
+    [
+      'later read',
+      'const target={};Object.assign(target,{get run(){return()=>fetch("https://accessor.invalid.example")},set run(value){}});target.run()',
+    ],
+    [
+      'returned target',
+      'Object.assign({},{set run(value){},get run(){return()=>fetch("https://accessor.invalid.example")}}).run()',
+    ],
+    [
+      'numeric key',
+      'Object.assign({},{1:()=>fetch("https://accessor.invalid.example")})["1"]()',
+    ],
+  ])(
+    'resolves an effective Object.assign source property for a %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+        'fetch("https://accessor.invalid.example")',
+      ]);
+    }
+  );
+
+  it.each([
+    'const target={};Object.assign(target,{get run(){return()=>fetch("https://overwritten.invalid.example")},run:()=>0});target.run()',
+    'Object.assign({},{get run(){return()=>fetch("https://overwritten.invalid.example")},run:()=>0}).run()',
+    'Object.assign({},{run:()=>fetch("https://data.invalid.example"),get run(){return()=>fetch("https://earlier.invalid.example")},get run(){return()=>0}}).run()',
+  ])(
+    'lets a later Object.assign data property replace an accessor',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it('uses the latest same-kind Object.assign source accessor', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'Object.assign({},{run:()=>0,get run(){return()=>0},get run(){return()=>fetch("https://latest.invalid.example")}}).run()'
+      )
+    ).toEqual(['fetch("https://latest.invalid.example")']);
+  });
+
+  it('rejects Object.assign aliasing when the assignment target is unresolved', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'Object.assign(globalThis.target,{run:()=>fetch("https://unresolved.invalid.example")},globalThis.target).run()'
+      )
+    ).toThrow('rejects opaque aggregate member mutations');
+  });
+
+  it('preserves an Array.from member through an omitting Object.assign mutation', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const values={0:()=>fetch("https://preserved-array.invalid.example"),length:1};Object.assign(values,{metadata:true});Array.from(values,value=>value())'
+      )
+    ).toEqual(['fetch("https://preserved-array.invalid.example")']);
+  });
+
+  it.each([
+    [
       'retains an earlier source write when a later source omits the member',
       'const target={run:()=>0};Object.assign(target,{run:()=>fetch("https://earlier.invalid.example")},{metadata:true});target.run()',
       ['fetch("https://earlier.invalid.example")'],

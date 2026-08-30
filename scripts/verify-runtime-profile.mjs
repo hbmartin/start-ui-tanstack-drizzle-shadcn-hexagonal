@@ -7705,24 +7705,15 @@ const cloudflareObjectAssignMatchingCandidates = (
   );
   if (!sourceState.writes) return undefined;
   const candidates = sourceState.candidates;
-  return candidates.flatMap((candidate) => {
-    const property = candidate.target.properties.findLast(
-      (entry) => cloudflareLexicalPropertyKeyName(entry, context) === member
-    );
-    return property
-      ? inheritCloudflareCandidateContexts(
-          candidate,
-          cloudflareResolvedMemberCandidates(
-            node,
-            memberTarget,
-            candidate,
-            member,
-            context,
-            seen
-          )
-        )
-      : [];
-  });
+  return candidates.flatMap((candidate) =>
+    cloudflareObjectAssignEffectiveMemberCandidates(
+      node,
+      candidate,
+      member,
+      context,
+      seen
+    )
+  );
 };
 
 const cloudflareObjectAssignMemberCandidates = (
@@ -13417,6 +13408,7 @@ const cloudflareObjectAssignSourceMemberState = (
       context,
       seen
     );
+    assert(assignmentTargets.length > 0, cloudflareOpaqueMemberMutationMessage);
     const assignmentTargetValues = new Set(
       assignmentTargets.map(({ target }) =>
         unwrapCloudflareExecutionTarget(target)
@@ -13488,6 +13480,74 @@ const cloudflareObjectAssignSourceMemberState = (
   };
 };
 
+const cloudflareObjectAssignEffectiveMemberProperties = (
+  candidate,
+  member,
+  context
+) => {
+  const properties = candidate.target.properties.filter((property) =>
+    cloudflareMemberNamesEqual(
+      cloudflareLexicalPropertyKeyName(property, context),
+      member
+    )
+  );
+  const lastDataIndex = properties.findLastIndex(
+    (property) => property.kind === 'init'
+  );
+  if (lastDataIndex === properties.length - 1) {
+    return properties.slice(lastDataIndex);
+  }
+  const accessors = properties.slice(lastDataIndex + 1);
+  const latestAccessorByKind = new Map(
+    accessors.map((property) => [property.kind, property])
+  );
+  return accessors.filter(
+    (property) => latestAccessorByKind.get(property.kind) === property
+  );
+};
+
+const cloudflareObjectAssignEffectiveMemberCandidates = (
+  node,
+  candidate,
+  member,
+  context,
+  seen,
+  owner = cloudflareFunctionOwnerAt(node, context)
+) => {
+  const properties = cloudflareObjectAssignEffectiveMemberProperties(
+    candidate,
+    member,
+    context
+  );
+  assert(properties.length > 0, cloudflareOpaqueMemberMutationMessage);
+  const accessorCandidates = cloudflareAccessorCandidates(
+    properties,
+    context,
+    seen
+  );
+  if (accessorCandidates !== undefined) {
+    return inheritCloudflareCandidateContexts(candidate, accessorCandidates);
+  }
+  const property = properties.at(-1);
+  const resolveProperty = () =>
+    cloudflareLexicalTargetCandidates(
+      property.value,
+      property.value,
+      context,
+      seen
+    );
+  const propertyCandidates =
+    candidate.factoryBindings && owner
+      ? withCloudflareActiveFactoryBindings(
+          context,
+          owner,
+          candidate.factoryBindings,
+          resolveProperty
+        )
+      : resolveProperty();
+  return inheritCloudflareCandidateContexts(candidate, propertyCandidates);
+};
+
 const cloudflareObjectAssignMutationCandidates = (
   _node,
   mutation,
@@ -13518,40 +13578,16 @@ const cloudflareObjectAssignMutationCandidates = (
   if (!sourceState) return [];
   const candidates = sourceState.candidates;
   assert(candidates.length > 0, cloudflareOpaqueMemberMutationMessage);
-  return candidates.flatMap((candidate) => {
-    const property = candidate.target.properties.findLast((entry) =>
-      cloudflareMemberNamesEqual(
-        cloudflareLexicalPropertyKeyName(entry, context),
-        member
-      )
-    );
-    const accessorCandidates = cloudflareAccessorCandidates(
-      property ? [property] : [],
+  return candidates.flatMap((candidate) =>
+    cloudflareObjectAssignEffectiveMemberCandidates(
+      mutation.node,
+      candidate,
+      member,
       context,
-      seen
-    );
-    if (accessorCandidates !== undefined) {
-      return inheritCloudflareCandidateContexts(candidate, accessorCandidates);
-    }
-    if (!property) return [];
-    const resolveProperty = () =>
-      cloudflareLexicalTargetCandidates(
-        property.value,
-        property.value,
-        context,
-        seen
-      );
-    const propertyCandidates =
-      candidate.factoryBindings && mutation.owner
-        ? withCloudflareActiveFactoryBindings(
-            context,
-            mutation.owner,
-            candidate.factoryBindings,
-            resolveProperty
-          )
-        : resolveProperty();
-    return inheritCloudflareCandidateContexts(candidate, propertyCandidates);
-  });
+      seen,
+      mutation.owner
+    )
+  );
 };
 
 const cloudflareDefinePropertiesDescriptorCandidates = (
