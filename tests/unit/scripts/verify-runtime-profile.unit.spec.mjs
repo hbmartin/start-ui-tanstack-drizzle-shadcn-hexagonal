@@ -3155,7 +3155,7 @@ describe('runtime artifact verifier', () => {
     'retains an opaque spread marker beside its unmarked receiver (%s)',
     (source) => {
       expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
-        'requires statically analyzable aggregate spreads'
+        'requires statically analyzable aggregate spreads reaches a callable position'
       );
     }
   );
