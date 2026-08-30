@@ -9,14 +9,16 @@ This project uses a layered test system. The default rule is to verify behavior 
 | Property tests | `tests/unit/**/*.unit.spec.ts` using `@tests/support/property-testing` | `pnpm test:property` | Invariants over generated inputs for pure functions, state transitions, validators, and data mappers. |
 | Unit tests | `tests/unit/**/*.unit.{test,spec}.{ts,tsx}` | `pnpm test:unit` | Business logic in isolation. Mock only true I/O boundaries such as DB, network, provider SDKs, clock, and generated IDs. |
 | Browser component tests | `tests/browser/**/*.browser.{test,spec}.tsx` | `pnpm test:browser` | Component rendering and user interactions in Chromium through Vitest Browser. |
+| Cloudflare runtime tests | `tests/cloudflare/**/*.cloudflare.{test,spec}.ts` | `pnpm test:cloudflare` | Worker-runtime behavior under the separate Cloudflare Vitest configuration; this is not a built-artifact workerd verification gate. |
 | Public workflow integration tests | `tests/integration/**/*.workflow.integration.test.ts` | `pnpm test:integration:workflow` | Sub-feature workflows through module public APIs only. No module-internal imports. Assert observable outputs and fake or real port side effects. |
 | Adapter integration tests | `tests/integration/modules/*/infrastructure/__tests__/*.integration.test.ts` | `pnpm test:integration:adapters` | Database, repository, webhook, SDK, and provider adapters against realistic local infrastructure such as PGlite. |
 | E2E UI tests | `tests/e2e/*.spec.ts` | `pnpm test:e2e` or `pnpm test:e2e:chromium` | User-facing journeys from UI to rendered outcome. Assert durable side effects when the workflow writes data. |
 | Visual regression | `tests/e2e/visual/*.visual.spec.ts` | `pnpm test:e2e:visual` | Stable critical screens with local Playwright snapshots. Baseline updates use `pnpm test:e2e:visual:update` and require review. |
-| Coverage | All Vitest projects | `pnpm test:coverage` | Floor metric for touched code and trend signal in CI. Do not treat line coverage as proof of assertion quality. |
+| Coverage | Standard Vitest projects | `pnpm test:coverage` | Floor metric for touched code and trend signal in CI. The separate Cloudflare configuration is invoked independently. Do not treat line coverage as proof of assertion quality. |
 | Mutation testing | Data-driven Stryker runner | `pnpm test:mutation:critical` or `node scripts/run-mutation.mjs --scope=<scope>` | Test sensitivity for critical domain/application logic. Run periodically and for risky auth, authorization, and data-loss changes. |
 
-`pnpm test` still runs all Vitest projects. Use the layer commands when you need a faster or more diagnostic signal.
+`pnpm test` chains unit, browser, Cloudflare-runtime, and integration tests. Use
+the layer commands when you need a faster or more diagnostic signal.
 
 ## Functional Correctness
 

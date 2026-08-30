@@ -1,18 +1,24 @@
 <h1 align="center"><img src=".github/assets/thumbnail.png" alt="Start UI Web" /></h1>
 
-🚀 Start UI <small>[web]</small> is an opinionated frontend starter repository created & maintained by the [BearStudio Team](https://www.bearstudio.fr/team) and other contributors.
-It represents our team's up-to-date stack that we use when creating web apps for our clients.
+🚀 Start UI <small>[web]</small> v5 is a production-oriented authenticated
+TanStack Start modular-monolith template. It was originally
+created & maintained by the [BearStudio Team](https://www.bearstudio.fr/team) and other contributors;
+that template-author attribution is retained throughout the v5 rewrite.
 
 
 ## Technologies
 
 <div align="center" style="margin: 0 0 16px 0"><img src=".github/assets/tech-logos.png" alt="Technologies logos of the starter" /></div>
 
-[⚙️ Node.js](https://nodejs.org), [🟦 TypeScript](https://www.typescriptlang.org/), [⚛️ React](https://react.dev/), [📦 TanStack Start](https://tanstack.com/start), [💨 Tailwind CSS](https://tailwindcss.com/), [🧩 shadcn/ui](https://ui.shadcn.com/), [📋 React Hook Form](https://react-hook-form.com/), [🔌 oRPC](https://orpc.unnoq.com/), [🛠 Drizzle ORM](https://orm.drizzle.team/), [🔐 Better Auth](https://www.better-auth.com/), [🧪 Vitest](https://vitest.dev/), [🎭 Playwright](https://playwright.dev/)
+[⚙️ Node.js](https://nodejs.org), [🟦 TypeScript](https://www.typescriptlang.org/), [⚛️ React](https://react.dev/), [📦 TanStack Start](https://tanstack.com/start), [🔄 TanStack Query](https://tanstack.com/query), [📋 TanStack Form](https://tanstack.com/form), [🧱 Base UI](https://base-ui.com/), [💨 Tailwind CSS](https://tailwindcss.com/), [🛠 Drizzle ORM](https://orm.drizzle.team/), [🔐 Better Auth](https://www.better-auth.com/), [📈 OpenTelemetry](https://opentelemetry.io/), [🧪 Vitest](https://vitest.dev/), [🎭 Playwright](https://playwright.dev/)
 
 ## Documentation
 
-For detailed information on how to use this project, please refer to the [documentation](https://docs.web.start-ui.com). The documentation contains all the necessary information on installation, usage, and some guides.
+The v5 source of truth is the documentation in this repository: start with
+[CONTEXT.md](CONTEXT.md), [AGENTS.md](AGENTS.md), [Testing Strategy](TESTING.md),
+and the accepted decisions under [docs/adr](docs/adr). The original Start UI
+documentation remains useful for upstream background, but it does not describe
+every breaking v5 template contract.
 
 ## Requirements
 
@@ -106,8 +112,8 @@ pnpm dev
 ## Verification
 
 ```bash
-pnpm check           # Static checks: format, lint, types, architecture, test layering, security, audit
-pnpm test            # Unit, browser, and integration tests
+pnpm check           # Deterministic formatting, lint, types, architecture, migrations, and security evidence
+pnpm test            # Unit, browser, Cloudflare-runtime, and integration tests
 pnpm test:property   # Focused property/invariant tests
 pnpm test:e2e        # Full Playwright user journeys
 pnpm verify          # Full local pre-merge gate
@@ -207,14 +213,22 @@ If you want to use the same set of custom duotone icons that Start UI is already
 
 E2E tests are setup with Playwright.
 
-```sh
-pnpm e2e:setup  # Setup context to be used across test for more efficient execution 
-pnpm e2e        # Run tests in headless mode, this is the command executed in CI
-pnpm e2e:ui     # Open a UI which allows you to run specific tests and see test execution
+```bash
+pnpm e2e:setup          # Prepare Playwright authentication state
+pnpm test:e2e:chromium  # Focused local Chromium target
+pnpm test:e2e           # All configured Playwright projects
+pnpm e2e:ui             # Interactive Playwright UI
 ```
 
+The current non-draft pull-request workflow runs Chromium, Firefox, and WebKit.
+The accepted future split—Chromium on pull requests and all three browsers on
+scheduled/release gates—remains open as QUAL-008/QUAL-009 in the remediation
+ledger.
+
 > [!WARNING]
-> The generated e2e context files contain authentication logic. If you make changes to your local database instance, you should re-run `pnpm e2e:setup`. It will be run automatically in a CI context.
+> Generated E2E state contains authentication material and is ignored by Git.
+> Re-run `pnpm e2e:setup` after changing the local database or seed identities.
+> CI creates isolated secrets and state for each run.
 ## Production
 
 Production targets are explicit and have isolated output contracts:
@@ -281,13 +295,18 @@ strict-CSP browser hydration. Node
 is not production-ready until its remaining adapter contracts and
 lifecycle-owned telemetry shutdown are executable as well.
 
-## Deploy
+## Deployment readiness
 
 Node and Vercel use explicit Nitro presets. Cloudflare uses the official
 Cloudflare Vite plugin and its generated deployment configuration. Do not set
 `NITRO_PRESET`; use the target-specific command instead.
 
-Before deploying anywhere:
+No profile is declared production-ready in the current v5 alpha. The sections
+below document artifact and platform configuration contracts; they are not live
+deployment approval. Promotion instructions return only after the profile's
+runtime, adapter, lifecycle, and release gates close in the remediation ledger.
+
+Before a target can be approved:
 
 * Use Node.js 24 or newer to match the current `package.json` engine.
 * Set production values for the required variables in `.env.example`, especially the database, authentication secrets, canonical application URL, and public `VITE_*` values. Object storage is required only when its capability is enabled.
@@ -326,33 +345,25 @@ Docs: [Cloudflare TanStack Start](https://developers.cloudflare.com/workers/fram
 <details>
 <summary><strong>Vercel</strong></summary>
 
-Vercel uses the explicit Nitro `vercel` preset and emits Build Output API v3
-under `.vercel/output`.
-
-Deploy from Git:
-
-1. Import the repository in Vercel.
-2. Use the TanStack Start preset if it is shown, otherwise use the default project settings.
-3. Set Node.js Version to `24.x`.
-4. Set Build Command to `pnpm build:vercel`.
-5. Leave Output Directory empty/default.
-6. Add the production environment variables from `.env.example`.
-   Set a remote Neon-compatible `DATABASE_URL`,
-   `DATABASE_DRIVER=neon-http`, and `DATABASE_TLS_POLICY=verify` for the Vercel
-   request runtime. For a conventional direct PostgreSQL maintenance endpoint,
-   also set its separate URL and `DATABASE_MIGRATION_DRIVER=node-pg`; otherwise
-   the Vercel request driver makes migrations default to `neon-websocket`.
-7. Deploy.
-
-Deploy from the CLI:
+Build and inspect the explicit Nitro `vercel` preset, which emits Build Output
+API v3 under `.vercel/output`:
 
 ```bash
-pnpm dlx vercel
-pnpm dlx vercel --prod
+pnpm build:vercel
+pnpm verify:artifact:vercel
 ```
 
-Run `pnpm verify:artifact:vercel` locally or in CI to validate the function
-entry, Node 24 runtime metadata, response-streaming flag, and static output.
+The artifact verifier validates the function entry, Node 24 runtime metadata,
+response-streaming flag, and static output. It does not boot a Vercel function
+or prove serverless lifecycle behavior, database connectivity, or promotion
+safety, so no Vercel deployment command is release-approved yet.
+
+The eventual request runtime requires a remote Neon-compatible `DATABASE_URL`,
+`DATABASE_DRIVER=neon-http`, and `DATABASE_TLS_POLICY=verify`. A conventional
+direct PostgreSQL maintenance endpoint also needs its separate URL and
+`DATABASE_MIGRATION_DRIVER=node-pg`; otherwise Vercel's request driver makes
+migrations default to `neon-websocket`.
+
 Vercel selects the canonical application origin from its validated
 `VERCEL_PROJECT_PRODUCTION_URL`, falling back to `VERCEL_URL`; Better Auth uses
 that fixed origin rather than deriving links or callbacks from request hosts.
@@ -361,82 +372,6 @@ previews intentionally share the production callback origin. Use a separate
 Vercel project when isolated preview authentication callbacks are required.
 
 Docs: [TanStack Start on Vercel](https://vercel.com/docs/frameworks/full-stack/tanstack-start), [Vercel Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions)
-
-</details>
-
-<details>
-<summary><strong>Railway</strong></summary>
-
-Railway deploys TanStack Start as a standard Node service. Railpack detects `package.json`, installs pnpm from `packageManager`, runs the `build` script, and uses the `start` script.
-
-Deploy from Git:
-
-1. Create a Railway project and deploy from the GitHub repository.
-2. Add a PostgreSQL service or connect an external PostgreSQL database.
-3. Add the production environment variables from `.env.example`.
-4. Set `RAILPACK_NODE_VERSION=24` if Railway does not pick Node 24 from `package.json`.
-5. Generate a public domain in the service Networking tab.
-6. Set `APP_DOMAIN` to that exact HTTPS origin and redeploy.
-
-Deploy from the CLI after installing and authenticating the Railway CLI:
-
-```bash
-railway init
-railway up
-```
-
-If detection fails, set explicit commands in the service settings:
-
-```text
-Build Command: pnpm build
-Start Command: pnpm start
-```
-
-Nitro reads Railway's `PORT` environment variable automatically.
-
-Docs: [Railway TanStack Start](https://docs.railway.com/guides/tanstack-start), [Railway CLI deploys](https://docs.railway.com/cli/deploying), [Railpack Node.js](https://railpack.com/languages/node)
-
-</details>
-
-<details>
-<summary><strong>Render</strong></summary>
-
-Render should be configured as a Node Web Service that builds the Nitro output and starts the generated Node server.
-
-Dashboard settings:
-
-```text
-Runtime: Node
-Build Command: pnpm i --shamefully-hoist && pnpm build
-Start Command: pnpm start
-```
-
-Environment variables:
-
-```text
-NODE_VERSION=24
-HOST=0.0.0.0
-```
-
-Also add the production values from `.env.example`. Render provides `PORT`; Nitro reads `PORT` automatically.
-
-Optional `render.yaml`:
-
-```yaml
-services:
-  - type: web
-    name: start-ui-web
-    env: node
-    buildCommand: pnpm i --shamefully-hoist && pnpm build
-    startCommand: pnpm start
-    envVars:
-      - key: NODE_VERSION
-        value: 24
-      - key: HOST
-        value: 0.0.0.0
-```
-
-Docs: [Nitro on Render](https://nitro-docs.pages.dev/deploy/providers/render/), [Render deploys](https://render.com/docs/deploys), [Render Node.js versions](https://render.com/docs/node-version)
 
 </details>
 

@@ -13,8 +13,8 @@ Use these commands instead of invoking underlying tools directly.
 |---|---|
 | `pnpm setup` | Interactive, idempotent setup; use explicit `--yes --preset --app-name --app-slug` in automation. |
 | `pnpm dev` | Start the local dev server. |
-| `pnpm check` | Static checks: format, lint, typecheck, Fallow, Semgrep, audit. |
-| `pnpm test` | Vitest unit and browser projects. |
+| `pnpm check` | Oxfmt, zero-warning Oxlint, TypeScript, Stryker compatibility, Fallow, test layering, migration integrity, Semgrep, and locked security evidence. |
+| `pnpm test` | Unit, browser, Cloudflare-runtime, and integration tests. |
 | `pnpm test:affected:list` | List tests associated with changed files. |
 | `pnpm test:affected` | Run tests associated with changed files. |
 | `pnpm test:e2e:visual` | Local Chromium visual regression check for stable critical screens. |
@@ -24,7 +24,7 @@ Use these commands instead of invoking underlying tools directly.
 | `pnpm test:e2e:visual:update` | Update local visual baselines for review. |
 | `pnpm build` | Node production build alias; writes `.output/node`. |
 | `pnpm build:vercel` | Explicit Nitro Vercel artifact build. |
-| `pnpm build:cloudflare` | Explicit Cloudflare Vite/workerd artifact build. |
+| `pnpm build:cloudflare` | Explicit Cloudflare Vite artifact build; writes `dist`. |
 | `pnpm verify:artifacts` | Build and inspect all three isolated artifact contracts. |
 | `pnpm verify` | Full pre-merge gate: `check` + `test` + all profile artifacts. |
 | `pnpm verify:task` | Task-level verification runner with timestamped logs under `test-results/task-verification/`. |
@@ -42,7 +42,7 @@ graph in workerd with the declared bindings.
 Use a layered verification loop rather than relying on one broad command.
 
 - Start with the narrowest relevant unit, browser, or E2E checks for the behavior being changed.
-- For UI changes, start the local app with `pnpm dev` or the E2E webserver path, inspect the affected flow in the Codex in-app Browser, and check desktop and mobile viewports for console errors, broken interactions, text overflow, and layout overlap.
+- For UI changes, start the local app with `pnpm dev` or the E2E webserver path, inspect the affected flow with available interactive browser tooling, and check desktop and mobile viewports for console errors, broken interactions, text overflow, and layout overlap.
 - Capture screenshots or Playwright artifacts for meaningful UI changes. Prefer local Playwright screenshots for visual regression with `pnpm test:e2e:visual`; update baselines for review with `pnpm test:e2e:visual:update`. Do not add Percy, Applitools, Cypress, BrowserStack, or another external visual/browser service unless explicitly requested.
 - After code changes, run `pnpm format:changed && pnpm check && pnpm test:affected`.
 - Use `pnpm verify:task` when a single command/report is more useful than separate commands. Add `-- --visual` for UI changes, `-- --e2e-chromium` for auth/routing/session/persistence risk, and `-- --build` for production runtime risk.
@@ -51,7 +51,7 @@ Use a layered verification loop rather than relying on one broad command.
 - Run the target-specific build for production runtime changes. Run `pnpm verify:artifacts` when shared build or server-entry code changes, and `pnpm verify` before merge-level handoff.
 - When tests fail, inspect Playwright traces, screenshots, videos, console output, network evidence, and auth diagnostics before changing code. Treat retries as a diagnostic signal, not proof of correctness.
 
-Local full-stack verification with seeded data, Maildev, MinIO, and the local database is the default realism level for agent work. Production smoke testing is out of scope unless read-only routes, credentials, and data safety rules are explicitly provided.
+Local full-stack verification with seeded data, Maildev, the local database, and MinIO when uploads are enabled is the default realism level for agent work. Production smoke testing is out of scope unless read-only routes, credentials, and data safety rules are explicitly provided.
 
 Task verification artifacts should be grouped under `test-results/task-verification/<timestamp>/` when using `pnpm verify:task`. Keep Playwright traces, screenshots, videos, and failure attachments in their default `test-results/` locations and link or summarize the relevant paths in the final handoff. Visual test baselines are reviewed repo artifacts; do not silently update them without saying why.
 
@@ -63,7 +63,7 @@ Cross-module imports must use one of these public files:
 |---|---|
 | `administration.ts` | Auth-owned destructive persistence adapters; production imports are restricted to `src/composition/user.ts`. |
 | `index.ts` | Domain types, application ports, factories, stable constants. |
-| `server.ts` | TanStack `createServerFn` exports only. |
+| `server.ts` | TanStack `createServerFn` exports. Kernel may also expose focused server-function DTO, serialization, and validation support contracts. |
 | `backend.ts` | Server-only non-server-function APIs, protected runners, HTTP route handlers. |
 | `client.ts` | Client-only public API, query options, client facades. |
 | `middleware.ts` | Universal TanStack middleware safe to register from the Start entry. |

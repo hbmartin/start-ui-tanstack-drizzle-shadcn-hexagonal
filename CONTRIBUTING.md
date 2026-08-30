@@ -17,15 +17,16 @@ Thank you for considering contributing to this repository!
 
 ## AI usage
 
-AI tools (e.g. Claude, Copilot, ChatGPT) are welcome to assist with contributions. If AI was used to generate or significantly assist with your changes, please make it transparent:
+AI-assisted contributions are welcome. `AGENTS.md` is the provider-neutral
+source of truth for repository commands, boundaries, and verification. Thin
+tool-specific rule files may point to it but must not redefine project policy.
 
-- **Commits**: include a `Co-authored-by:` trailer (e.g. `Co-authored-by: GitHub Copilot <noreply@github.com>`)
-- **Pull requests**: mention the AI tool used in the PR description
-
-If you use **Claude Code**, attribution is handled automatically via `.claude/settings.json` — no extra setup needed.
+Describe material AI assistance in the pull request when it helps reviewers
+understand authorship or verification. Follow the repository's configured
+commit policy; do not assume a particular tool adds attribution automatically.
 
 
 ## Translations
 
-You only need to maintain the english and french translations for your PR.
-Other language translations are not required to submit a PR 😉
+Keep all four shipped locales (`en`, `fr`, `ar`, and `sw`) at key parity.
+Generated locale registries and direction metadata are verified in tests.

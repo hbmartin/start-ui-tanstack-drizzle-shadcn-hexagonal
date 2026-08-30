@@ -48,19 +48,21 @@ than framework dependencies and must be removable without leaving registered
 routes, permissions, translations, seeds, storage requirements, jobs, or
 schema ownership behind.
 
-Each capability is statically composed through a `CapabilityManifest`. A
-manifest declares only public contributions: public routes, schema ownership,
-permission resources and actions, preset role grants, seeds, forms,
-background jobs, and runtime adapter requirements. Cross-capability behavior
-uses focused public gates and injected ports; deep imports do not form a
-composition mechanism.
+Each capability declares validated public metadata through a
+`CapabilityManifest`: public routes, schema ownership, permission resources and
+actions, preset role grants, seeds, forms, background jobs, and runtime adapter
+requirements. Production permissions, navigation, locales, seeds, routes, and
+composition are not yet wholly manifest-derived; that derivation remains a v5
+release blocker. Cross-capability behavior uses focused public gates and
+injected ports; deep imports do not form a composition mechanism.
 
 ## Deployment and tenancy
 
-The supported runtime profiles are Node, Vercel, and Cloudflare Workers. A
-trusted entrypoint selects the profile and injects its adapters. Request hosts,
+The declared build profiles are Node, Vercel, and Cloudflare Workers. A trusted
+entrypoint selects the profile and injects its adapters. Request hosts,
 forwarding headers, and ambient provider variables do not select application
-behavior.
+behavior. Node has an executable artifact gate; Vercel and Cloudflare remain
+artifact-only until the runtime gates in the remediation ledger close.
 
 Version 5 is single-application and does not implement multi-tenancy. Generic
 identifiers, injected ports, and capability manifests are composition seams;

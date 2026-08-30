@@ -16,19 +16,27 @@ Business and shell capabilities live under `src/modules/<capability>`.
 
 ```text
 modules/<capability>/
-  index.ts         domain/application public API
-  presentation.ts  React screens, forms, schemas, guards
-  client.ts        client adapters such as Query options and auth helpers
-  server.ts        server/TanStack transport adapter exports
-  factory.ts       pure use-case assembly when the module has use cases
+  index.ts          domain/application public API
+  server.ts         TanStack createServerFn exports; kernel also exposes focused server-function support contracts
+  backend.ts        server-only protected runners and HTTP handlers
+  client.ts         client-only facades and Query options
+  middleware.ts     universal TanStack middleware when required
+  presentation.ts   React screens, forms, schemas, and guards
+  manifest.ts       static capability metadata for composition
+  persistence.ts    named owner schema exports for schema wiring
+  testing.ts        test-only owner gate
+  administration.ts auth-owned destructive persistence gate
   domain/          business language, invariants, policies
   application/     use cases and ports
   infrastructure/  provider/database/SDK adapters
   transport/       protocol translation
 ```
 
-Cross-module imports must use `index.ts`, `presentation.ts`, `client.ts`, or
-`server.ts`. Deep imports are allowed inside the same module only.
+Only add gates a capability needs. Cross-module imports must use the focused
+public gates above; deep imports are allowed inside the owning module only.
+Routes and ordinary module code must not import `manifest.ts` or
+`persistence.ts`. Only `src/composition/user.ts` may consume auth's
+`administration.ts`; callers use the resulting audited user use cases.
 
 ## Platform Contract
 
@@ -48,13 +56,13 @@ Auth provider details are isolated behind auth ports. Better Auth is the current
 adapter; a future WorkOS/AuthKit adapter should implement the same auth gateway
 and client facade before changing routes or feature modules.
 
-The auth module exposes provider-neutral contracts from
-`src/modules/auth/application/ports`. Do not pass Better Auth client/server
-objects across module boundaries. User/session management should depend on
-`AuthGateway` and neutral identifiers such as `sessionId`; provider-specific
-values, including Better Auth session tokens, stay inside the Better Auth
-adapter. A WorkOS adapter should live under `auth/infrastructure/workos` and be
-selected from `src/composition/auth.ts`.
+The auth module exposes provider-neutral `SessionGateway`,
+`AuthorizationGateway`, and `AuthEmailPort` contracts. Do not pass Better Auth
+client/server objects across module boundaries. Provider-specific values,
+including Better Auth session tokens, stay inside the Better Auth adapter.
+Destructive user administration is app-owned and commits its required audit
+event in the same transaction; Better Auth's admin plugin is not an alternative
+mutation path.
 
 ## Route Contract
 
@@ -64,10 +72,11 @@ presentation screens. Screens may use React Query for cache reads, continuation
 pages, refresh, and mutations.
 
 Authenticated route subtrees enforce auth in `beforeLoad` via
-`beforeLoadAuthenticated()` from `@/modules/auth/presentation`. Component-level
-session guards are not allowed — guards belong at the route boundary so the
-redirect happens before any layout shell paints. Role/permission and onboarding
-checks live in the same `beforeLoad` helper so every child route inherits them.
+`requireAuthenticatedRoute()` or `requireAuthenticatedRouteOrForbidden()` from
+`@/modules/auth/presentation`. Component-level session guards are not allowed —
+guards belong at the route boundary so the redirect happens before any layout
+shell paints. Role, permission, and onboarding policy stays in the same route
+boundary so every child route inherits it.
 
 ## Router Context Contract
 
@@ -79,14 +88,20 @@ composition layer and typed in `src/platform/router/context.ts`. Current shape:
   `prefetchQuery` in loaders.
 - `auth.getSession()` — per-navigation cached session accessor. Resolves
   server-side via the Better Auth gateway during SSR and via fetch on client
-  navigations. Used by `beforeLoadAuthenticated()`.
-- `telemetry` — Sentry adapter exposing `captureException`, `setUser`, and a
-  `startSpan` helper. Route loaders, `beforeLoad`, and `errorComponent` call
-  through this slot rather than importing Sentry directly.
+  navigations. Route guards choose cached or `requireFresh` reads according to
+  the authorization risk.
+- `telemetry` — provider-neutral adapter for spans and exception reporting.
+  Current Node/browser composition uses OpenTelemetry for implemented spans,
+  metrics, and structured logs while Sentry is restricted to actionable
+  exceptions; routes call the adapter rather than importing either SDK. Web
+  Vitals and the final Worker trace/log ownership decision remain open under
+  `OBS-001` in the remediation ledger.
 - `flags` — feature-flag adapter (currently a no-op stub). Reserved for an
   OpenFeature/LaunchDarkly provider when needed.
-- `tenant` — reserved slot for active-tenant context. Always `null` today;
-  populated by `beforeLoad` on `/app` when multi-tenancy is enabled.
+
+Version 5 is a single-application modular monolith. Provider-neutral IDs and
+composition seams are not tenant routing, isolation, authorization, or
+tenant-scoped persistence.
 
 Routes that need a dependency must read it off `context` rather than importing
 `@/composition` directly — the composition root is the only file that wires
@@ -107,13 +122,16 @@ cache policy. Use the helpers in `@/platform/http/cache-control`:
 Raw `Cache-Control: public` strings outside the helper are rejected by the
 `raw-cache-control-public` semgrep rule.
 
-## CSRF Policy
+## Browser Mutation and CSRF Policy
 
-TanStack Start ships a default CSRF middleware that protects same-origin server
-functions out of the box. This app does not define `src/start.ts`, so the
-default chain is in effect.
+`src/start.ts` explicitly registers `createCsrfMiddleware` for server functions
+with Referer and `Sec-Fetch-Site: same-origin` validation. App-owned browser
+mutation routes also pass through `browserMutationGuardMiddleware`, which
+validates Origin/Referer and Fetch Metadata signals, rejects conflicts, and
+adds the corresponding `Vary` headers.
 
-If `src/start.ts` is ever added, it must explicitly register the CSRF
-middleware — defining the file replaces the defaults rather than extending
-them. Authenticated server functions and server routes rely on this protection;
-omitting it would expose every browser-callable RPC to cross-site requests.
+These controls work with the authentication cookie's SameSite policy. The app
+does not claim a separate app-issued CSRF-token protocol. Any change to
+`src/start.ts`, browser mutation routing, or cookie policy must retain the
+origin and Fetch Metadata tests in `tests/unit/start.unit.spec.ts` and
+`tests/unit/platform/http/browser-mutation-protection.unit.spec.ts`.
