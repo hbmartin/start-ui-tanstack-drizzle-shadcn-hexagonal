@@ -21528,6 +21528,50 @@ const cloudflareObjectAssignPropertyAccess = (target, property) => {
     : cloudflareProjectionMember(target, member);
 };
 
+const cloudflareObjectAssignCopyAccess = (
+  target,
+  source,
+  property,
+  execution
+) => {
+  const sourceAccess = {
+    ...cloudflareObjectAssignPropertyAccess(source, property),
+    end: execution.end,
+    start: execution.start,
+  };
+  return {
+    sourceAccess,
+    targetAccess: {
+      ...cloudflareObjectAssignPropertyAccess(target, property),
+      cloudflareAccessorSetValue: sourceAccess,
+      end: execution.end,
+      start: execution.start,
+    },
+  };
+};
+
+const cloudflareObjectAssignArrayCopyAccess = (
+  target,
+  source,
+  index,
+  execution
+) => {
+  const sourceAccess = {
+    ...cloudflareProjectionMember(source, index),
+    end: execution.end,
+    start: execution.start,
+  };
+  return {
+    sourceAccess,
+    targetAccess: {
+      ...cloudflareProjectionMember(target, index),
+      cloudflareAccessorSetValue: sourceAccess,
+      end: execution.end,
+      start: execution.start,
+    },
+  };
+};
+
 const recordCloudflareObjectAssignAccessors = (execution, context) => {
   const arguments_ = cloudflareObjectAssignArguments(execution, context);
   if (!arguments_ || arguments_.length === 0) return;
@@ -21559,16 +21603,32 @@ const recordCloudflareObjectAssignAccessors = (execution, context) => {
       .flatMap(({ target: candidate }) =>
         nodeType(candidate) === 'ArrayExpression'
           ? candidate.elements.flatMap((value, index) =>
-              value ? [cloudflareProjectionMember(target, index)] : []
+              value
+                ? [
+                    cloudflareObjectAssignArrayCopyAccess(
+                      target,
+                      source,
+                      index,
+                      execution
+                    ),
+                  ]
+                : []
             )
           : candidate.properties.map((property) =>
-              cloudflareObjectAssignPropertyAccess(target, property)
+              cloudflareObjectAssignCopyAccess(
+                target,
+                source,
+                property,
+                execution
+              )
             )
       )
-      .forEach((access) => {
-        context.lexicalContext.accessorAccessKinds.set(access, 'set');
+      .forEach(({ sourceAccess, targetAccess }) => {
+        context.lexicalContext.parentNodes.set(sourceAccess, execution);
+        context.lexicalContext.parentNodes.set(targetAccess, execution);
+        context.lexicalContext.accessorAccessKinds.set(targetAccess, 'set');
         context.lexicalContext.accessorAccessKindsRevision += 1;
-        recordCloudflareAccessorRead(access, context);
+        recordCloudflareAccessorRead(targetAccess, context);
       })
   );
 };

@@ -4125,6 +4125,66 @@ describe('runtime artifact verifier', () => {
     ]);
   });
 
+  it.each([
+    [
+      'Object.defineProperty',
+      'const target={};Object.defineProperty(target,"run",{set(value){fetch("https://setter.invalid.example")}});Object.assign(target,{run:1})',
+    ],
+    [
+      'Object.defineProperties',
+      'const target={};Object.defineProperties(target,{run:{set(value){fetch("https://setter.invalid.example")}}});Object.assign(target,{run:1})',
+    ],
+    [
+      'an inherited descriptor',
+      'const prototype={};Object.defineProperty(prototype,"run",{set(value){fetch("https://setter.invalid.example")}});const target=Object.create(prototype);Object.assign(target,{run:1})',
+    ],
+  ])(
+    'executes an Object.assign target setter installed by %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+        'fetch("https://setter.invalid.example")',
+      ]);
+    }
+  );
+
+  it.each([
+    [
+      'getter-only target',
+      'const target={get run(){return fetch("https://getter.invalid.example")}};Object.assign(target,{run:1})',
+    ],
+    [
+      'omitted source member',
+      'const target={};Object.defineProperty(target,"run",{set(value){fetch("https://setter.invalid.example")}});Object.assign(target,{metadata:true})',
+    ],
+    [
+      'descriptor installed after the copy',
+      'const target={};Object.assign(target,{run:1});Object.defineProperty(target,"run",{set(value){fetch("https://setter.invalid.example")}})',
+    ],
+  ])(
+    'does not execute an Object.assign target accessor for a %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it.each([
+    [
+      'data property',
+      'const target={set run(value){value()}};Object.assign(target,{run:()=>fetch("https://setter-value.invalid.example")})',
+    ],
+    [
+      'source getter',
+      'const target={set run(value){value()}};Object.assign(target,{get run(){return()=>fetch("https://setter-value.invalid.example")}})',
+    ],
+  ])(
+    'passes an Object.assign %s value to the target setter',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+        'fetch("https://setter-value.invalid.example")',
+      ]);
+    }
+  );
+
   it.each(['undefined', 'null'])(
     'treats a %s Object.assign source as a no-op',
     (source) => {
