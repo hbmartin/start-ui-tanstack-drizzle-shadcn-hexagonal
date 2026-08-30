@@ -8,6 +8,7 @@
   "ignorePatterns": [
     ".agents/**",
     ".claude/**",
+    ".codex/**",
     ".github/codeql/**",
     "**/*.testproj/**",
     "tools/mutation/node_modules/**"

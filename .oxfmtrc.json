@@ -14,6 +14,7 @@
     ".cache",
     ".agents/**",
     ".claude/**",
+    ".codex/**",
     ".db",
     ".history",
     "output",
