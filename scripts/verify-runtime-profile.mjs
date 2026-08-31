@@ -25408,10 +25408,14 @@ const cloudflareImportedStaticMemberOwner = (target, context) => {
     manifestRecord.key,
     manifestRecord
   );
-  const signedReviewedClosure = reviewedCloudflareClosure(provenance);
-  const ownerProgram = signedReviewedClosure
-    ? readCloudflareReviewedStaticMemberOwnerProgram(ownerFile, provenance)
-    : readParsedModule(ownerFile).program;
+  const ownerProgram = readCloudflareReviewedStaticMemberOwnerProgram(
+    ownerFile,
+    provenance
+  );
+  const signedReviewedClosure = reviewedCloudflareClosure(
+    provenance,
+    ownerProgram
+  );
   const localName = new Map(ownerProgram.body.flatMap(moduleExportEntries)).get(
     importedName
   );
@@ -40945,11 +40949,16 @@ const reviewedCloudflareMixedClosures = Object.freeze([
   }),
   Object.freeze({
     appModuleSuffixes: ['src/platform/lib/zod/zod-utils.ts'],
+    astSha256:
+      '113bca7c39c2e7085d06181156bb2418fa8120b287d997f708fda0d0ba77db8d',
     exportedStaticMemberDeferredResults: [
       {
         exportedLocalName: 'zu',
         exportedName: 'M',
         memberPath: ['fieldText', 'nullish'],
+        ownerAstSha256:
+          'b2ed536d3bb9b728da0bb5245c07f73868291b9a6f79e4133ecc8b18f366c77f',
+        ownerModuleSuffix: 'src/platform/lib/zod/zod-utils.ts',
         reason:
           'The authenticated application Zod helper returns an inert nullish text schema; its exact caller-owned options are evaluated before the helper call.',
         returnedPath: [],
@@ -40958,6 +40967,9 @@ const reviewedCloudflareMixedClosures = Object.freeze([
         exportedLocalName: 'zu',
         exportedName: 'M',
         memberPath: ['fieldText', 'required'],
+        ownerAstSha256:
+          '409697e575ae82d85d5e6e1593843d6c2e03f954a43e539bcd4a2d2be3b26245',
+        ownerModuleSuffix: 'src/platform/lib/zod/zod-utils.ts',
         reason:
           'The authenticated application Zod helper returns an inert required text schema; its exact caller-owned options are evaluated before the helper call.',
         returnedPath: [],
@@ -40966,6 +40978,9 @@ const reviewedCloudflareMixedClosures = Object.freeze([
         exportedLocalName: 'zu',
         exportedName: 'M',
         memberPath: ['fieldText', 'required'],
+        ownerAstSha256:
+          '409697e575ae82d85d5e6e1593843d6c2e03f954a43e539bcd4a2d2be3b26245',
+        ownerModuleSuffix: 'src/platform/lib/zod/zod-utils.ts',
         reason:
           'The authenticated required-text schema may flow through this exact Zod pipe call after the pipe schema argument is evaluated and checked.',
         returnedPath: ['pipe', cloudflareReturnedCallProjection],
@@ -40983,6 +40998,9 @@ const reviewedCloudflareMixedClosures = Object.freeze([
         exportedLocalName: 'setPopupOpenState',
         exportedName: 'zt',
         exportedParameterIndex: 0,
+        ownerAstSha256:
+          '25e7a70a4f47c21bbf049a96e4b9fa091bc5b03197dac0bd7afff9cce68b0d43',
+        ownerModuleSuffix: '/@base-ui/react/utils/popups/popupStoreUtils.mjs',
         reason:
           'The authenticated Base UI popup helper mutates only its first receiver parameter. Every direct local or signed cross-chunk call is summarized on that concrete caller receiver.',
       },
@@ -40991,33 +41009,187 @@ const reviewedCloudflareMixedClosures = Object.freeze([
       '/@base-ui/react/floating-ui-react/hooks/useListNavigation.mjs',
       '/@base-ui/react/utils/popups/popupStoreUtils.mjs',
     ],
-    sha256: '13a9ba7c7a9f31f705778621b8544b03c5b1584ca0d8509d7a0826e6dd450907',
+    normalizedStaticImports: [
+      {
+        bindings: [
+          ['n', 'getEnvClient'],
+          ['t', 'envClient'],
+        ],
+        normalizedSource: './client-[runtime-config].js',
+        sourceStem: 'client',
+      },
+      {
+        bindings: [['t', 'createSsrRpc']],
+        normalizedSource: './createSsrRpc-[runtime-config].js',
+        sourceStem: 'createSsrRpc',
+      },
+    ],
   }),
 ]);
 
-const reviewedCloudflareMixedClosure = (record) =>
+const cloudflareReviewedHashedChunkSource = (source, sourceStem) =>
+  new RegExp(
+    `^\\./${sourceStem.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&')}-[A-Za-z0-9_-]{8}\\.js$`,
+    'u'
+  ).test(source);
+
+const cloudflareReviewedImportBindings = (statement) =>
+  statement.specifiers.flatMap((specifier) => {
+    if (nodeType(specifier) !== 'ImportSpecifier') return [];
+    const importedName =
+      identifierName(specifier.imported) ?? literalString(specifier.imported);
+    const localName = identifierName(specifier.local);
+    return importedName && localName ? [[importedName, localName]] : [];
+  });
+
+const cloudflareReviewedNormalizedStaticImportSources = (
+  program,
+  normalizedStaticImports
+) => {
+  const replacements = new Map();
+  normalizedStaticImports.forEach((policy, index) => {
+    const label = `Reviewed Cloudflare normalized static import ${String(index)}`;
+    assert(
+      Object.keys(policy).every((field) =>
+        new Set(['bindings', 'normalizedSource', 'sourceStem']).has(field)
+      ),
+      `${label} must not define unknown policy fields`
+    );
+    assert(
+      Array.isArray(policy.bindings) &&
+        policy.bindings.length > 0 &&
+        policy.bindings.every(
+          (binding) =>
+            Array.isArray(binding) &&
+            binding.length === 2 &&
+            binding.every((name) => typeof name === 'string' && name.length > 0)
+        ) &&
+        typeof policy.normalizedSource === 'string' &&
+        policy.normalizedSource.length > 0 &&
+        typeof policy.sourceStem === 'string' &&
+        policy.sourceStem.length > 0,
+      `${label} must define exact bindings, a source stem, and a normalized source`
+    );
+    const expectedBindings = policy.bindings
+      .map((binding) => [...binding])
+      .toSorted(([leftImported, leftLocal], [rightImported, rightLocal]) =>
+        compareCodePointStrings(
+          `${leftImported}\0${leftLocal}`,
+          `${rightImported}\0${rightLocal}`
+        )
+      );
+    const matches = program.body.filter((statement) => {
+      const source = literalString(statement.source);
+      if (
+        nodeType(statement) !== 'ImportDeclaration' ||
+        typeof source !== 'string' ||
+        statement.specifiers.length !== policy.bindings.length ||
+        !cloudflareReviewedHashedChunkSource(source, policy.sourceStem)
+      ) {
+        return false;
+      }
+      const actualBindings = cloudflareReviewedImportBindings(statement)
+        .map((binding) => [...binding])
+        .toSorted(([leftImported, leftLocal], [rightImported, rightLocal]) =>
+          compareCodePointStrings(
+            `${leftImported}\0${leftLocal}`,
+            `${rightImported}\0${rightLocal}`
+          )
+        );
+      return (
+        actualBindings.length === expectedBindings.length &&
+        actualBindings.every(
+          (binding, bindingIndex) =>
+            binding[0] === expectedBindings[bindingIndex][0] &&
+            binding[1] === expectedBindings[bindingIndex][1]
+        )
+      );
+    });
+    assert(matches.length === 1, `${label} must resolve exactly once`);
+    const source = literalString(matches[0].source);
+    assert(
+      !replacements.has(source),
+      `${label} must not normalize a source twice`
+    );
+    replacements.set(source, policy.normalizedSource);
+  });
+  return replacements;
+};
+
+const cloudflareReviewedStructuralProgramDigest = (
+  program,
+  normalizedStaticImports = []
+) => {
+  const replacements = cloudflareReviewedNormalizedStaticImportSources(
+    program,
+    normalizedStaticImports
+  );
+  return astDigest(program, (source, kind) =>
+    kind === 'static' && replacements.has(source)
+      ? replacements.get(source)
+      : source
+  );
+};
+
+export const inspectCloudflareReviewedStructuralProgramDigestForTesting = (
+  source,
+  normalizedStaticImports = []
+) =>
+  cloudflareReviewedStructuralProgramDigest(
+    parseModuleSource('reviewed-structural-program.fixture.js', source).program,
+    normalizedStaticImports
+  );
+
+const cloudflareReviewedMixedClosureOwnsRequiredModules = (
+  record,
+  { appModuleSuffixes = [], moduleSuffixes }
+) =>
+  record.ownership === 'mixed' &&
+  record.modules.some(({ owner }) => owner === 'app') &&
+  record.modules.some(({ owner }) => owner === 'non-app') &&
+  moduleSuffixes.every((suffix) =>
+    record.modules.some(
+      ({ id, owner }) => owner === 'non-app' && id.endsWith(suffix)
+    )
+  ) &&
+  appModuleSuffixes.every((suffix) =>
+    record.modules.some(
+      ({ id, owner }) => owner === 'app' && id.endsWith(suffix)
+    )
+  );
+
+const cloudflareReviewedMixedClosureAuthenticatesProgram = (
+  record,
+  program,
+  reviewedClosure
+) =>
+  reviewedClosure.sha256 === record.sha256 ||
+  (typeof reviewedClosure.astSha256 === 'string' &&
+    program !== undefined &&
+    cloudflareReviewedStructuralProgramDigest(
+      program,
+      reviewedClosure.normalizedStaticImports
+    ) === reviewedClosure.astSha256);
+
+const reviewedCloudflareMixedClosure = (record, program) =>
   record.ownership === 'mixed'
     ? reviewedCloudflareMixedClosures.find(
-        ({ appModuleSuffixes = [], moduleSuffixes, sha256 }) =>
-          record.sha256 === sha256 &&
-          record.modules.some(({ owner }) => owner === 'app') &&
-          record.modules.some(({ owner }) => owner === 'non-app') &&
-          moduleSuffixes.every((suffix) =>
-            record.modules.some(
-              ({ id, owner }) => owner === 'non-app' && id.endsWith(suffix)
-            )
+        (reviewedClosure) =>
+          cloudflareReviewedMixedClosureOwnsRequiredModules(
+            record,
+            reviewedClosure
           ) &&
-          appModuleSuffixes.every((suffix) =>
-            record.modules.some(
-              ({ id, owner }) => owner === 'app' && id.endsWith(suffix)
-            )
+          cloudflareReviewedMixedClosureAuthenticatesProgram(
+            record,
+            program,
+            reviewedClosure
           )
       )
     : undefined;
 
-const reviewedCloudflareClosure = (record) =>
+const reviewedCloudflareClosure = (record, program) =>
   reviewedCloudflareNonAppClosure(record) ??
-  reviewedCloudflareMixedClosure(record);
+  reviewedCloudflareMixedClosure(record, program);
 
 const cloudflareReviewedPolicyLocationFields = (prefix) => [
   `${prefix}End`,
@@ -41096,6 +41268,34 @@ const assertCloudflareReviewedPolicyLocation = (
   );
 };
 
+const assertCloudflareReviewedOwnerModule = (
+  source,
+  owner,
+  expectedModuleSuffix,
+  label
+) => {
+  const regionMarker = '//#region ';
+  const endMarker = '//#endregion';
+  const regionStart = source.lastIndexOf(regionMarker, owner.start);
+  const previousRegionEnd = source.lastIndexOf(endMarker, owner.start);
+  const regionLineEnd = source.indexOf('\n', regionStart);
+  const regionEnd = source.indexOf(endMarker, owner.end);
+  assert(
+    regionStart >= 0 &&
+      regionStart > previousRegionEnd &&
+      regionLineEnd > regionStart &&
+      regionEnd >= owner.end,
+    `${label} must resolve inside one emitted module region`
+  );
+  const moduleId = source
+    .slice(regionStart + regionMarker.length, regionLineEnd)
+    .trim();
+  assert(
+    moduleId.endsWith(expectedModuleSuffix),
+    `${label} must resolve inside its reviewed module`
+  );
+};
+
 const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
   const source = parsedModuleSourcesByProgram.get(program);
   assert(
@@ -41107,6 +41307,26 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
       reviewedClosure.exactInvocationPoliciesOnly === true,
     'Reviewed Cloudflare exact-invocation policy mode must be enabled explicitly'
   );
+  if (
+    reviewedClosure.astSha256 !== undefined ||
+    reviewedClosure.normalizedStaticImports !== undefined
+  ) {
+    assert(
+      typeof reviewedClosure.astSha256 === 'string' &&
+        /^[a-f0-9]{64}$/u.test(reviewedClosure.astSha256) &&
+        reviewedClosure.sha256 === undefined &&
+        Array.isArray(reviewedClosure.normalizedStaticImports) &&
+        reviewedClosure.normalizedStaticImports.length > 0,
+      'Reviewed Cloudflare structural policy must define one AST digest and normalized static imports without a whole-chunk digest'
+    );
+    assert(
+      cloudflareReviewedStructuralProgramDigest(
+        program,
+        reviewedClosure.normalizedStaticImports
+      ) === reviewedClosure.astSha256,
+      'Reviewed Cloudflare structural policy AST digest must match the authenticated program'
+    );
+  }
   const aggregateSpreadExemptionKeys = new Set();
   (reviewedClosure.aggregateSpreadExemptions ?? []).forEach((policy, index) => {
     const label = `Reviewed Cloudflare aggregate spread exemption ${String(index)}`;
@@ -41346,6 +41566,8 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
             'exportedLocalName',
             'exportedName',
             'memberPath',
+            'ownerAstSha256',
+            'ownerModuleSuffix',
             'reason',
             'returnedPath',
           ]).has(field)
@@ -41393,6 +41615,29 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
         isCloudflareFunctionNode(owner),
         `${label} must resolve one callable member owner`
       );
+      if (reviewedClosure.astSha256 !== undefined) {
+        assert(
+          typeof policy.ownerAstSha256 === 'string' &&
+            /^[a-f0-9]{64}$/u.test(policy.ownerAstSha256) &&
+            typeof policy.ownerModuleSuffix === 'string' &&
+            policy.ownerModuleSuffix.length > 0,
+          `${label} must authenticate its exact owner AST and module`
+        );
+      }
+      if (policy.ownerAstSha256 !== undefined) {
+        assert(
+          astDigest(owner) === policy.ownerAstSha256,
+          `${label} owner AST must match its reviewed digest`
+        );
+      }
+      if (policy.ownerModuleSuffix !== undefined) {
+        assertCloudflareReviewedOwnerModule(
+          source,
+          owner,
+          policy.ownerModuleSuffix,
+          label
+        );
+      }
       const key = JSON.stringify({
         exportedLocalName: policy.exportedLocalName,
         exportedName: policy.exportedName,
@@ -41418,6 +41663,8 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
             'exportedLocalName',
             'exportedName',
             'exportedParameterIndex',
+            'ownerAstSha256',
+            'ownerModuleSuffix',
             'reason',
           ]).has(field)
         ),
@@ -41443,6 +41690,45 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
         typeof policy.reason === 'string' && policy.reason.trim().length > 0,
         `${label} must explain its safety invariant`
       );
+      const exports = program.body
+        .flatMap(moduleExportEntries)
+        .filter(([, localName]) => localName === policy.exportedLocalName);
+      assert(
+        exports.length === 1 && exports[0][0] === policy.exportedName,
+        `${label} must resolve one exact local export`
+      );
+      const owner = resolveCloudflareTarget(
+        { name: policy.exportedLocalName, type: 'Identifier' },
+        cloudflareTopLevelBindings(program)
+      );
+      assert(
+        isCloudflareFunctionNode(owner) &&
+          owner.params.length > policy.exportedParameterIndex,
+        `${label} must resolve one callable owner parameter`
+      );
+      if (reviewedClosure.astSha256 !== undefined) {
+        assert(
+          typeof policy.ownerAstSha256 === 'string' &&
+            /^[a-f0-9]{64}$/u.test(policy.ownerAstSha256) &&
+            typeof policy.ownerModuleSuffix === 'string' &&
+            policy.ownerModuleSuffix.length > 0,
+          `${label} must authenticate its exact owner AST and module`
+        );
+      }
+      if (policy.ownerAstSha256 !== undefined) {
+        assert(
+          astDigest(owner) === policy.ownerAstSha256,
+          `${label} owner AST must match its reviewed digest`
+        );
+      }
+      if (policy.ownerModuleSuffix !== undefined) {
+        assertCloudflareReviewedOwnerModule(
+          source,
+          owner,
+          policy.ownerModuleSuffix,
+          label
+        );
+      }
       const key = JSON.stringify({
         exportedLocalName: policy.exportedLocalName,
         exportedName: policy.exportedName,
@@ -41592,7 +41878,7 @@ const registerReviewedCloudflareClosure = (
   _analysisLabel,
   provenance
 ) => {
-  const reviewedClosure = reviewedCloudflareClosure(provenance);
+  const reviewedClosure = reviewedCloudflareClosure(provenance, program);
   if (!reviewedClosure) return undefined;
   assertCloudflareReviewedPolicy(program, reviewedClosure);
   cloudflareReviewedClosureByProgram.set(program, reviewedClosure);
@@ -41602,8 +41888,15 @@ const registerReviewedCloudflareClosure = (
 const isReviewedCloudflareNonAppClosure = (record) =>
   reviewedCloudflareNonAppClosure(record) !== undefined;
 
-export const inspectCloudflareReviewedClosurePolicyForTesting = (record) => {
-  const reviewed = reviewedCloudflareClosure(record);
+export const inspectCloudflareReviewedClosurePolicyForTesting = (
+  record,
+  source
+) => {
+  const program =
+    typeof source === 'string'
+      ? parseModuleSource('reviewed-closure-policy.fixture.js', source).program
+      : undefined;
+  const reviewed = reviewedCloudflareClosure(record, program);
   return {
     exportedAggregateReadOnlySinks:
       reviewed?.exportedAggregateReadOnlySinks ?? [],
@@ -41612,6 +41905,18 @@ export const inspectCloudflareReviewedClosurePolicyForTesting = (record) => {
     opaqueMemberMutationExemptions:
       reviewed?.opaqueMemberMutationExemptions ?? [],
     safeCallExemptions: [],
+  };
+};
+
+export const inspectCloudflareReviewedMixedClosureOwnershipForTesting = (
+  record
+) => {
+  const reviewed = reviewedCloudflareMixedClosures.find((reviewedClosure) =>
+    cloudflareReviewedMixedClosureOwnsRequiredModules(record, reviewedClosure)
+  );
+  return {
+    exportedStaticMemberDeferredResults:
+      reviewed?.exportedStaticMemberDeferredResults ?? [],
   };
 };
 
@@ -42492,7 +42797,11 @@ const cloudflareLoadEffectAnalysis = (
         (invocation) => invocation.localName === localName
       )
     );
-  if (forceDeep && reviewedInvocationFactsAreSafe) {
+  if (
+    forceDeep &&
+    reviewedInvocationFactsAreSafe &&
+    reviewedClosure.sha256 !== undefined
+  ) {
     return {
       bindings: cloudflareTopLevelBindings(program),
       importedInvocations: new Map(),

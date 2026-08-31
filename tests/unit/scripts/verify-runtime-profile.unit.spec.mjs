@@ -46,10 +46,12 @@ import {
   inspectCloudflareReviewedExportMutationPlanForTesting,
   inspectCloudflareReviewedFreshExportReceiversForTesting,
   inspectCloudflareReviewedMutationRelocationForTesting,
+  inspectCloudflareReviewedMixedClosureOwnershipForTesting,
   inspectCloudflareReviewedPolicyValidationForTesting,
   inspectCloudflareReviewedOriginDirectAliasProofForTesting,
   inspectCloudflareReviewedStaticMemberDeferredResultForTesting,
   inspectCloudflareReviewedStaticMemberProgramCacheForTesting,
+  inspectCloudflareReviewedStructuralProgramDigestForTesting,
   inspectCloudflareProvisionalReceiverDetailsForTesting,
   inspectCloudflareProductionKernelStaticShapeForTesting,
   inspectCloudflareReceiverDetailsForTesting,
@@ -2875,10 +2877,6 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
       'the wrong receiver parameter',
       'function setPopupOpenState(store,other){other.activeTriggerElement=null;other.activeTriggerId=null;other.preventUnmountingOnClose=true;other.preventUnmountingOnClose=false}setPopupOpenState({},{});export{setPopupOpenState as zt};',
     ],
-    [
-      'the wrong export name',
-      reviewedExportMutationOwnerSource.replace(' as zt', ' as other'),
-    ],
   ])('rejects %s from the reviewed mutation plan', (_label, ownerSource) => {
     expect(
       inspectCloudflareReviewedExportMutationPlanForTesting(
@@ -2886,6 +2884,15 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
         reviewedExportMutationPolicy
       )
     ).toMatchObject({ eligible: false });
+  });
+
+  it('rejects the wrong export name before planning a reviewed mutation', () => {
+    expect(() =>
+      inspectCloudflareReviewedExportMutationPlanForTesting(
+        reviewedExportMutationOwnerSource.replace(' as zt', ' as other'),
+        reviewedExportMutationPolicy
+      )
+    ).toThrow('must resolve one exact local export');
   });
 
   it('accepts only fresh direct receiver arguments for an imported mutation summary', () => {
@@ -5069,7 +5076,7 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
     ).toEqual([]);
   });
 
-  it('pins static Zod member results to exact mixed ownership', () => {
+  it('requires exact mixed ownership before structural authentication', () => {
     const record = {
       modules: [
         {
@@ -5086,11 +5093,10 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
         },
       ],
       ownership: 'mixed',
-      sha256:
-        '13a9ba7c7a9f31f705778621b8544b03c5b1584ca0d8509d7a0826e6dd450907',
+      sha256: '0'.repeat(64),
     };
     const policies =
-      inspectCloudflareReviewedClosurePolicyForTesting(
+      inspectCloudflareReviewedMixedClosureOwnershipForTesting(
         record
       ).exportedStaticMemberDeferredResults;
 
@@ -5116,7 +5122,6 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
     ]);
     const [appModule, listNavigationModule, popupStoreModule] = record.modules;
     for (const rejected of [
-      { ...record, sha256: '0'.repeat(64) },
       {
         ...record,
         modules: [
@@ -5135,10 +5140,53 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
       },
     ]) {
       expect(
-        inspectCloudflareReviewedClosurePolicyForTesting(rejected)
+        inspectCloudflareReviewedMixedClosureOwnershipForTesting(rejected)
           .exportedStaticMemberDeferredResults
       ).toEqual([]);
     }
+  });
+
+  it('normalizes only exact runtime-config imports in structural program digests', () => {
+    const normalizedStaticImports = [
+      {
+        bindings: [
+          ['n', 'getEnvClient'],
+          ['t', 'envClient'],
+        ],
+        normalizedSource: './client-[runtime-config].js',
+        sourceStem: 'client',
+      },
+      {
+        bindings: [['t', 'createSsrRpc']],
+        normalizedSource: './createSsrRpc-[runtime-config].js',
+        sourceStem: 'createSsrRpc',
+      },
+    ];
+    const source = (clientHash, rpcHash, body = 'const value=1;') =>
+      `import{n as getEnvClient,t as envClient}from"./client-${clientHash}.js";import{t as createSsrRpc}from"./createSsrRpc-${rpcHash}.js";${body}`;
+    const first = inspectCloudflareReviewedStructuralProgramDigestForTesting(
+      source('AAAAAAAA', 'BBBBBBBB'),
+      normalizedStaticImports
+    );
+
+    expect(
+      inspectCloudflareReviewedStructuralProgramDigestForTesting(
+        source('CCCCCCCC', 'DDDDDDDD'),
+        normalizedStaticImports
+      )
+    ).toBe(first);
+    expect(
+      inspectCloudflareReviewedStructuralProgramDigestForTesting(
+        source('CCCCCCCC', 'DDDDDDDD', 'const value=2;'),
+        normalizedStaticImports
+      )
+    ).not.toBe(first);
+    expect(() =>
+      inspectCloudflareReviewedStructuralProgramDigestForTesting(
+        source('short', 'DDDDDDDD'),
+        normalizedStaticImports
+      )
+    ).toThrow('must resolve exactly once');
   });
 
   it.each([
