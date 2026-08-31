@@ -6142,7 +6142,16 @@ const cloudflareWildcardMemberValues = (target) => {
   }
   if (nodeType(target) === 'ObjectExpression') {
     return target.properties.flatMap((property) =>
-      property.value ? [property.value] : []
+      property.cloudflareOpaqueIndexObjectSpread === true
+        ? [
+            {
+              ...property.target,
+              cloudflareOpaqueSpreadElement: true,
+            },
+          ]
+        : property.value
+          ? [property.value]
+          : []
     );
   }
   return undefined;
@@ -7271,6 +7280,22 @@ const cloudflareResolvedMemberCandidates = (
     assertCloudflareComputedCallableDefinitions(object.properties, context);
   }
   const memberName = cloudflareMemberName(memberTarget);
+  if (
+    object &&
+    memberName !== undefined &&
+    object.properties.some(
+      (property) =>
+        property.cloudflareSymbolicObjectSpread === true ||
+        property.cloudflareOpaqueIndexObjectSpread === true
+    )
+  ) {
+    return cloudflareConcreteCandidateAtMember(
+      node,
+      { ...candidate, target: object },
+      memberName,
+      context
+    );
+  }
   const member =
     object && memberName !== undefined
       ? object.properties.findLast(
@@ -7638,6 +7663,36 @@ const cloudflareMemberTargetCandidates = (node, target, context, seen) => {
         target: target.object,
       },
     ];
+  }
+  const directReceiver = unwrapCloudflareExecutionTarget(target.object);
+  const directObjectCandidates = (
+    nodeType(directReceiver) === 'Identifier'
+      ? cloudflareDirectLocalBindingValues(node, directReceiver, context)
+      : [directReceiver]
+  )
+    .filter((candidate) => nodeType(candidate) === 'ObjectExpression')
+    .flatMap((candidate) =>
+      cloudflareExpandedAggregateCandidates(
+        node,
+        { target: candidate },
+        context,
+        seen
+      )
+    )
+    .filter(({ target: candidate }) =>
+      candidate.properties.some(
+        (property) =>
+          property.cloudflareSymbolicObjectSpread === true ||
+          property.cloudflareOpaqueIndexObjectSpread === true
+      )
+    );
+  if (directObjectCandidates.length > 0) {
+    const member = cloudflareMemberName(target);
+    if (member !== undefined) {
+      return directObjectCandidates.flatMap((candidate) =>
+        cloudflareConcreteCandidateAtMember(node, candidate, member, context)
+      );
+    }
   }
   const thisMethodCandidates = cloudflareThisMethodCandidates(
     node,
@@ -10069,6 +10124,133 @@ const cloudflareNodeContainsReceiverBinding = (
   return found;
 };
 
+const cloudflareStructuralRepeatedCallbackValue = (
+  anchor,
+  source,
+  context,
+  seen = new Set(),
+  depth = 0
+) => {
+  if (depth > cloudflareFactoryResolutionLimit) return true;
+  const target = unwrapCloudflareExecutionTarget(source);
+  const key = cloudflareNodeSemanticKey(target);
+  if (seen.has(key)) return true;
+  const nextSeen = new Set(seen).add(key);
+  if (nodeType(target) === 'Identifier') {
+    const binding = artifactOwnerLexicalBinding(anchor, target.name, context);
+    if (binding && cloudflareParameterBinding(binding)) return true;
+    if (!binding) return false;
+    const values = artifactOwnerLexicalValueNodes(
+      binding,
+      target.name,
+      context
+    );
+    if (values.length === 0) return true;
+    return values.some((value) =>
+      cloudflareStructuralRepeatedCallbackValue(
+        anchor,
+        value,
+        context,
+        nextSeen,
+        depth + 1
+      )
+    );
+  }
+  if (
+    nodeType(target) === 'ConditionalExpression' ||
+    nodeType(target) === 'LogicalExpression'
+  ) {
+    const branches =
+      nodeType(target) === 'ConditionalExpression'
+        ? [target.consequent, target.alternate]
+        : [target.left, target.right];
+    return branches.some((branch) =>
+      cloudflareStructuralRepeatedCallbackValue(
+        anchor,
+        branch,
+        context,
+        nextSeen,
+        depth + 1
+      )
+    );
+  }
+  if (nodeType(target) === 'SequenceExpression') {
+    return cloudflareStructuralRepeatedCallbackValue(
+      anchor,
+      target.expressions.at(-1),
+      context,
+      nextSeen,
+      depth + 1
+    );
+  }
+  if (nodeType(target) === 'CallExpression') {
+    const callee = unwrapCloudflareExecutionTarget(target.callee);
+    if (
+      nodeType(callee) === 'MemberExpression' &&
+      new Set(['apply', 'bind', 'call']).has(cloudflareMemberName(callee))
+    ) {
+      return cloudflareStructuralRepeatedCallbackValue(
+        target,
+        callee.object,
+        context,
+        nextSeen,
+        depth + 1
+      );
+    }
+    return true;
+  }
+  if (nodeType(target) !== 'MemberExpression') return false;
+  const member = cloudflareMemberName(target);
+  if (member === undefined) return true;
+  if (
+    cloudflareRepeatedArrayCallbackMembers.has(member) ||
+    new Set(['apply', 'bind', 'call', 'from']).has(member)
+  ) {
+    return true;
+  }
+  const receiver = unwrapCloudflareExecutionTarget(target.object);
+  const receiverBinding =
+    nodeType(receiver) === 'Identifier'
+      ? artifactOwnerLexicalBinding(anchor, receiver.name, context)
+      : undefined;
+  const receivers = receiverBinding
+    ? artifactOwnerLexicalValueNodes(receiverBinding, receiver.name, context)
+    : [receiver];
+  return receivers.some((candidate) => {
+    if (nodeType(candidate) !== 'ObjectExpression') return false;
+    const property = candidate.properties.findLast(
+      (entry) =>
+        nodeType(entry) === 'Property' && propertyKeyName(entry) === member
+    );
+    return property
+      ? cloudflareStructuralRepeatedCallbackValue(
+          anchor,
+          property.value,
+          context,
+          nextSeen,
+          depth + 1
+        )
+      : false;
+  });
+};
+
+const cloudflareStructuralRepeatedCallbackCall = (call, context) => {
+  const callee = unwrapCloudflareExecutionTarget(call.callee);
+  if (nodeType(callee) === 'CallExpression') return true;
+  if (nodeType(callee) === 'Identifier') {
+    return cloudflareStructuralRepeatedCallbackValue(call, callee, context);
+  }
+  if (nodeType(callee) !== 'MemberExpression') return false;
+  const member = cloudflareMemberName(callee);
+  if (member === undefined) return true;
+  if (cloudflareRepeatedArrayCallbackMembers.has(member)) {
+    return call.arguments.length > 0;
+  }
+  if (member === 'from') return call.arguments.length > 1;
+  if (new Set(['apply', 'bind', 'call']).has(member)) return true;
+  return cloudflareStructuralRepeatedCallbackValue(call, callee, context);
+};
+
 const cloudflareReceiverSpreadAnalysisIndex = (context) => {
   if (context.receiverSpreadAnalysisIndex) {
     return context.receiverSpreadAnalysisIndex;
@@ -10086,6 +10268,7 @@ const cloudflareReceiverSpreadAnalysisIndex = (context) => {
     calls: [],
     members: [],
     news: [],
+    repeatingCallbackCandidates: [],
     unaries: [],
     updates: [],
     variables: [],
@@ -10110,7 +10293,9 @@ const cloudflareReceiverSpreadAnalysisIndex = (context) => {
     index.byOwner.set(owner, ownerIndex);
   };
   new Visitor({
-    AssignmentExpression: (node) => record('assignments', node),
+    AssignmentExpression(node) {
+      record('assignments', node);
+    },
     CallExpression: (node) => record('calls', node),
     MemberExpression: (node) => record('members', node),
     NewExpression: (node) => record('news', node),
@@ -10118,6 +10303,9 @@ const cloudflareReceiverSpreadAnalysisIndex = (context) => {
     UpdateExpression: (node) => record('updates', node),
     VariableDeclarator: (node) => record('variables', node),
   }).visit(context.program);
+  index.repeatingCallbackCandidates = index.calls.filter((call) =>
+    cloudflareStructuralRepeatedCallbackCall(call, context)
+  );
   cloudflareReceiverSpreadAnalysisIndexes.set(context.program, index);
   context.receiverSpreadAnalysisIndex = index;
   return index;
@@ -10247,8 +10435,22 @@ const cloudflareLoopDefinitelyExecutes = (loop) => {
   );
 };
 
+const cloudflareLoopDefinitelySkips = (loop) => {
+  if (nodeType(loop) === 'ForOfStatement') {
+    const iterable = unwrapCloudflareExecutionTarget(loop.right);
+    return (
+      nodeType(iterable) === 'ArrayExpression' && iterable.elements.length === 0
+    );
+  }
+  return (
+    new Set(['ForStatement', 'WhileStatement']).has(nodeType(loop)) &&
+    cloudflareDirectStaticBoolean(loop.test) === false
+  );
+};
+
 const cloudflareNestedLoopControlCompletions = (statement, loop, context) => {
   if (cloudflareLoopStatementTypes.has(nodeType(statement))) {
+    if (cloudflareLoopDefinitelySkips(statement)) return new Set(['normal']);
     const body = cloudflareLoopStatementCompletions(
       statement.body,
       loop,
@@ -10300,7 +10502,9 @@ const cloudflareNestedLoopControlCompletions = (statement, loop, context) => {
 };
 
 const cloudflareSwitchSelectedCaseIndex = (statement) => {
-  const discriminant = cloudflareStaticValue(statement.discriminant);
+  const discriminant = cloudflareStaticValue(
+    unwrapCloudflareExecutionTarget(statement.discriminant)
+  );
   if (discriminant === unknownCloudflareStaticValue) return undefined;
   let defaultIndex = -1;
   for (let index = 0; index < statement.cases.length; index += 1) {
@@ -10309,7 +10513,9 @@ const cloudflareSwitchSelectedCaseIndex = (statement) => {
       defaultIndex = index;
       continue;
     }
-    const value = cloudflareStaticValue(switchCase.test);
+    const value = cloudflareStaticValue(
+      unwrapCloudflareExecutionTarget(switchCase.test)
+    );
     if (value === unknownCloudflareStaticValue) return undefined;
     if (value === discriminant) return index;
   }
@@ -10361,17 +10567,26 @@ const cloudflareTryStatementCompletions = (statement, loop, context, seen) => {
     context,
     seen
   );
-  const incoming = statement.handler
-    ? new Set([
-        ...attempted,
-        ...cloudflareLoopStatementCompletions(
-          statement.handler.body,
-          loop,
-          context,
-          seen
-        ),
-      ])
-    : attempted;
+  const thrown = [...attempted].filter(
+    (completion) =>
+      typeof completion === 'object' && completion.kind === 'throw'
+  );
+  const incoming = new Set(
+    [...attempted].filter(
+      (completion) =>
+        !(typeof completion === 'object' && completion.kind === 'throw')
+    )
+  );
+  if (statement.handler && thrown.length > 0) {
+    cloudflareLoopStatementCompletions(
+      statement.handler.body,
+      loop,
+      context,
+      seen
+    ).forEach((completion) => incoming.add(completion));
+  } else if (!statement.handler) {
+    thrown.forEach((completion) => incoming.add(completion));
+  }
   if (!statement.finalizer) return incoming;
   const finalized = cloudflareLoopStatementCompletions(
     statement.finalizer,
@@ -10414,9 +10629,7 @@ const cloudflareLoopStatementCompletions = (
   }
   if (nodeType(statement) === 'ReturnStatement') return new Set(['exit']);
   if (nodeType(statement) === 'ThrowStatement') {
-    return new Set([
-      cloudflareThrowExitsForOf(statement, loop, context) ? 'exit' : 'normal',
-    ]);
+    return new Set([{ kind: 'throw', statement }]);
   }
   if (nodeType(statement) === 'BlockStatement') {
     return cloudflareLoopStatementListCompletions(
@@ -10532,9 +10745,10 @@ const cloudflareCompletionTargetsLoop = (completion, loop) =>
 const cloudflareLoopCompletionsRepeat = (completions, loop) =>
   [...completions].some(
     (completion) =>
-      typeof completion === 'object' &&
-      completion.kind === 'continue' &&
-      cloudflareCompletionTargetsLoop(completion, loop)
+      completion === 'repeat' ||
+      (typeof completion === 'object' &&
+        completion.kind === 'continue' &&
+        cloudflareCompletionTargetsLoop(completion, loop))
   );
 
 const cloudflareLoopCompletionsCompleteNormally = (completions) =>
@@ -10550,7 +10764,52 @@ const cloudflareLoopBackEdgeMayReach = (loop, node, context) => {
   let current = node;
   let parent = context.parentNodes.get(current);
   while (parent && current !== loop) {
+    if (nodeType(parent) === 'SwitchCase' && parent.test === current) {
+      const switchStatement = context.parentNodes.get(parent);
+      if (nodeType(switchStatement) === 'SwitchStatement') {
+        const completions = cloudflareLoopStatementCompletions(
+          switchStatement,
+          loop,
+          context
+        );
+        if (cloudflareLoopCompletionsRepeat(completions, loop)) return true;
+        if (!cloudflareLoopCompletionsCompleteNormally(completions)) {
+          return false;
+        }
+        current = switchStatement;
+        parent = context.parentNodes.get(current);
+        continue;
+      }
+    }
     if (
+      (nodeType(parent) === 'IfStatement' && parent.test === current) ||
+      (nodeType(parent) === 'SwitchStatement' &&
+        parent.discriminant === current)
+    ) {
+      const completions = cloudflareLoopStatementCompletions(
+        parent,
+        loop,
+        context
+      );
+      if (cloudflareLoopCompletionsRepeat(completions, loop)) return true;
+      if (!cloudflareLoopCompletionsCompleteNormally(completions)) {
+        return false;
+      }
+    }
+    if (
+      nodeType(parent) === 'TryStatement' &&
+      parent.finalizer &&
+      current === parent.finalizer
+    ) {
+      const pending = cloudflareTryStatementCompletions(
+        { ...parent, finalizer: undefined },
+        loop,
+        context,
+        new Set()
+      );
+      if (cloudflareLoopCompletionsRepeat(pending, loop)) return true;
+      if (!cloudflareLoopCompletionsCompleteNormally(pending)) return false;
+    } else if (
       nodeType(parent) === 'TryStatement' &&
       parent.finalizer &&
       current !== parent.finalizer
@@ -10608,13 +10867,158 @@ const cloudflareRepeatedArrayCallbackMembers = new Set([
 
 const cloudflareCallbackOwnersAtResolvedSites = (anchor, callback, context) => {
   const owner = cloudflareFunctionOwnerAt(callback, context);
-  const resolve = () =>
-    cloudflareLexicalTargetCandidates(
+  const resolve = () => {
+    function resolveCallResults(call, seen) {
+      const directOwners = cloudflareLexicalTargetCandidates(
+        call,
+        call.callee,
+        context,
+        new Set()
+      ).filter(({ target }) => isCloudflareFunctionNode(target));
+      const normalizedOwners =
+        nodeType(call.callee) === 'MemberExpression'
+          ? cloudflareNormalizedMemberTargetCandidates(
+              call,
+              call.callee,
+              context,
+              new Set()
+            ).filter(({ target }) => isCloudflareFunctionNode(target))
+          : [];
+      const localOwners = cloudflareLocalStaticMemberOwners(
+        { node: call, target: call.callee },
+        call.callee,
+        context
+      ).map((target) => ({ target }));
+      const keys = new Set();
+      return [...directOwners, ...normalizedOwners, ...localOwners]
+        .filter((candidate) => {
+          const key = cloudflareCandidateSemanticKey(candidate);
+          if (keys.has(key)) return false;
+          keys.add(key);
+          return true;
+        })
+        .flatMap((ownerCandidate) =>
+          cloudflareReturnedFunctionCandidates(
+            call,
+            ownerCandidate,
+            context,
+            new Set(seen)
+          )
+        );
+    }
+    function resolveEntry(entry, depth, seen) {
+      assert(
+        depth <= cloudflareFactoryResolutionLimit,
+        `${cloudflareFactoryResolutionMessage} in ${context.analysisLabel}`
+      );
+      const target = unwrapCloudflareExecutionTarget(entry.target);
+      if (isCloudflareFunctionNode(target)) return [{ ...entry, target }];
+      const key = cloudflareCandidateSemanticKey(entry);
+      if (seen.has(key)) return [];
+      const nextSeen = new Set(seen).add(key);
+      const inheritAndResolve = (candidates) =>
+        inheritCloudflareCandidateContexts(entry, candidates).flatMap(
+          (candidate) => resolveEntry(candidate, depth + 1, nextSeen)
+        );
+      const resolveTarget = () => {
+        if (nodeType(target) === 'Identifier') {
+          return inheritAndResolve(
+            cloudflareDirectLocalBindingValues(anchor, target, context).map(
+              (value) => ({ target: value })
+            )
+          );
+        }
+        if (
+          nodeType(target) === 'ConditionalExpression' ||
+          nodeType(target) === 'LogicalExpression'
+        ) {
+          return inheritAndResolve(
+            cloudflareLexicalTargetCandidates(
+              anchor,
+              target,
+              context,
+              new Set()
+            )
+          );
+        }
+        if (nodeType(target) === 'SequenceExpression') {
+          return inheritAndResolve([{ target: target.expressions.at(-1) }]);
+        }
+        if (nodeType(target) === 'MemberExpression') {
+          const normalized = cloudflareNormalizedMemberTargetCandidates(
+            anchor,
+            target,
+            context,
+            new Set()
+          );
+          const localOwners = cloudflareLocalStaticMemberOwners(
+            { node: anchor, target },
+            target,
+            context
+          ).map((memberOwner) => ({ target: memberOwner }));
+          const object = unwrapCloudflareExecutionTarget(target.object);
+          const returnedMembers =
+            nodeType(object) === 'CallExpression'
+              ? resolveCallResults(object, nextSeen).flatMap((candidate) =>
+                  inheritCloudflareCandidateContexts(
+                    candidate,
+                    cloudflareMemberCandidate(
+                      anchor,
+                      target,
+                      candidate,
+                      context,
+                      new Set()
+                    )
+                  )
+                )
+              : [];
+          return inheritAndResolve([
+            ...normalized,
+            ...localOwners,
+            ...returnedMembers,
+          ]);
+        }
+        if (nodeType(target) === 'CallExpression') {
+          return inheritAndResolve(resolveCallResults(target, nextSeen));
+        }
+        return [];
+      };
+      if (!entry.factoryBindings) return resolveTarget();
+      const entryOwner = cloudflareFunctionOwnerAt(target, context);
+      return withCloudflareActiveFactoryBindings(
+        context,
+        entryOwner,
+        cloudflareMergeFactoryBindings(
+          context.activeFactoryBindingsByFunction.get(entryOwner),
+          entry.factoryBindings
+        ),
+        resolveTarget
+      );
+    }
+    const direct = cloudflareLexicalTargetCandidates(
       anchor,
       callback,
       context,
       new Set()
-    ).filter(({ target }) => isCloudflareFunctionNode(target));
+    );
+    const roots = [
+      ...direct,
+      ...(nodeType(callback) === 'Identifier'
+        ? cloudflareDirectLocalBindingValues(anchor, callback, context).map(
+            (target) => ({ target })
+          )
+        : [{ target: callback }]),
+    ];
+    const keys = new Set();
+    return roots
+      .flatMap((entry) => resolveEntry(entry, 0, new Set()))
+      .filter((candidate) => {
+        const key = cloudflareCandidateSemanticKey(candidate);
+        if (keys.has(key)) return false;
+        keys.add(key);
+        return true;
+      });
+  };
   if (!isCloudflareFunctionNode(owner)) return resolve();
   const sites = context.resolvedCallSitesByFunction.get(owner) ?? [];
   return sites.length === 0
@@ -10634,6 +11038,15 @@ const cloudflareCallbackOwnersAtResolvedSites = (anchor, callback, context) => {
 const cloudflareStaticCallbackContinues = (method, owner) => {
   const returned = cloudflareFunctionReturnExpressions(owner);
   if (returned.length === 0) return undefined;
+  if (
+    new Set(['find', 'findIndex', 'findLast', 'findLastIndex', 'some']).has(
+      method
+    ) &&
+    nodeType(owner.body) === 'BlockStatement' &&
+    !cloudflareStatementDefinitelyTerminates(owner.body)
+  ) {
+    return true;
+  }
   const booleans = returned.map(cloudflareDirectStaticBoolean);
   if (booleans.some((value) => value === undefined)) return undefined;
   if (
@@ -10679,6 +11092,47 @@ const cloudflareDirectArrayCallbackCount = (method, receiver, execution) => {
     return presentLength;
   }
   return rawLength;
+};
+
+const cloudflareFunctionHasDirectRecursiveCall = (owner, context) => {
+  if (!isCloudflareFunctionNode(owner)) return false;
+  const parent = context.parentNodes.get(owner);
+  const methodName =
+    nodeType(parent) === 'MethodDefinition'
+      ? propertyKeyName(parent)
+      : undefined;
+  const functionName = identifierName(owner.id);
+  const functionBinding = functionName
+    ? artifactOwnerLexicalBinding(owner, functionName, context)
+    : undefined;
+  let recursive = false;
+  new Visitor({
+    CallExpression(call) {
+      if (recursive || cloudflareFunctionOwnerAt(call, context) !== owner) {
+        return;
+      }
+      const callee = unwrapCloudflareExecutionTarget(call.callee);
+      if (
+        methodName !== undefined &&
+        nodeType(callee) === 'MemberExpression' &&
+        nodeType(unwrapCloudflareExecutionTarget(callee.object)) ===
+          'ThisExpression' &&
+        cloudflareMemberName(callee) === methodName
+      ) {
+        recursive = true;
+        return;
+      }
+      if (
+        functionName &&
+        identifierName(callee) === functionName &&
+        artifactOwnerLexicalBinding(callee, functionName, context)
+          ?.digestNode === functionBinding?.digestNode
+      ) {
+        recursive = true;
+      }
+    },
+  }).visit(owner.body);
+  return recursive;
 };
 
 const cloudflareArrayCallbackExecutionDetail = (
@@ -10750,9 +11204,49 @@ const cloudflareDirectArrayCallbackMetaExecutions = (call, context) => {
   });
 };
 
+const cloudflareDirectArrayCallbackExecutions = (call, context) => {
+  const target = unwrapCloudflareExecutionTarget(call.callee);
+  if (nodeType(target) !== 'MemberExpression') return [];
+  const method = cloudflareMemberName(target);
+  const arrayFrom =
+    method === 'from' &&
+    cloudflareUnshadowedIntrinsicOwner(call, target.object, context) ===
+      'Array';
+  if (!arrayFrom && !cloudflareRepeatedArrayCallbackMembers.has(method)) {
+    return [];
+  }
+  const callback = call.arguments?.[arrayFrom ? 1 : 0];
+  if (!callback) return [];
+  const detail = cloudflareArrayCallbackExecutionDetail(
+    call,
+    target,
+    arrayFrom ? call.arguments?.[0] : target.object,
+    callback
+  );
+  return detail ? [detail] : [];
+};
+
 const cloudflareRepeatedCallbackExecutions = (call, context) => {
   const directMeta = cloudflareDirectArrayCallbackMetaExecutions(call, context);
   if (directMeta.length > 0) return directMeta;
+  const direct = cloudflareDirectArrayCallbackExecutions(call, context);
+  if (direct.length > 0) return direct;
+  const callee = unwrapCloudflareExecutionTarget(call.callee);
+  if (nodeType(callee) === 'Identifier') {
+    const assignedBindExecutions = cloudflareDirectLocalBindingValues(
+      call,
+      callee,
+      context
+    )
+      .filter((candidate) => nodeType(candidate) === 'CallExpression')
+      .flatMap((bound) =>
+        cloudflareDirectArrayCallbackMetaExecutions(
+          { ...call, callee: bound },
+          context
+        )
+      );
+    if (assignedBindExecutions.length > 0) return assignedBindExecutions;
+  }
   const normalizedExecutions = cloudflareNormalizedMetaExecutions(
     { node: call, target: call.callee },
     context,
@@ -10795,10 +11289,38 @@ const cloudflareRepeatedCallbackExecutions = (call, context) => {
   });
 };
 
-const cloudflareRepeatingArrayCallbackOwners = (context, analysisIndex) => {
+const cloudflareRepeatingArrayCallbackOwners = (
+  context,
+  analysisIndex,
+  spreadOwner,
+  spreadInvocationSites
+) => {
+  const cacheable = cloudflareReceiverSpreadSourceStabilityIsCacheable(context);
+  const cacheKey = cacheable
+    ? JSON.stringify([
+        cloudflareTargetResolutionRevision(context),
+        cloudflareNodeSemanticKey(spreadOwner),
+        spreadInvocationSites.map(({ caller, node }) => [
+          cloudflareNodeSemanticKey(caller),
+          cloudflareNodeSemanticKey(node),
+        ]),
+      ])
+    : undefined;
+  const cache =
+    context.repeatingArrayCallbackOwnersByRevision ??
+    (context.repeatingArrayCallbackOwnersByRevision = new Map());
+  if (cacheKey !== undefined && cache.has(cacheKey)) {
+    return cache.get(cacheKey);
+  }
   const owners = new Set();
-  if (cloudflareReviewedClosureForContext(context)) return owners;
-  analysisIndex.calls.forEach((call) => {
+  if (cloudflareFunctionHasDirectRecursiveCall(spreadOwner, context)) {
+    owners.add(spreadOwner);
+  }
+  const spreadCallPathOwners = new Set([
+    spreadOwner,
+    ...spreadInvocationSites.map(({ caller }) => caller),
+  ]);
+  analysisIndex.repeatingCallbackCandidates.forEach((call) => {
     cloudflareRepeatedCallbackExecutions(call, context).forEach((detail) => {
       consumeCloudflareAnalysisWork(context, 1);
       const callbackCandidates = cloudflareCallbackOwnersAtResolvedSites(
@@ -10806,29 +11328,49 @@ const cloudflareRepeatingArrayCallbackOwners = (context, analysisIndex) => {
         detail.callback,
         context
       );
+      const directCount = cloudflareDirectArrayCallbackCount(
+        detail.method,
+        detail.receiver,
+        detail.execution
+      );
       const pristine =
-        cloudflarePriorMemberMutations(detail.execution, detail.target, context)
-          .length === 0;
-      const callbackCount = pristine
-        ? cloudflareDirectArrayCallbackCount(
-            detail.method,
-            detail.receiver,
-            detail.execution
-          )
-        : undefined;
+        directCount === undefined
+          ? undefined
+          : cloudflarePriorMemberMutations(
+              detail.execution,
+              detail.target,
+              context
+            ).length === 0;
+      const callbackCount = pristine === true ? directCount : undefined;
       callbackCandidates.forEach((callbackCandidate) => {
         const owner = callbackCandidate.target;
-        const continues = pristine
-          ? cloudflareStaticCallbackContinues(detail.method, owner)
-          : undefined;
+        const continues =
+          callbackCount !== undefined
+            ? cloudflareStaticCallbackContinues(detail.method, owner)
+            : undefined;
         if (
           callbackCount === undefined ||
           (callbackCount > 1 && continues !== false)
         ) {
-          const addClosure = () =>
-            cloudflareInvokedFunctionClosure(owner, context, new Set()).forEach(
-              (dependency) => owners.add(dependency)
-            );
+          const addClosure = () => {
+            owners.add(owner);
+            if (spreadCallPathOwners.has(owner)) {
+              cloudflareInvokedFunctionClosure(
+                owner,
+                context,
+                new Set()
+              ).forEach((dependency) => owners.add(dependency));
+              spreadCallPathOwners.forEach((dependency) =>
+                owners.add(dependency)
+              );
+            } else if (callbackCandidate.factoryBindings) {
+              cloudflareInvokedFunctionClosure(
+                owner,
+                context,
+                new Set()
+              ).forEach((dependency) => owners.add(dependency));
+            }
+          };
           if (callbackCandidate.factoryBindings) {
             withCloudflareActiveFactoryBindings(
               context,
@@ -10843,6 +11385,21 @@ const cloudflareRepeatingArrayCallbackOwners = (context, analysisIndex) => {
       });
     });
   });
+  if (
+    cacheable &&
+    cloudflareReceiverSpreadSourceStabilityIsCacheable(context) &&
+    JSON.stringify([
+      cloudflareTargetResolutionRevision(context),
+      cloudflareNodeSemanticKey(spreadOwner),
+      spreadInvocationSites.map(({ caller, node }) => [
+        cloudflareNodeSemanticKey(caller),
+        cloudflareNodeSemanticKey(node),
+      ]),
+    ]) === cacheKey
+  ) {
+    if (cache.size >= 64) cache.clear();
+    cache.set(cacheKey, owners);
+  }
   return owners;
 };
 
@@ -11069,7 +11626,9 @@ const cloudflareReceiverSpreadBindingIsStable = (
     : [];
   const repeatingArrayCallbackOwners = cloudflareRepeatingArrayCallbackOwners(
     context,
-    analysisIndex
+    analysisIndex,
+    spreadOwner,
+    spreadInvocationSites
   );
   const spreadOccurrences = [
     { caller: spreadOwner, node: spread },
@@ -11079,6 +11638,7 @@ const cloudflareReceiverSpreadBindingIsStable = (
     ...rootOwners,
     ...executedOwners,
     ...spreadInvocationSites.map(({ caller }) => caller),
+    ...repeatingArrayCallbackOwners,
   ]);
   const mutationMayPrecedeOccurrence = (node, occurrence) => {
     if (isStaticallyUnreachableCloudflareNode(occurrence.node, context)) {
@@ -17049,6 +17609,20 @@ const cloudflareDirectLocalObjectMemberOwners = (object, member, context) => {
         cloudflareLexicalPropertyKeyName(candidate, context) === member
     )
     .at(-1);
+  if (property?.kind === 'get') {
+    return [
+      property.value,
+      ...cloudflareAccessorReturnCandidates(property, context, new Set())
+        .flatMap((candidate) => [
+          candidate.target,
+          ...(candidate.accessorOwners ?? []).map(({ target }) => target),
+        ])
+        .filter(isCloudflareFunctionNode),
+    ].filter(
+      (owner, index, owners) =>
+        isCloudflareFunctionNode(owner) && owners.indexOf(owner) === index
+    );
+  }
   if (isCloudflareFunctionNode(property?.value)) return [property.value];
   return nodeType(property?.value) === 'Identifier'
     ? cloudflareDirectLocalBindingValues(
@@ -17078,7 +17652,7 @@ const cloudflareLocalStaticMemberOwners = (execution, target, context) => {
       );
     }
     if (nodeType(candidate) !== 'NewExpression') return [];
-    return cloudflareDirectLocalClassValues(
+    const classOwners = cloudflareDirectLocalClassValues(
       execution.node,
       candidate.callee,
       context
@@ -17090,6 +17664,19 @@ const cloudflareLocalStaticMemberOwners = (execution, target, context) => {
         context
       )
     );
+    const prototypeMember = cloudflareProjectionMember(
+      cloudflareProjectionMember(candidate.callee, 'prototype'),
+      member
+    );
+    const prototypeOwners = cloudflarePriorMemberMutationCandidates(
+      execution.node,
+      prototypeMember,
+      context,
+      new Set()
+    )
+      .map(({ target: owner }) => owner)
+      .filter(isCloudflareFunctionNode);
+    return [...classOwners, ...prototypeOwners];
   });
 };
 
@@ -19364,48 +19951,203 @@ const cloudflareLocalFactoryMemberMutationCandidates = (
       .filter(({ target: owner }) => isCloudflareFunctionNode(owner))
       .flatMap((ownerCandidate) => {
         const owner = ownerCandidate.target;
-        const assignments = [];
-        const nestedRanges = nestedFunctionRanges(owner);
-        new Visitor({
-          AssignmentExpression(assignment) {
-            if (
-              assignment.operator !== '=' ||
-              isInsideNestedFunction(assignment, nestedRanges)
-            ) {
-              return;
-            }
-            const assignmentPath = cloudflareStaticMemberPath(assignment.left);
-            if (
-              assignmentPath.length === path.length &&
-              assignmentPath.every((member, index) =>
-                cloudflareMemberNamesEqual(member, path[index])
-              )
-            ) {
-              assignments.push(assignment);
-            }
-          },
-        }).visit(owner.body);
-        if (assignments.length === 0) return [];
         const bindings = cloudflareFactoryParameterBindings(
           call,
           ownerCandidate,
           context
         );
+        const mutations = [];
+        const appendMutation = (
+          anchor,
+          receiver,
+          member,
+          value,
+          factoryBindings
+        ) => {
+          const mutationPath = [
+            ...cloudflareStaticMemberPath(receiver),
+            ...(member === undefined ? [] : [member]),
+          ];
+          if (
+            mutationPath.length === path.length &&
+            mutationPath.every((part, index) =>
+              cloudflareMemberNamesEqual(part, path[index])
+            )
+          ) {
+            mutations.push({ anchor, factoryBindings, value });
+          }
+        };
+        withCloudflareActiveFactoryBindings(context, owner, bindings, () =>
+          new Visitor({
+            AssignmentExpression(assignment) {
+              if (
+                cloudflareFunctionOwnerAt(assignment, context) !== owner ||
+                assignment.operator !== '=' ||
+                nodeType(assignment.left) !== 'MemberExpression'
+              ) {
+                return;
+              }
+              appendMutation(
+                assignment,
+                assignment.left.object,
+                cloudflareMemberName(assignment.left),
+                assignment.right
+              );
+            },
+            CallExpression(mutationCall) {
+              if (cloudflareFunctionOwnerAt(mutationCall, context) !== owner) {
+                return;
+              }
+              const directMutation = cloudflareDirectReceiverMutation(
+                mutationCall,
+                context
+              );
+              if (directMutation?.sources) {
+                directMutation.sources.forEach((source) => {
+                  const sourceCandidates = cloudflareLexicalTargetCandidates(
+                    mutationCall,
+                    source,
+                    context,
+                    new Set()
+                  );
+                  const containers = sourceCandidates.flatMap((candidate) =>
+                    nodeType(candidate.target) === 'ObjectExpression'
+                      ? cloudflareExpandedAggregateCandidates(
+                          source,
+                          candidate,
+                          context,
+                          new Set()
+                        )
+                      : []
+                  );
+                  const receiverPath = cloudflareStaticMemberPath(
+                    directMutation.receiver
+                  );
+                  const mayWriteRequestedPath =
+                    receiverPath.length < path.length &&
+                    receiverPath.every((part, index) =>
+                      cloudflareMemberNamesEqual(part, path[index])
+                    );
+                  assert(
+                    !mayWriteRequestedPath ||
+                      (containers.length > 0 &&
+                        containers.length === sourceCandidates.length),
+                    `${cloudflareOpaqueAggregateSpreadMessage} while resolving a local factory Object.assign source in ${context.analysisLabel}`
+                  );
+                  containers.forEach((candidate) =>
+                    cloudflareReceiverContainerChildren(
+                      candidate.target
+                    ).forEach(({ member, value }) =>
+                      appendMutation(
+                        mutationCall,
+                        directMutation.receiver,
+                        member,
+                        value,
+                        candidate.factoryBindings
+                      )
+                    )
+                  );
+                });
+                return;
+              }
+              if (directMutation) {
+                (directMutation.descriptorEntries ?? [directMutation]).forEach(
+                  (entry) =>
+                    cloudflareReceiverMutationValues(entry).forEach((value) =>
+                      appendMutation(
+                        mutationCall,
+                        entry.receiver,
+                        entry.member,
+                        value
+                      )
+                    )
+                );
+                return;
+              }
+              const calleeOwner = cloudflareStaticLocalFunctionOwner(
+                mutationCall,
+                context
+              );
+              if (!calleeOwner) return;
+              const summary = cloudflareLocalReceiverMutations(
+                calleeOwner,
+                context
+              );
+              const execution = {
+                node: mutationCall,
+                target: mutationCall.callee,
+              };
+              const arguments_ = cloudflareExecutionArguments(
+                mutationCall,
+                cloudflareExecutionDirectInvocation(execution, context),
+                context
+              );
+              summary.mutations.forEach((mutation) => {
+                const receivers = cloudflareLocalProjectedReceiverSources(
+                  mutationCall,
+                  arguments_,
+                  mutation.projection,
+                  context
+                );
+                const values = mutation.value
+                  ? cloudflareSpecializedMutationOperandEntry(
+                      {
+                        anchor: mutation.anchor,
+                        factoryBindings: mutation.factoryBindings,
+                        source: mutation.value,
+                      },
+                      calleeOwner,
+                      execution,
+                      context
+                    )
+                  : [];
+                receivers.forEach((receiver) =>
+                  values.forEach((value) =>
+                    appendMutation(
+                      value.anchor,
+                      receiver,
+                      mutation.member,
+                      value.source,
+                      value.factoryBindings
+                    )
+                  )
+                );
+              });
+            },
+          }).visit(owner.body)
+        );
+        if (mutations.length === 0) return [];
         return withCloudflareActiveFactoryBindings(
           context,
           owner,
           bindings,
           () =>
-            assignments.flatMap((assignment) =>
-              cloudflareLexicalTargetCandidates(
-                assignment,
-                assignment.right,
+            mutations.flatMap((mutation) => {
+              const mutationBindings = cloudflareMergeFactoryBindings(
+                bindings,
+                mutation.factoryBindings
+              );
+              const mutationOwner =
+                cloudflareFunctionOwnerAt(mutation.value, context) ??
+                cloudflareFunctionOwnerAt(mutation.anchor, context);
+              return withCloudflareActiveFactoryBindings(
                 context,
-                seen
-              ).map((candidate) =>
-                cloudflareCandidateWithFactoryBindings(candidate, bindings)
-              )
-            )
+                mutationOwner,
+                mutationBindings,
+                () =>
+                  cloudflareLexicalTargetCandidates(
+                    mutation.value,
+                    mutation.value,
+                    context,
+                    seen
+                  ).map((candidate) =>
+                    cloudflareCandidateWithFactoryBindings(
+                      candidate,
+                      mutationBindings
+                    )
+                  )
+              );
+            })
         );
       })
   );
@@ -19541,7 +20283,9 @@ const cloudflareNormalizedMemberTargetCandidates = (
       cloudflareNodeSemanticKey(candidate.target) === targetKey
   );
   const candidates = [
-    ...(onlyUnresolvedCandidates
+    ...(onlyUnresolvedCandidates &&
+    context.memberMutationIndexInProgress !== true &&
+    context.receiverIdentityIndexInProgress !== true
       ? cloudflareLocalFactoryMemberMutationCandidates(
           node,
           target,
@@ -21701,6 +22445,32 @@ const cloudflareStatementDefinitelyTerminates = (
       cloudflareStatementDefinitelyTerminates(statement.consequent, nextSeen) &&
       cloudflareStatementDefinitelyTerminates(statement.alternate, nextSeen)
     );
+  }
+  if (nodeType(statement) === 'TryStatement') {
+    if (
+      statement.finalizer &&
+      cloudflareStatementDefinitelyTerminates(statement.finalizer, nextSeen)
+    ) {
+      return true;
+    }
+    return (
+      cloudflareStatementDefinitelyTerminates(statement.block, nextSeen) &&
+      (!statement.handler ||
+        cloudflareStatementDefinitelyTerminates(
+          statement.handler.body,
+          nextSeen
+        ))
+    );
+  }
+  if (nodeType(statement) === 'SwitchStatement') {
+    const selectedIndex = cloudflareSwitchSelectedCaseIndex(statement);
+    if (selectedIndex === undefined || selectedIndex < 0) return false;
+    return statement.cases
+      .slice(selectedIndex)
+      .flatMap((switchCase) => switchCase.consequent)
+      .some((child) =>
+        new Set(['ReturnStatement', 'ThrowStatement']).has(nodeType(child))
+      );
   }
   return false;
 };
@@ -25221,19 +25991,16 @@ const cloudflareCalculateAggregateSpreadTargets = (
   expectedType,
   seen
 ) => {
-  const reviewedExemption = cloudflareReviewedClosureForContext(
-    context
-  )?.aggregateSpreadExemptions?.find(
-    (exemption) =>
-      exemption.argumentType === nodeType(spread.argument) &&
-      exemption.argumentStart === spread.argument.start &&
-      exemption.argumentEnd === spread.argument.end &&
-      exemption.expectedType === expectedType
-  );
-  if (reviewedExemption) {
-    return reviewedExemption.expectedType === 'ArrayExpression'
-      ? [{ target: { elements: [], type: 'ArrayExpression' } }]
-      : [{ target: { properties: [], type: 'ObjectExpression' } }];
+  if (
+    (context.memberMutationIndexInProgress ||
+      context.receiverIdentityIndexInProgress) &&
+    expectedType === 'ObjectExpression' &&
+    nodeType(unwrapCloudflareExecutionTarget(spread.argument)) ===
+      'CallExpression'
+  ) {
+    return [
+      cloudflareOpaqueIndexObjectSpreadCandidate({ target: spread.argument }),
+    ];
   }
   const resolvedLocalCandidates = cloudflareLexicalTargetCandidates(
     spread.argument,
@@ -25274,6 +26041,18 @@ const cloudflareCalculateAggregateSpreadTargets = (
       stableSpreadInitializer,
       context
     );
+  const stableInitializerKey = stableSpreadInitializer
+    ? cloudflareNodeSemanticKey(stableSpreadInitializer)
+    : undefined;
+  const expandedStableControlFlowInitializer =
+    stableInitializerKey !== undefined &&
+    new Set(['ConditionalExpression', 'LogicalExpression']).has(
+      nodeType(stableSpreadInitializer)
+    ) &&
+    resolvedLocalCandidates.some(
+      (candidate) =>
+        cloudflareNodeSemanticKey(candidate.target) !== stableInitializerKey
+    );
   const localCandidates = (
     stableAmbientCollection
       ? [{ target: stableSpreadInitializer }]
@@ -25281,31 +26060,24 @@ const cloudflareCalculateAggregateSpreadTargets = (
           ...resolvedLocalCandidates,
           ...fallbackLocalTargets.map((target) => ({ target })),
         ]
-  ).filter(
-    (candidate, index, candidates) =>
-      candidates.findIndex(
-        (other) =>
-          cloudflareNodeSemanticKey(other.target) ===
-          cloudflareNodeSemanticKey(candidate.target)
-      ) === index
-  );
-  const nonCyclicLocalCandidates = localCandidates.filter(
-    (candidate) => candidate.cloudflareCyclicCandidate !== true
-  );
-  const supportedLocalCandidates = nonCyclicLocalCandidates.filter(
-    (candidate) =>
-      isSupportedCloudflareAggregateSpreadCandidate(
-        spread,
-        candidate,
-        context,
-        expectedType
-      )
-  );
-  const analyzableLocalCandidates =
-    supportedLocalCandidates.length > 0
-      ? supportedLocalCandidates
-      : localCandidates;
-  const reviewedCandidates = analyzableLocalCandidates;
+  )
+    .filter(
+      (candidate, index, candidates) =>
+        candidates.findIndex(
+          (other) =>
+            cloudflareNodeSemanticKey(other.target) ===
+            cloudflareNodeSemanticKey(candidate.target)
+        ) === index
+    )
+    .filter(
+      (candidate) =>
+        !expandedStableControlFlowInitializer ||
+        cloudflareNodeSemanticKey(candidate.target) !== stableInitializerKey
+    );
+  // Every reachable branch participates in the proof. Selecting only the
+  // supported candidates would let a concrete branch hide an opaque or cyclic
+  // alternative whose spread can still execute at runtime.
+  const reviewedCandidates = localCandidates;
   const importedCandidates = reviewedCandidates.every(
     (candidate) =>
       !isSupportedCloudflareAggregateSpreadCandidate(
@@ -25326,7 +26098,7 @@ const cloudflareCalculateAggregateSpreadTargets = (
           expectedType
         );
   const directParameterProjection =
-    resolvedCandidates.length === 0 && expectedType === 'ArrayExpression'
+    resolvedCandidates.length === 0
       ? cloudflareDirectReceiverParameterProjection(
           spread,
           spread.argument,
@@ -25351,6 +26123,25 @@ const cloudflareCalculateAggregateSpreadTargets = (
     candidates,
     expectedType
   );
+  if (
+    (context.memberMutationIndexInProgress ||
+      context.receiverIdentityIndexInProgress) &&
+    expectedType === 'ObjectExpression' &&
+    (candidates.length === 0 ||
+      candidates.some(
+        (candidate) =>
+          !isSupportedCloudflareAggregateSpreadCandidate(
+            spread,
+            candidate,
+            context,
+            expectedType
+          )
+      ))
+  ) {
+    return [
+      cloudflareOpaqueIndexObjectSpreadCandidate({ target: spread.argument }),
+    ];
+  }
   if (
     cloudflareMutualIndexConstructionInProgress(context) &&
     expectedType === 'ArrayExpression' &&
@@ -25382,6 +26173,13 @@ const cloudflareCalculateAggregateSpreadTargets = (
     message
   );
   return candidates.flatMap((candidate) => {
+    if (
+      expectedType === 'ObjectExpression' &&
+      candidate.parameterName &&
+      nodeType(candidate.target) !== 'ObjectExpression'
+    ) {
+      return [cloudflareSymbolicObjectSpreadCandidate(candidate)];
+    }
     if (
       expectedType === 'ArrayExpression' &&
       candidate.parameterName &&
@@ -25428,8 +26226,30 @@ const cloudflareAggregateSpreadTargets = (
   expectedType,
   seen
 ) => {
-  const key = cloudflareNodeSemanticKey(spread);
+  const spreadOwner = cloudflareFunctionOwnerAt(spread, context);
+  const key = JSON.stringify([
+    cloudflareNodeSemanticKey(spread),
+    cloudflareFactoryBindingsSemanticKey(
+      context.activeFactoryBindingsByFunction.get(spreadOwner),
+      context.semanticCandidateKeyMemo
+    ),
+  ]);
   if (context.aggregateSpreadResolutionStack.includes(key)) {
+    if (expectedType === 'ObjectExpression') {
+      if (
+        context.memberMutationIndexInProgress ||
+        context.receiverIdentityIndexInProgress
+      ) {
+        return [
+          cloudflareOpaqueIndexObjectSpreadCandidate({
+            target: spread.argument,
+          }),
+        ];
+      }
+      fail(
+        `${cloudflareOpaqueAggregateSpreadMessage} cycle in ${context.analysisLabel} (${nodeType(spread)}@${String(spread?.start)}:${String(spread?.end)})`
+      );
+    }
     if (
       context.analysisLabel === 'reviewed-owner-mutation-analysis' &&
       expectedType === 'ArrayExpression'
@@ -25510,6 +26330,8 @@ const isSupportedCloudflareAggregateSpreadCandidate = (
       cloudflareStaticallyNullish(candidate.target, spread, context),
     expectedType === 'ObjectExpression' &&
       typeof candidate.parameterName === 'string',
+    expectedType === 'ObjectExpression' &&
+      candidate.cloudflareOpaqueObjectSpread === true,
     expectedType === 'ArrayExpression' &&
       typeof candidate.parameterName === 'string',
     expectedType === 'ArrayExpression' &&
@@ -25568,6 +26390,38 @@ const cloudflareSymbolicArraySpreadCandidate = (candidate) => ({
       },
     ],
     type: 'ArrayExpression',
+  },
+});
+
+const cloudflareSymbolicObjectSpreadCandidate = (candidate) => {
+  const { parameterName, parameterPath, ...containerCandidate } = candidate;
+  return {
+    ...containerCandidate,
+    target: {
+      properties: [
+        {
+          cloudflareSymbolicObjectSpread: true,
+          factoryBindings: candidate.factoryBindings,
+          parameterName,
+          parameterPath,
+          target: candidate.target,
+        },
+      ],
+      type: 'ObjectExpression',
+    },
+  };
+};
+
+const cloudflareOpaqueIndexObjectSpreadCandidate = (candidate) => ({
+  ...candidate,
+  target: {
+    properties: [
+      {
+        cloudflareOpaqueIndexObjectSpread: true,
+        target: candidate.target,
+      },
+    ],
+    type: 'ObjectExpression',
   },
 });
 
@@ -26069,11 +26923,42 @@ const cloudflareConcreteCandidateAtMember = (
     }
   }
   if (nodeType(candidate.target) === 'ObjectExpression') {
-    const property = candidate.target.properties.findLast((current) =>
-      cloudflareMemberNamesEqual(propertyKeyName(current), member)
+    const property = candidate.target.properties.findLast(
+      (current) =>
+        current.cloudflareSymbolicObjectSpread === true ||
+        current.cloudflareOpaqueIndexObjectSpread === true ||
+        cloudflareMemberNamesEqual(propertyKeyName(current), member)
     );
     if (!property) {
       return [{ ...candidate, target: undefined }];
+    }
+    if (property.cloudflareSymbolicObjectSpread === true) {
+      return [
+        {
+          ...candidate,
+          factoryBindings: cloudflareMergeFactoryBindings(
+            candidate.factoryBindings,
+            property.factoryBindings
+          ),
+          parameterName: property.parameterName,
+          parameterPath: [...(property.parameterPath ?? []), member],
+          target: {
+            ...property.target,
+            cloudflareOpaqueSpreadElement: true,
+          },
+        },
+      ];
+    }
+    if (property.cloudflareOpaqueIndexObjectSpread === true) {
+      return [
+        {
+          ...candidate,
+          target: {
+            ...property.target,
+            cloudflareOpaqueSpreadElement: true,
+          },
+        },
+      ];
     }
     if (!new Set(['get', 'set']).has(property.kind)) {
       return inheritCloudflareCandidateContexts(
@@ -27082,8 +27967,20 @@ const updateCloudflareInvokedParameterSummary = (
 };
 
 const cloudflareInvokedFunctionDependencies = (owner, lexicalContext) => {
+  const activeBindings =
+    lexicalContext.activeFactoryBindingsByFunction.get(owner);
+  const cacheable =
+    !activeBindings && cloudflareStableTargetResolutionState(lexicalContext);
+  const revision = cacheable
+    ? [
+        lexicalContext.factoryBindingRevisionByFunction.get(owner) ?? 0,
+        lexicalContext.memberMutationIndexBuildRevision ?? 0,
+        lexicalContext.memberMutationIndexEpoch ?? 0,
+        lexicalContext.receiverIdentityIndexEpoch ?? 0,
+      ].join(':')
+    : undefined;
   const cached = lexicalContext.invokedFunctionDependencies.get(owner);
-  if (cached?.epoch === lexicalContext.factoryBindingEpoch) {
+  if (revision !== undefined && cached?.revision === revision) {
     return cached.dependencies;
   }
   const dependencies = cloudflareExecutionTargets(
@@ -27099,6 +27996,30 @@ const cloudflareInvokedFunctionDependencies = (owner, lexicalContext) => {
     if (imported) {
       return [];
     }
+    const target = unwrapCloudflareExecutionTarget(execution.target);
+    if (nodeType(target) === 'Identifier') {
+      const binding = artifactOwnerLexicalBinding(
+        execution.node,
+        target.name,
+        lexicalContext
+      );
+      if (!binding || !cloudflareParameterBinding(binding)) {
+        const directOwners = cloudflareDirectLocalBindingValues(
+          execution.node,
+          target,
+          lexicalContext
+        ).filter(isCloudflareFunctionNode);
+        if (directOwners.length > 0) return directOwners;
+      }
+    }
+    if (nodeType(target) === 'MemberExpression') {
+      const directOwners = cloudflareLocalStaticMemberOwners(
+        execution,
+        target,
+        lexicalContext
+      );
+      if (directOwners.length > 0) return directOwners;
+    }
     return cloudflareLexicalTargetCandidates(
       execution.node,
       execution.target,
@@ -27107,10 +28028,15 @@ const cloudflareInvokedFunctionDependencies = (owner, lexicalContext) => {
       .map((candidate) => candidate.target)
       .filter(isCloudflareFunctionNode);
   });
-  lexicalContext.invokedFunctionDependencies.set(owner, {
-    dependencies,
-    epoch: lexicalContext.factoryBindingEpoch,
-  });
+  if (
+    revision !== undefined &&
+    cloudflareStableTargetResolutionState(lexicalContext)
+  ) {
+    lexicalContext.invokedFunctionDependencies.set(owner, {
+      dependencies,
+      revision,
+    });
+  }
   return dependencies;
 };
 
@@ -27127,9 +28053,11 @@ const cloudflareInvokedFunctionClosure = (
     functions.add(current);
     cloudflareActivateInvocationOwner(lexicalContext, current);
     if (stableFunctions.has(current)) continue;
-    pending.push(
-      ...cloudflareInvokedFunctionDependencies(current, lexicalContext)
+    const dependencies = cloudflareInvokedFunctionDependencies(
+      current,
+      lexicalContext
     );
+    pending.push(...dependencies);
   }
   return [...functions];
 };
@@ -37657,6 +38585,7 @@ const cloudflareImportedOwner = (
           deferredArgumentHazardIndexes:
             invocation.deferredArgumentHazardIndexes,
           directFactoryChainProven: invocation.directFactoryChainProven,
+          factoryCallKey: invocation.factoryCallKey,
           opaqueArgumentIndexes: invocation.opaqueArgumentIndexes,
           returnedPath: invocation.returnedPath,
         })})`
@@ -38676,6 +39605,17 @@ const reviewedCloudflareNonAppClosures = Object.freeze([
     modulePrefixes: ['node_modules/.pnpm/zod@4.4.3/node_modules/zod/'],
     opaqueDeferredArgumentResults: [
       {
+        localName: 'custom',
+        reason:
+          'The authenticated custom pipe and optional chain returns an inert schema value after its caller-owned predicate and fallback schema are checked.',
+        returnedPath: [
+          'pipe',
+          cloudflareReturnedCallProjection,
+          'optional',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
         localName: 'object',
         reason:
           'The reviewed direct object factory returns an inert schema after its caller-owned shape is checked.',
@@ -38714,6 +39654,12 @@ const reviewedCloudflareNonAppClosures = Object.freeze([
         localName: 'string',
         reason: 'The reviewed direct string factory returns an inert schema.',
         returnedPath: [],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed direct nullish string chain returns an inert schema after its zero-argument wrapper is checked.',
+        returnedPath: ['nullish', cloudflareReturnedCallProjection],
       },
       {
         localName: 'string',

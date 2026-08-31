@@ -5449,6 +5449,205 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
     ).toContainEqual(expect.stringContaining('fetch('));
   });
 
+  it.each([
+    [
+      'array',
+      'const callbacks=[()=>fetch("https://reviewed-array-spread.invalid.example")];const copied=[...callbacks];copied[0]();',
+      'ArrayExpression',
+    ],
+    [
+      'object',
+      'const callbacks={run:()=>fetch("https://reviewed-object-spread.invalid.example")};const copied={...callbacks};copied.run();',
+      'ObjectExpression',
+    ],
+  ])(
+    'does not erase executable values covered by an exact %s aggregate spread exemption',
+    (_label, source, expectedType) => {
+      const expectedArgumentSource = 'callbacks';
+      const argumentStart = source.indexOf(
+        expectedArgumentSource,
+        source.indexOf('...')
+      );
+      const argumentEnd = argumentStart + expectedArgumentSource.length;
+      const reviewedClosure = {
+        aggregateSpreadExemptions: [
+          {
+            argumentEnd,
+            argumentStart,
+            argumentType: 'Identifier',
+            expectedArgumentSource,
+            expectedType,
+            reason:
+              'The exact fixture exemption may waive opacity but not executable contents.',
+          },
+        ],
+      };
+
+      expect(
+        inspectCloudflareReviewedLoadEffectsForTesting(source, reviewedClosure)
+      ).toContainEqual(expect.stringContaining('fetch('));
+    }
+  );
+
+  it('keeps an unresolved exact aggregate spread exemption fail-closed', () => {
+    const source =
+      'const callbacks=getCallbacks();const copied=[...callbacks];copied[0]();';
+    const expectedArgumentSource = 'callbacks';
+    const argumentStart = source.indexOf(
+      expectedArgumentSource,
+      source.indexOf('...')
+    );
+    const argumentEnd = argumentStart + expectedArgumentSource.length;
+
+    expect(() =>
+      inspectCloudflareReviewedLoadEffectsForTesting(source, {
+        aggregateSpreadExemptions: [
+          {
+            argumentEnd,
+            argumentStart,
+            argumentType: 'Identifier',
+            expectedArgumentSource,
+            expectedType: 'ArrayExpression',
+            reason:
+              'The exact fixture exemption cannot manufacture analyzable contents.',
+          },
+        ],
+      })
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it.each([
+    [
+      'a callable member',
+      'function copy(ctx){const copied={...ctx};copied.run()}copy(getCallbacks());',
+    ],
+    [
+      'a later symbolic override',
+      'function copy(ctx){const copied={run:()=>undefined,...ctx};copied.run()}copy(getCallbacks());',
+    ],
+  ])(
+    'fails closed when symbolic object spread parameters reach %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'requires statically analyzable aggregate spreads'
+      );
+    }
+  );
+
+  it('respects a later concrete override of a symbolic object spread parameter', () => {
+    const source =
+      'function copy(ctx){const copied={...ctx,run:()=>undefined};copied.run()}copy(getCallbacks());';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('fails closed for an opaque object call spread', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting('const copied={...getData()};')
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('fails closed for accessors hidden behind an opaque object call spread', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'function getData(){return new Proxy({x:1},{get(target,key){fetch("https://opaque-spread-getter.invalid.example");return target[key]}})}const copied={...getData()};'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('fails closed when an opaque object call spread reaches a callable member', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const copied={...getData()};copied.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('fails closed before a concrete override after an opaque object call spread', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const copied={...getData(),run:()=>undefined};copied.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it.each([
+    [
+      'an opaque call',
+      'const source=flag?{x:1}:getData();const copied={...source};',
+    ],
+    [
+      'an observable Proxy',
+      'const proxy=new Proxy({x:1},{ownKeys(target){fetch("https://mixed-proxy-spread.invalid.example");return Reflect.ownKeys(target)}});const source=flag?{x:1}:proxy;const copied={...source};',
+    ],
+    [
+      'an opaque factory branch',
+      'function get(value){if(value)return{x:1};return getData()}const copied={...get(flag)};',
+    ],
+  ])(
+    'fails closed when a supported object spread branch is mixed with %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'requires statically analyzable aggregate spreads'
+      );
+    }
+  );
+
+  it('accepts fully expanded safe conditional object spread branches', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const source=flag?{x:1}:{y:2};const copied={...source};void copied;'
+      )
+    ).toEqual([]);
+  });
+
+  it('fails closed for recursive data-only object spreads', () => {
+    const source =
+      'class Registry{get(value){if(value)return{...this.get(0)};return{}}}new Registry().get(1);';
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'requires statically analyzable aggregate spreads'
+    );
+  });
+
+  it('fails closed when a recursive opaque object result is projected directly', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const registry=new Map();function get(value){if(value)return{...get(0)};return registry.get("x")}const result=get(1);result.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it.each([
+    [
+      'a Proxy base',
+      'const base=new Proxy({x:1},{ownKeys(target){fetch("https://recursive-proxy-spread.invalid.example");return Reflect.ownKeys(target)}});function get(value){if(value)return{...get(0)};return base}get(1);',
+    ],
+    [
+      'an opaque call base',
+      'function get(value){if(value)return{...get(0)};return getData()}get(1);',
+    ],
+  ])('fails closed for a recursive object spread with %s', (_label, source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'requires statically analyzable aggregate spreads'
+    );
+  });
+
+  it.each([
+    [
+      'an opaque nested base',
+      'function get(value){if(value)return{nested:{...get(0)}};return getData()}get(1);',
+    ],
+    [
+      'an observable nested Proxy base',
+      'const base=new Proxy({run:()=>undefined},{getOwnPropertyDescriptor(target,key){fetch("https://nested-proxy-spread.invalid.example");return Reflect.getOwnPropertyDescriptor(target,key)}});function get(value){if(value)return{nested:{...get(0)}};return base}get(1).nested.run();',
+    ],
+  ])('fails closed for recursive nesting with %s', (_label, source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'requires statically analyzable aggregate spreads'
+    );
+  });
+
   it('validates reviewed exemption sources, ranges, and uniqueness', () => {
     const source = 'const target={};target.run=()=>0;target.run();';
     const mutationStart = source.indexOf('target.run=');
@@ -8889,6 +9088,51 @@ try {
   });
 
   it.each([
+    ['Object.assign', 'Object.assign(cl._zod,{parent:inst})', ''],
+    [
+      'Object.defineProperty',
+      'Object.defineProperty(cl._zod,"parent",{value:inst})',
+      '',
+    ],
+    [
+      'an invoked helper',
+      'assignParent(cl._zod,inst)',
+      'function assignParent(target,value){target.parent=value}',
+    ],
+  ])(
+    'tracks constructor-returned factory aliases installed through %s',
+    (_label, mutation, helper) => {
+      const source = `${helper}function C(value){value._zod={};return value}function clone(inst){const target={run:()=>undefined};const cl=new C(target);${mutation};return cl}const shared={run:()=>undefined},copy=clone(shared);shared.run=()=>fetch("https://normalized-factory-mutation.invalid.example");copy._zod.parent.run();`;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toContainEqual(
+        expect.stringContaining('fetch(')
+      );
+    }
+  );
+
+  it.each([
+    [
+      'a local Object.assign source factory',
+      'function update(value){return{parent:value}}',
+      'Object.assign(cl._zod,update(inst))',
+    ],
+    [
+      'a transitive mutation helper',
+      'function inner(target,value){target.parent=value}function outer(target,value){inner(target,value)}',
+      'outer(cl._zod,inst)',
+    ],
+  ])(
+    'tracks constructor-returned factory aliases through %s',
+    (_label, helper, mutation) => {
+      const source = `${helper}function C(value){value._zod={};return value}function clone(inst){const target={run:()=>undefined};const cl=new C(target);${mutation};return cl}const shared={run:()=>undefined},copy=clone(shared);shared.run=()=>fetch("https://transitive-normalized-factory-mutation.invalid.example");copy._zod.parent.run();`;
+
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toContainEqual(
+        expect.stringContaining('fetch(')
+      );
+    }
+  );
+
+  it.each([
     [
       'a plain-function base returning fresh objects',
       'function Base(){return{run:()=>undefined}}class Factory extends Base{}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-derived.invalid.example");right.run();',
@@ -8990,6 +9234,26 @@ try {
       'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://transitive-callback-loop.invalid.example")}function wrapper(){build()}[0,1].forEach(()=>{wrapper();source.push({})});target.run();',
     ],
     [
+      'a helper called from an array callback',
+      'const target={run:()=>undefined},source=[{}];function helper(){source.push({})}function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://callback-helper-loop.invalid.example");helper()}[0,1].forEach(build);target.run();',
+    ],
+    [
+      'an Object.assign-installed callback helper',
+      'const target={run:()=>undefined},source=[{}];function helper(){source.push({})}const api={};Object.assign(api,{go:helper});function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://assign-helper-loop.invalid.example");api.go()}[0,1].forEach(build);target.run();',
+    ],
+    [
+      'an Object.defineProperty-installed callback helper',
+      'const target={run:()=>undefined},source=[{}];function helper(){source.push({})}const api={};Object.defineProperty(api,"go",{value:helper});function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://define-helper-loop.invalid.example");api.go()}[0,1].forEach(build);target.run();',
+    ],
+    [
+      'a getter-projected callback helper',
+      'const target={run:()=>undefined},source=[{}];function helper(){source.push({})}const api={get go(){return helper}};function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://getter-helper-loop.invalid.example");api.go()}[0,1].forEach(build);target.run();',
+    ],
+    [
+      'a factory-returned callback helper alias',
+      'const target={run:()=>undefined},source=[{}];function make(){return function helper(){source.push({})}}function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://factory-helper-loop.invalid.example");const helper=make();helper()}[0,1].forEach(build);target.run();',
+    ],
+    [
       'a callback parameter specialization',
       'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://parameter-callback-loop.invalid.example")}function each(fn){[0,1].forEach(()=>{fn();source.push({})})}each(build);target.run();',
     ],
@@ -9016,6 +9280,30 @@ try {
       'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://factory-returned-callback.invalid.example");source.push({})}function wrap(fn){return()=>fn()}const wrapper=wrap(build);[0,1].forEach(wrapper);target.run();',
     ],
     [
+      'an object-member factory-returned array callback',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://member-factory-returned-callback.invalid.example");source.push({})}const api={wrap(fn){return()=>fn()}};const wrapper=api.wrap(build);[0,1].forEach(wrapper);target.run();',
+    ],
+    [
+      'an assigned object-member factory callback',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://assigned-member-factory.invalid.example");source.push({})}const api={};api.wrap=function(fn){return()=>fn()};const wrapper=api.wrap(build);[0,1].forEach(wrapper);target.run();',
+    ],
+    [
+      'an assigned prototype-member factory callback',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://prototype-member-factory.invalid.example");source.push({})}function API(){}API.prototype.wrap=function(fn){return()=>fn()};const api=new API(),wrapper=api.wrap(build);[0,1].forEach(wrapper);target.run();',
+    ],
+    [
+      'a conditional member-factory callback alias',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://conditional-member-factory.invalid.example");source.push({})}const api={wrap(fn){return()=>fn()}},wrapper=true?api.wrap(build):()=>undefined;[0,1].forEach(wrapper);target.run();',
+    ],
+    [
+      'an object-contained member-factory callback alias',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://contained-member-factory.invalid.example");source.push({})}const api={wrap(fn){return()=>fn()}},callbacks={wrapper:api.wrap(build)},wrapper=callbacks.wrapper;[0,1].forEach(wrapper);target.run();',
+    ],
+    [
+      'a projected member-factory callback result',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://projected-member-factory.invalid.example");source.push({})}const api={wrap(fn){return{run:()=>fn()}}},wrapper=api.wrap(build).run;[0,1].forEach(wrapper);target.run();',
+    ],
+    [
       'an object-destructured alias',
       'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://object-destructured.invalid.example")}const {build:wrapper}={build};for(const value of [0,1]){wrapper();source.push({});void value}target.run();',
     ],
@@ -9034,6 +9322,14 @@ try {
     [
       'a bound forEach callback',
       'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://bound-foreach.invalid.example");source.push({})}[0,1].forEach.bind([0,1],build)();target.run();',
+    ],
+    [
+      'an assigned bound forEach callback',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://assigned-bound-foreach.invalid.example");source.push({})}const run=Array.prototype.forEach.bind([0,1],build);run();target.run();',
+    ],
+    [
+      'an assigned extracted bound forEach callback',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://assigned-extracted-bound-foreach.invalid.example");source.push({})}const each=Array.prototype.forEach,run=each.bind([0,1],build);run();target.run();',
     ],
     [
       'Array.prototype.reduce',
@@ -9090,6 +9386,14 @@ try {
       'const target={run:()=>undefined},source=[{}];[0,1].some(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://some-return.invalid.example");source.push({});return false});target.run();',
     ],
     [
+      'a partial some callback return',
+      'const target={run:()=>undefined},source=[{}];[0,1].some((value)=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://partial-some-return.invalid.example");source.push({});if(value)return true});target.run();',
+    ],
+    [
+      'a partial find callback return',
+      'const target={run:()=>undefined},source=[{}];[0,1].find((value)=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://partial-find-return.invalid.example");source.push({});if(value)return true});target.run();',
+    ],
+    [
       'an every callback return',
       'const target={run:()=>undefined},source=[{}];[0,1].every(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://every-return.invalid.example");source.push({});return true});target.run();',
     ],
@@ -9124,6 +9428,10 @@ try {
       'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://finally-continue.invalid.example");source.push({});try{continue}finally{}break;void value}target.run();',
     ],
     [
+      'a pending continue through a mutating finalizer',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){try{continue}finally{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://pending-finally-continue.invalid.example");source.push({})}break;void value}target.run();',
+    ],
+    [
       'an unreachable outer break after an inner break',
       'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://unreachable-outer-break.invalid.example");source.push({});for(const inner of [0]){break;break outer;void inner}void value}target.run();',
     ],
@@ -9137,6 +9445,44 @@ try {
     );
   });
 
+  it('keeps reviewed policy from bypassing repeated callback analysis', () => {
+    const source =
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://reviewed-callback.invalid.example");source.push({})}[0,1].forEach(build);target.run();';
+
+    expect(() =>
+      inspectCloudflareReviewedLoadEffectsForTesting(source, {})
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('keeps a dormant member-factory callback isolated from an active sibling', () => {
+    const source =
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://dormant-member-factory.invalid.example");source.push({})}const api={wrap(fn){return()=>fn()}},dormant=api.wrap(build),active=api.wrap(()=>undefined);void dormant;[0,1].forEach(active);target.run();';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'an if test',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://if-test-back-edge.invalid.example");if((source.push({}),true))continue;break;void value}target.run();',
+    ],
+    [
+      'a switch discriminant',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://switch-discriminant-back-edge.invalid.example");switch((source.push({}),0)){case 0:continue;default:break}break;void value}target.run();',
+    ],
+    [
+      'a switch case test',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://switch-case-test-back-edge.invalid.example");switch(0){case(source.push({}),0):continue;default:break}break;void value}target.run();',
+    ],
+  ])(
+    'fails closed when a mutation in %s reaches the loop back edge',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'requires statically analyzable aggregate spreads'
+      );
+    }
+  );
+
   it.each([
     [
       'a statically false loop',
@@ -9149,6 +9495,22 @@ try {
     [
       'a mutation before an unconditional break',
       'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://single-iteration-loop.invalid.example");source.push({});break;void value}target.run();',
+    ],
+    [
+      'a pending break through a normally completing finalizer',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){try{break}finally{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://pending-finally-break.invalid.example");source.push({})}void value}target.run();',
+    ],
+    [
+      'a zero-entry nested outward continue',
+      'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://zero-entry-inner.invalid.example");source.push({});for(const inner of []){continue outer;void inner}break;void value}target.run();',
+    ],
+    [
+      'a caught throw followed by an outer break',
+      'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://caught-throw-break.invalid.example");source.push({});try{throw 0}catch{break outer}void value}target.run();',
+    ],
+    [
+      'a sequence discriminant selecting a breaking default',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://sequence-switch-break.invalid.example");switch((source.push({}),1)){case 0:continue;default:break}break;void value}target.run();',
     ],
   ])('keeps a non-repeating spread mutation safe for %s', (_label, source) => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
@@ -9190,6 +9552,14 @@ try {
     [
       'findLastIndex that stops immediately',
       'const target={run:()=>undefined},source=[{}];[0,1].findLastIndex(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-find-last-index.invalid.example");source.push({});return true});target.run();',
+    ],
+    [
+      'some that stops through try/finally',
+      'const target={run:()=>undefined},source=[{}];[0,1].some(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-some-finally.invalid.example");source.push({});try{return true}finally{return true}});target.run();',
+    ],
+    [
+      'some that stops through an exhaustive switch',
+      'const target={run:()=>undefined},source=[{}];[0,1].some(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-some-switch.invalid.example");source.push({});switch(0){default:return true}});target.run();',
     ],
   ])(
     'keeps a statically non-repeating callback safe for %s',
@@ -20519,6 +20889,45 @@ try {
         )
       ).toBe(false);
     }
+  });
+
+  it('pins a direct nullish string result to the exact emitted Zod closure', () => {
+    const zodRecord = {
+      modules: [
+        {
+          id: 'node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js',
+          owner: 'non-app',
+        },
+      ],
+      ownership: 'non-app',
+      sha256:
+        'b2e3828594675b9262c546998aa09ba14d1c0a98d9cb1c38f7eb6ebd04c8ea06',
+    };
+
+    expect(
+      inspectCloudflareReviewedFactoryResultPathForTesting(
+        zodRecord,
+        'string',
+        [],
+        ['nullish']
+      )
+    ).toBe(true);
+    expect(
+      inspectCloudflareReviewedFactoryResultPathForTesting(
+        { ...zodRecord, sha256: '0'.repeat(64) },
+        'string',
+        [],
+        ['nullish']
+      )
+    ).toBe(false);
+    expect(
+      inspectCloudflareReviewedFactoryResultPathForTesting(
+        zodRecord,
+        'string',
+        [],
+        ['nullable']
+      )
+    ).toBe(false);
   });
 
   it('proves one instantiated top-level factory alias without wrapper calls', () => {
