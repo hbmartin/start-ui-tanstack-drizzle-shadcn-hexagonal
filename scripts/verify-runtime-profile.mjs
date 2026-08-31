@@ -53,6 +53,7 @@ const cloudflareAppChunkProvenanceKeyEnvironment =
   'START_UI_CLOUDFLARE_PROVENANCE_KEY';
 let activeCloudflareAppChunkProvenanceKey;
 let activeCloudflareOriginFactStats;
+let activeLegacyCloudflareTelemetryFixture = false;
 
 const fail = (message) => {
   throw new Error(`Runtime profile verification failed: ${message}`);
@@ -165,15 +166,35 @@ const viteManifestEntries = (manifest, manifestFile) => {
 };
 
 const parsedModuleCache = new Map();
-const parsedModuleSourceCache = new Map();
 const parsedModuleSourcesByProgram = new WeakMap();
 const authenticatedCloudflareModuleSources = new Map();
 const verifiedCloudflareMetadataSources = new Map();
+const cloudflareImportedAggregateTargetCache = new Map();
+const cloudflareImportedAggregateTargetInProgress = new Set();
+const cloudflareImportedStaticPrimitiveMemberCache = new Map();
+const cloudflareImportedStaticPrimitiveMemberInProgress = new Set();
+const cloudflareImportedStaticMemberOwnerCache = new Map();
+const cloudflareImportedStaticMemberOwnerInProgress = new Set();
+const cloudflareReviewedStaticMemberOwnerProgramCache = new Map();
+const cloudflareImportedStaticSymbolKeyCache = new Map();
+const cloudflareImportedStaticSymbolKeyInProgress = new Set();
+const cloudflareStaticAggregateConsumerProofCache = new Map();
+const cloudflareStaticAggregateConsumerProofInProgress = new Set();
 const maximumCachedParsedModuleBytes = 65_536;
 const runtimeProfileVerifierFile = fileURLToPath(import.meta.url);
 const clearParsedModuleCaches = () => {
   parsedModuleCache.clear();
-  parsedModuleSourceCache.clear();
+  cloudflareImportedAggregateTargetCache.clear();
+  cloudflareImportedAggregateTargetInProgress.clear();
+  cloudflareImportedStaticPrimitiveMemberCache.clear();
+  cloudflareImportedStaticPrimitiveMemberInProgress.clear();
+  cloudflareImportedStaticMemberOwnerCache.clear();
+  cloudflareImportedStaticMemberOwnerInProgress.clear();
+  cloudflareReviewedStaticMemberOwnerProgramCache.clear();
+  cloudflareImportedStaticSymbolKeyCache.clear();
+  cloudflareImportedStaticSymbolKeyInProgress.clear();
+  cloudflareStaticAggregateConsumerProofCache.clear();
+  cloudflareStaticAggregateConsumerProofInProgress.clear();
 };
 
 const readVerifiedCloudflareMetadataJson = (filePath) => {
@@ -225,27 +246,16 @@ const readAuthenticatedModuleSource = (filePath) => {
   return fs.readFileSync(filePath, 'utf8');
 };
 
-const cacheParsedModuleSource = (filePath, source, sourceDigest) => {
+const cacheParsedModuleSource = (filePath, source) => {
   const result = parseModuleSource(filePath, source);
   parsedModuleCache.set(filePath, result);
-  parsedModuleSourceCache.set(sourceDigest, result);
   return result;
 };
 
 const readCachedParsedModule = (filePath, source) => {
   const cached = matchingParsedModule(parsedModuleCache, filePath, source);
   if (cached) return cached;
-  const sourceDigest = createHash('sha256').update(source).digest('hex');
-  const sourceCached = matchingParsedModule(
-    parsedModuleSourceCache,
-    sourceDigest,
-    source
-  );
-  if (!sourceCached) {
-    return cacheParsedModuleSource(filePath, source, sourceDigest);
-  }
-  parsedModuleCache.set(filePath, sourceCached);
-  return sourceCached;
+  return cacheParsedModuleSource(filePath, source);
 };
 
 const readParsedModule = (filePath) => {
@@ -258,6 +268,20 @@ const readParsedModule = (filePath) => {
 };
 
 const readNamespaceParsedModule = readParsedModule;
+
+export const inspectParsedModulePathIdentityForTesting = (
+  firstFile,
+  secondFile
+) => {
+  clearParsedModuleCaches();
+  try {
+    const firstProgram = readParsedModule(firstFile).program;
+    const secondProgram = readParsedModule(secondFile).program;
+    return firstProgram !== secondProgram;
+  } finally {
+    clearParsedModuleCaches();
+  }
+};
 
 const readApplicationServerEntryCalls = (filePath) => {
   const { program } = readParsedModule(filePath);
@@ -1696,6 +1720,45 @@ const cloudflareIdentityAliasSource = (node) => {
   return undefined;
 };
 
+const cloudflareMutationArgumentMayContainIdentityAlias = (
+  source,
+  depth = 0
+) => {
+  if (depth > cloudflareParameterProjectionDepthLimit) return true;
+  const target = unwrapCloudflareExecutionTarget(source);
+  if (cloudflareIdentityAliasSource(target)) return true;
+  if (nodeType(target) === 'SpreadElement') {
+    return cloudflareMutationArgumentMayContainIdentityAlias(
+      target.argument,
+      depth + 1
+    );
+  }
+  if (nodeType(target) === 'ArrayExpression') {
+    return target.elements.some(
+      (element) =>
+        element !== null &&
+        cloudflareMutationArgumentMayContainIdentityAlias(element, depth + 1)
+    );
+  }
+  if (nodeType(target) === 'ObjectExpression') {
+    return target.properties.some((property) =>
+      cloudflareMutationArgumentMayContainIdentityAlias(
+        nodeType(property) === 'SpreadElement'
+          ? property.argument
+          : property.value,
+        depth + 1
+      )
+    );
+  }
+  return !new Set([
+    'ArrowFunctionExpression',
+    'ClassExpression',
+    'FunctionExpression',
+    'Literal',
+    'TemplateLiteral',
+  ]).has(nodeType(target));
+};
+
 const cloudflareTopLevelAliasDeclarations = (program) =>
   program.body.flatMap((statement) => {
     const declaration = new Set([
@@ -1717,6 +1780,37 @@ const cloudflareMutationBindingIdentity = (node, name, context) => {
   const binding = artifactOwnerLexicalBinding(node, name, context);
   if (binding) return binding.digestNode;
   return context.importedNames.has(name) ? `import:${name}` : undefined;
+};
+
+const cloudflareMutationStructuralSourceCandidates = (
+  node,
+  source,
+  context
+) => {
+  const target = unwrapCloudflareExecutionTarget(source);
+  if (new Set(['ArrayExpression', 'ObjectExpression']).has(nodeType(target))) {
+    return [target];
+  }
+  if (nodeType(target) === 'Identifier') {
+    return cloudflareDirectLocalBindingValues(node, target, context).map(
+      unwrapCloudflareExecutionTarget
+    );
+  }
+  if (nodeType(target) === 'AssignmentExpression' && target.operator === '=') {
+    return cloudflareMutationStructuralSourceCandidates(
+      node,
+      target.right,
+      context
+    );
+  }
+  if (nodeType(target) === 'SequenceExpression') {
+    return cloudflareMutationStructuralSourceCandidates(
+      node,
+      target.expressions.at(-1),
+      context
+    );
+  }
+  return [];
 };
 
 const cloudflareMutationAliasReverseIndex = (program, context) => {
@@ -1753,12 +1847,17 @@ const cloudflareMutationAliasReverseIndex = (program, context) => {
         record(node, current.source, current.target);
         continue;
       }
-      const sources = cloudflareLexicalTargetCandidates(
+      if (
+        !new Set(['ArrayPattern', 'ObjectPattern']).has(
+          nodeType(current.target)
+        )
+      ) {
+        continue;
+      }
+      const sources = cloudflareMutationStructuralSourceCandidates(
         node,
         current.source,
         context
-      ).map(({ target: candidate }) =>
-        unwrapCloudflareExecutionTarget(candidate)
       );
       if (nodeType(current.target) === 'ArrayPattern') {
         sources
@@ -1802,9 +1901,18 @@ const cloudflareMutationAliasReverseIndex = (program, context) => {
       if (node.operator === '=') recordPattern(node, node.left, node.right);
     },
     CallExpression(node) {
-      cloudflareLexicalTargetCandidates(node, node.callee, context)
-        .filter(({ target }) => isCloudflareFunctionNode(target))
-        .forEach(({ target: owner }) =>
+      if (
+        !node.arguments.some((argument) =>
+          cloudflareMutationArgumentMayContainIdentityAlias(argument)
+        )
+      ) {
+        return;
+      }
+      const callee = unwrapCloudflareExecutionTarget(node.callee);
+      if (nodeType(callee) !== 'Identifier') return;
+      cloudflareDirectLocalBindingValues(node, callee, context)
+        .filter(isCloudflareFunctionNode)
+        .forEach((owner) =>
           owner.params.forEach((parameter, index) => {
             if (node.arguments[index]) {
               recordPattern(node, parameter, node.arguments[index]);
@@ -1841,8 +1949,175 @@ const cloudflareLegacyMutationTarget = (callee) =>
     ? callee.object
     : undefined;
 
-const cloudflareCallMutationTargets = (node, context) =>
-  cloudflareNormalizedMetaExecutions(
+const cloudflareDirectAmbientMutationOwnerCandidate = (
+  node,
+  source,
+  expectedOwners,
+  context,
+  seen = new Set(),
+  depth = 0
+) => {
+  if (depth > cloudflareFactoryResolutionLimit) return false;
+  const target = unwrapCloudflareExecutionTarget(source);
+  const key = cloudflareNodeSemanticKey(target);
+  if (seen.has(key)) return false;
+  const nextSeen = new Set(seen).add(key);
+  const directOwner = cloudflareGlobalReplacementTargetName(
+    node,
+    target,
+    context
+  );
+  if (expectedOwners.has(directOwner)) return true;
+  if (nodeType(target) !== 'Identifier') return false;
+  return cloudflareDirectLocalBindingValues(node, target, context).some(
+    (value) =>
+      cloudflareDirectAmbientMutationOwnerCandidate(
+        node,
+        value,
+        expectedOwners,
+        context,
+        nextSeen,
+        depth + 1
+      )
+  );
+};
+
+const cloudflareMutationCalleeMayResolveToAmbientOperation = (
+  node,
+  source,
+  context,
+  seen = new Set(),
+  depth = 0
+) => {
+  if (depth > cloudflareFactoryResolutionLimit) return true;
+  const target = unwrapCloudflareExecutionTarget(source);
+  const key = cloudflareNodeSemanticKey(target);
+  if (seen.has(key)) return true;
+  const nextSeen = new Set(seen).add(key);
+  if (nodeType(target) === 'MemberExpression') {
+    const operation = cloudflareMemberName(target);
+    if (new Set(['apply', 'call']).has(operation)) {
+      return (
+        cloudflareMutationCalleeMayResolveToAmbientOperation(
+          node,
+          target.object,
+          context,
+          nextSeen,
+          depth + 1
+        ) ||
+        (node.arguments ?? []).some((argument) =>
+          cloudflareMutationCalleeMayResolveToAmbientOperation(
+            node,
+            argument,
+            context,
+            nextSeen,
+            depth + 1
+          )
+        )
+      );
+    }
+    if (new Set(['__defineGetter__', '__defineSetter__']).has(operation)) {
+      return true;
+    }
+    const ownersByOperation = new Map([
+      ['assign', new Set(['Object'])],
+      ['defineProperties', new Set(['Object'])],
+      ['defineProperty', new Set(['Object', 'Reflect'])],
+      ['deleteProperty', new Set(['Reflect'])],
+      ['set', new Set(['Reflect'])],
+      ['setPrototypeOf', new Set(['Object', 'Reflect'])],
+    ]);
+    const expectedOwners = ownersByOperation.get(operation);
+    return expectedOwners
+      ? cloudflareDirectAmbientMutationOwnerCandidate(
+          node,
+          target.object,
+          expectedOwners,
+          context,
+          nextSeen,
+          depth + 1
+        )
+      : false;
+  }
+  if (nodeType(target) === 'CallExpression') {
+    const callee = unwrapCloudflareExecutionTarget(target.callee);
+    return (
+      nodeType(callee) === 'MemberExpression' &&
+      cloudflareMemberName(callee) === 'bind' &&
+      cloudflareMutationCalleeMayResolveToAmbientOperation(
+        node,
+        callee.object,
+        context,
+        nextSeen,
+        depth + 1
+      )
+    );
+  }
+  if (nodeType(target) !== 'Identifier') return false;
+  const values = cloudflareDirectLocalBindingValues(node, target, context);
+  return values.some((value) =>
+    cloudflareMutationCalleeMayResolveToAmbientOperation(
+      node,
+      value,
+      context,
+      nextSeen,
+      depth + 1
+    )
+  );
+};
+
+const cloudflareDirectSyntacticAmbientMutation = (node, context) => {
+  const callee = unwrapCloudflareExecutionTarget(node.callee);
+  if (
+    nodeType(callee) !== 'MemberExpression' ||
+    node.arguments.some((argument) => nodeType(argument) === 'SpreadElement')
+  ) {
+    return undefined;
+  }
+  const operation = cloudflareMemberName(callee);
+  if (new Set(['__defineGetter__', '__defineSetter__']).has(operation)) {
+    return { operation, owner: 'prototype', receiver: callee.object };
+  }
+  const owner = cloudflareGlobalReplacementTargetName(
+    node,
+    callee.object,
+    context
+  );
+  return cloudflareSupportedAmbientMutation({ operation, owner })
+    ? { operation, owner }
+    : undefined;
+};
+
+const cloudflareDirectSyntacticMutationTarget = (node, context) => {
+  const mutation = cloudflareDirectSyntacticAmbientMutation(node, context);
+  return mutation?.owner === 'prototype'
+    ? mutation.receiver
+    : mutation
+      ? node.arguments[0]
+      : undefined;
+};
+
+const cloudflareCallMutationTargets = (node, context) => {
+  if (
+    !cloudflareMutationCalleeMayResolveToAmbientOperation(
+      node,
+      node.callee,
+      context
+    )
+  ) {
+    return [];
+  }
+  const syntacticTarget = cloudflareDirectSyntacticMutationTarget(
+    node,
+    context
+  );
+  if (syntacticTarget) return [syntacticTarget];
+  const directAmbient = cloudflareNormalizedAmbientMutation(node, context);
+  if (directAmbient?.arguments_[0]) return [directAmbient.arguments_[0]];
+  const directCallee = cloudflareAmbientAliasTarget(node, node.callee, context);
+  const directLegacy = cloudflareLegacyMutationTarget(directCallee);
+  if (directLegacy) return [directLegacy];
+  return cloudflareNormalizedMetaExecutions(
     { node, target: node.callee },
     context,
     false
@@ -1860,6 +2135,7 @@ const cloudflareCallMutationTargets = (node, context) =>
     const legacy = cloudflareLegacyMutationTarget(callee);
     return legacy ? [legacy] : [];
   });
+};
 
 const cloudflareMutationTargetMatchesRoot = (node, target, context) =>
   mutationTargetNames(target).some((name) => {
@@ -2909,6 +3185,58 @@ const kernelOptionalOwnerPatterns = {
   6: [/^\.\/book(?:-[\w-]+)?\.js$/],
 };
 
+const cloudflareV5KernelOwnerPatterns = {
+  6: [
+    /^\.\/auth(?:-[\w-]+)?\.js$/,
+    /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+    /^\.\/client(?:-[\w-]+)?\.js$/,
+    /^\.\/client(?:-[\w-]+)?\.js$/,
+    /^\.\/runtime(?:-[\w-]+)?\.js$/,
+    /^\.\/backend(?:-[\w-]+)?\.js$/,
+  ],
+  7: [
+    /^\.\/auth(?:-[\w-]+)?\.js$/,
+    /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+    /^\.\/client(?:-[\w-]+)?\.js$/,
+    /^\.\/client(?:-[\w-]+)?\.js$/,
+    /^\.\/runtime(?:-[\w-]+)?\.js$/,
+    /^\.\/backend(?:-[\w-]+)?\.js$/,
+    /^\.\/book(?:-[\w-]+)?\.js$/,
+  ],
+};
+
+const assertCloudflareKernelStaticShape = (
+  program,
+  chunkFile,
+  manifestRecord,
+  loadEffectVisited,
+  assertBounded = assertBoundedCloudflareChunkTopLevel
+) => {
+  const sources = cloudflareStaticImportSources(program);
+  if (!activeLegacyCloudflareTelemetryFixture) {
+    const patterns = cloudflareV5KernelOwnerPatterns[sources.length];
+    assert(
+      patterns !== undefined,
+      `${chunkFile} must import only its trusted static owner chunks`
+    );
+    assertExactCloudflareStaticImportSources(program, chunkFile, patterns);
+  } else {
+    assert(
+      Object.hasOwn(kernelOptionalOwnerPatterns, sources.length),
+      `${chunkFile} must import only its trusted static owner chunks`
+    );
+    assertExactCloudflareStaticImportSources(program, chunkFile, [
+      /^\.\/auth(?:-[\w-]+)?\.js$/,
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      /^\.\/client(?:-[\w-]+)?\.js$/,
+      /^\.\/runtime(?:-[\w-]+)?\.js$/,
+      /^\.\/backend(?:-[\w-]+)?\.js$/,
+      ...kernelOptionalOwnerPatterns[sources.length],
+    ]);
+  }
+  assertBounded(program, chunkFile, manifestRecord, {}, loadEffectVisited);
+};
+
 const assertCloudflareKernelChunk = (
   program,
   chunkFile,
@@ -2928,26 +3256,45 @@ const assertCloudflareKernelChunk = (
       loadEffectVisited
     )
   );
-  const sources = cloudflareStaticImportSources(program);
-  assert(
-    Object.hasOwn(kernelOptionalOwnerPatterns, sources.length),
-    `${chunkFile} must import only its trusted static owner chunks`
-  );
-  assertExactCloudflareStaticImportSources(program, chunkFile, [
-    /^\.\/auth(?:-[\w-]+)?\.js$/,
-    /^\.\/telemetry(?:-[\w-]+)?\.js$/,
-    /^\.\/client(?:-[\w-]+)?\.js$/,
-    /^\.\/runtime(?:-[\w-]+)?\.js$/,
-    /^\.\/backend(?:-[\w-]+)?\.js$/,
-    ...kernelOptionalOwnerPatterns[sources.length],
-  ]);
-  assertBoundedCloudflareChunkTopLevel(
+  assertCloudflareKernelStaticShape(
     program,
     chunkFile,
     manifestRecord,
-    {},
     loadEffectVisited
   );
+};
+
+export const inspectCloudflareProductionKernelStaticShapeForTesting = (
+  source
+) => {
+  const worker = globalThis.__vitest_worker__;
+  assert(
+    worker?.current?.type === 'test' && typeof worker.filepath === 'string',
+    'production kernel static-shape inspection is available only inside an active Vitest test'
+  );
+  const previousLegacyFixture = activeLegacyCloudflareTelemetryFixture;
+  activeLegacyCloudflareTelemetryFixture = false;
+  try {
+    const program = parseModuleSource(
+      'production-kernel-static-shape.fixture.js',
+      source
+    ).program;
+    assertCloudflareKernelStaticShape(
+      program,
+      'production-kernel-static-shape.fixture.js',
+      undefined,
+      new Map(),
+      (candidate, chunkFile, _manifestRecord, allowedInitializers) =>
+        assertCloudflareChunkInertTopLevel(
+          candidate,
+          chunkFile,
+          allowedInitializers
+        )
+    );
+    return true;
+  } finally {
+    activeLegacyCloudflareTelemetryFixture = previousLegacyFixture;
+  }
 };
 
 const assertCloudflareLoaderKernelCall = (
@@ -5052,13 +5399,15 @@ const cloudflareInvocationAnalysisWorkLimit = 262_144;
 const cloudflareAnalysisTotalWorkLimit = 524_288;
 const cloudflareAnalysisWorkMessage =
   'Cloudflare load-effect analysis exceeded bounded candidate work';
+const cloudflareStaticAggregateProofWorkLimit =
+  runtimeArtifactTraversalWorkLimit * 4;
+const cloudflareStaticAggregateProofWorkMessage =
+  'Cloudflare static aggregate proof exceeded bounded AST traversal work';
 const cloudflareReviewedClosureByProgram = new WeakMap();
-const cloudflareReviewedClosureByAnalysisLabel = new Map();
 
 const cloudflareReviewedClosureForContext = (context) =>
   context.reviewedClosure ??
-  cloudflareReviewedClosureByProgram.get(context.program) ??
-  cloudflareReviewedClosureByAnalysisLabel.get(context.analysisLabel);
+  cloudflareReviewedClosureByProgram.get(context.program);
 
 const cloudflareStaticArrayCandidates = (node, source, lexicalContext) => {
   const candidates = lexicalContext
@@ -5143,7 +5492,10 @@ const cloudflareExecutionArguments = (node, invocation, lexicalContext) => {
   );
 };
 
+const cloudflareProgramArtifactContexts = new WeakMap();
+
 const createCloudflareLexicalContext = (program, analysisLabel) => ({
+  ...cloudflareProgramArtifactContexts.get(program),
   activeFactoryBindingsByFunction: new WeakMap(),
   activeInvocationEpoch: 0,
   activeInvocationOwners: undefined,
@@ -5179,12 +5531,14 @@ const createCloudflareLexicalContext = (program, analysisLabel) => ({
   invokedFunctionDependencies: new WeakMap(),
   invokedParameterSummaryState: undefined,
   intrinsicReplacementNodesByOwner: undefined,
+  intrinsicReplacementTargetMemo: new WeakMap(),
   importedFactoryResolution: {
     active: new WeakSet(),
     depth: 0,
     memo: new WeakMap(),
     work: 0,
   },
+  importedReviewedReceiverMutationEntries: new WeakMap(),
   iteratorPrototypeMutationsByIntrinsic: undefined,
   invocationEdgesByCallee: undefined,
   invocationEdgesByCaller: undefined,
@@ -5254,6 +5608,7 @@ const createCloudflareLexicalContext = (program, analysisLabel) => ({
   targetResolutionStack: [],
   targetResolutionWork: 0,
   terminatingStatementIndexByBlock: new WeakMap(),
+  immutableTopLevelBindingValues: new Map(),
   topLevelBindings: cloudflareTopLevelBindings(program),
   uncertainReceiverCallCandidatesVisited: 0,
   uncertainReceiverCallIndexBuilds: 0,
@@ -5268,22 +5623,11 @@ const cloudflareExpensiveIndexRevision = (context) =>
 const cloudflareLiveExpensiveIndexRevision = (context) =>
   `${String(context.activeInvocationEpoch)}:${String(context.factoryBindingEpoch)}:${String(context.resolvedCallSiteEpoch)}:${String(context.resolvedInvocationGraphEpoch)}`;
 
-const astNodeRangeMapByRoot = new WeakMap();
-
 const createAstNodeRangeMap = (root) => {
   const cached = astNodeRangeMapByRoot.get(root);
   if (cached) return cached;
-  const nodes = new Map();
-  const pending = [root];
-  while (pending.length > 0) {
-    const node = pending.pop();
-    if (Number.isInteger(node?.start) && Number.isInteger(node?.end)) {
-      nodes.set(`${String(node.start)}:${String(node.end)}`, node);
-    }
-    astVisitorChildren(node).forEach((child) => pending.push(child));
-  }
-  astNodeRangeMapByRoot.set(root, nodes);
-  return nodes;
+  immutableAstParentMap(root);
+  return astNodeRangeMapByRoot.get(root) ?? new Map();
 };
 
 const cloudflareOptionalSource = (source) => (source ? [source] : []);
@@ -7299,6 +7643,11 @@ const cloudflareMemberTargetCandidates = (node, target, context, seen) => {
     context
   );
   if (thisMethodCandidates) return thisMethodCandidates;
+  const importedStaticPrimitiveCandidates =
+    cloudflareImportedStaticPrimitiveMemberCandidates(node, target, context);
+  if (importedStaticPrimitiveCandidates) {
+    return importedStaticPrimitiveCandidates;
+  }
   const normalizedTargets = cloudflareStaticComputedMemberTargets(
     node,
     target,
@@ -7340,39 +7689,80 @@ const cloudflareClassMemberValue = (element) =>
     ? element.value
     : undefined;
 
-const cloudflareLexicalPropertyKeyName = (property, context) => {
-  const direct = propertyKeyName(property);
-  if (direct !== undefined || property?.computed !== true) return direct;
+const cloudflareLexicalComputedKeyName = (anchor, key, context) => {
   const directValues =
-    nodeType(property.key) === 'Identifier'
-      ? cloudflareDirectLocalBindingValues(property.key, property.key, context)
+    nodeType(key) === 'Identifier'
+      ? cloudflareDirectLocalBindingValues(anchor, key, context)
       : [];
   const candidates =
     directValues.length > 0
       ? directValues.map((target) => ({ target }))
-      : cloudflareLexicalTargetCandidates(
-          property.key,
-          property.key,
-          context,
-          new Set()
-        );
+      : cloudflareLexicalTargetCandidates(anchor, key, context, new Set());
   const members = new Set(
     candidates
       .map(({ target }) => cloudflareLiteralMemberName(target))
       .filter((member) => member !== undefined)
   );
-  return members.size === 1 ? [...members][0] : undefined;
+  if (members.size === 1) return [...members][0];
+  const symbolKeys = new Set(
+    candidates
+      .map(({ target }) =>
+        cloudflareStaticSymbolKeyName(anchor, target, context)
+      )
+      .filter((member) => member !== undefined)
+  );
+  if (symbolKeys.size === 1) return [...symbolKeys][0];
+  return cloudflareImportedStaticSymbolKeyName(anchor, key, context);
+};
+
+const cloudflareLexicalPropertyKeyName = (property, context) => {
+  const direct = propertyKeyName(property);
+  if (direct !== undefined || property?.computed !== true) return direct;
+  return cloudflareLexicalComputedKeyName(property, property.key, context);
+};
+
+const cloudflareLexicalMemberName = (anchor, member, context) => {
+  const direct = cloudflareMemberName(member);
+  if (direct !== undefined || member?.computed !== true) return direct;
+  return cloudflareLexicalComputedKeyName(anchor, member.property, context);
 };
 
 const assertCloudflareComputedCallableDefinitions = (properties, context) => {
+  const unresolved = properties.find((property) => {
+    if (property.computed !== true) return false;
+    const keyName = identifierName(property.key);
+    if (typeof keyName === 'string') {
+      const binding = artifactOwnerLexicalBinding(
+        property.key,
+        keyName,
+        context
+      );
+      const topLevelDeclarators = topLevelBindingDeclarators(
+        context.program,
+        keyName
+      );
+      if (
+        (binding &&
+          artifactOwnerLexicalMutations(binding, keyName, context).some(
+            (mutation) =>
+              nodeType(mutation.node) !== 'AssignmentExpression' ||
+              nodeType(mutation.node.left) !== 'MemberExpression'
+          )) ||
+        (topLevelDeclarators.length === 1 &&
+          cloudflareImmutableTopLevelBindingValues(property, keyName, context)
+            .length === 0)
+      ) {
+        return true;
+      }
+    }
+    return (
+      cloudflareLexicalPropertyKeyName(property, context) === undefined &&
+      !cloudflareComputedKeyIsProvablySymbol(property, property.key, context)
+    );
+  });
   assert(
-    !properties.some(
-      (property) =>
-        property.computed === true &&
-        cloudflareLexicalPropertyKeyName(property, context) === undefined &&
-        !cloudflareWellKnownSymbolKeyIsSafe(property, property.key, context)
-    ),
-    `${cloudflareOpaqueComputedCallableDefinitionMessage} in ${context.analysisLabel}`
+    !unresolved,
+    `${cloudflareOpaqueComputedCallableDefinitionMessage} in ${context.analysisLabel} (${nodeType(unresolved)}@${String(unresolved?.start)}:${String(unresolved?.end)} key ${nodeType(unresolved?.key)}@${String(unresolved?.key?.start)}:${String(unresolved?.key?.end)})`
   );
 };
 
@@ -7916,6 +8306,9 @@ const cloudflareReceiverIdentityKey = (node, target, context, state) => {
       state
     );
   }
+  if (cloudflareKnownIsolatedReceiverSource(unwrapped, node, context)) {
+    return cloudflareReceiverValueKey(unwrapped, state);
+  }
   const localReturnedReceivers = cloudflareDirectLocalCallReturnedReceivers(
     unwrapped,
     context
@@ -7937,9 +8330,6 @@ const cloudflareReceiverIdentityKey = (node, target, context, state) => {
       );
     });
     return callIdentity;
-  }
-  if (cloudflareKnownIsolatedReceiverSource(unwrapped, node, context)) {
-    return cloudflareReceiverValueKey(unwrapped, state);
   }
   if (nodeType(unwrapped) !== 'MemberExpression') return undefined;
   const receiver = cloudflareReceiverIdentityKey(
@@ -8083,34 +8473,34 @@ const cloudflareReviewedInvocationOwner = (context, invocation, label) => {
     : undefined;
 };
 
-const cloudflareKnownIsolatedReviewedDelegatedResult = (source, context) => {
+const cloudflareReviewedIsolatedDelegatedResultState = (source, context) => {
   const target = unwrapCloudflareExecutionTarget(source);
-  if (nodeType(target) !== 'CallExpression') return false;
+  if (nodeType(target) !== 'CallExpression') return undefined;
   const invocation = importedCloudflareFactoryResultInvocation(
     context.program,
     target,
     context.topLevelBindings,
     context
   );
-  if (!invocation || invocation.returnedPath.length !== 2) return false;
+  if (!invocation || invocation.returnedPath.length !== 2) return undefined;
   const [member, callProjection] = invocation.returnedPath;
   if (
     typeof member !== 'string' ||
     !isCloudflareReturnedCallProjection(callProjection)
   ) {
-    return false;
+    return undefined;
   }
   const delegatedOwner = cloudflareReviewedInvocationOwner(
     context,
     invocation,
     'reviewed isolated delegated-result owner'
   );
-  if (!delegatedOwner) return false;
+  if (!delegatedOwner) return undefined;
   const delegationPolicies =
     delegatedOwner.reviewedClosure.delegatedFactoryArguments?.filter(
       (policy) => policy.localName === delegatedOwner.ownerLocalName
     ) ?? [];
-  if (delegationPolicies.length !== 1) return false;
+  if (delegationPolicies.length !== 1) return undefined;
   const [{ index: delegatedIndex }] = delegationPolicies;
   if (
     invocation.factoryArgumentCount === undefined ||
@@ -8119,7 +8509,7 @@ const cloudflareKnownIsolatedReviewedDelegatedResult = (source, context) => {
     new Set(invocation.factoryResolvedArgumentIndexes).size !==
       invocation.factoryArgumentCount
   ) {
-    return false;
+    return undefined;
   }
   const origins = invocation.factoryArgumentOrigins?.filter(
     (origin) => origin.index === delegatedIndex
@@ -8129,7 +8519,7 @@ const cloudflareKnownIsolatedReviewedDelegatedResult = (source, context) => {
     origins.length === 0 ||
     invocation.factoryArgumentOrigins.length !== origins.length
   ) {
-    return false;
+    return undefined;
   }
   const originPoliciesAreExact = origins.every(({ invocation: origin }) => {
     if (origin.returnedPath?.length !== 0) return false;
@@ -8147,7 +8537,19 @@ const cloudflareKnownIsolatedReviewedDelegatedResult = (source, context) => {
       ) === true
     );
   });
-  if (!originPoliciesAreExact) return false;
+  if (!originPoliciesAreExact) return undefined;
+  const delegatedFactoryCall = [...context.nodesByRange.values()].find(
+    (node) => cloudflareNodeSemanticKey(node) === invocation.factoryCallKey
+  );
+  return delegatedFactoryCall
+    ? { delegatedFactoryCall, invocation, origins, target }
+    : undefined;
+};
+
+const cloudflareKnownIsolatedReviewedDelegatedResult = (source, context) => {
+  const state = cloudflareReviewedIsolatedDelegatedResultState(source, context);
+  if (!state) return false;
+  const { delegatedFactoryCall, invocation, origins } = state;
   const receiverRoots = cloudflareReviewedReceiverRoots(
     context.program,
     invocation
@@ -8158,10 +8560,6 @@ const cloudflareKnownIsolatedReviewedDelegatedResult = (source, context) => {
       origin
     ).forEach((root) => receiverRoots.add(root))
   );
-  const delegatedFactoryCall = [...context.nodesByRange.values()].find(
-    (node) => cloudflareNodeSemanticKey(node) === invocation.factoryCallKey
-  );
-  if (!delegatedFactoryCall) return false;
   // The mutation index constructs its receiver graph before its own root and
   // escape indexes are complete. The signed delegated-origin proof is enough
   // for that provisional graph: a receiver/root mutation is still indexed on
@@ -8179,6 +8577,26 @@ const cloudflareKnownIsolatedReviewedDelegatedResult = (source, context) => {
           new Set([delegatedFactoryCall])
         );
   return receiverOwnersAreUnmutated;
+};
+
+const cloudflareKnownReadOnlyIsolatedReviewedDelegatedResult = (
+  source,
+  context
+) => {
+  const state = cloudflareReviewedIsolatedDelegatedResultState(source, context);
+  if (!state) return false;
+  const callee = unwrapCloudflareExecutionTarget(state.target.callee);
+  const receiverName =
+    nodeType(callee) === 'MemberExpression'
+      ? identifierName(callee.object)
+      : undefined;
+  return (
+    typeof receiverName === 'string' &&
+    cloudflareReviewedNamespaceBindingUsesAreReadOnly(
+      context.program,
+      receiverName
+    )
+  );
 };
 
 const cloudflareKnownIsolatedLocalFactoryResult = (
@@ -8212,7 +8630,20 @@ const cloudflareKnownIsolatedLocalFactoryResult = (
       const unwrapped = unwrapCloudflareExecutionTarget(value);
       const candidates =
         nodeType(unwrapped) === 'Identifier'
-          ? cloudflareDirectLocalBindingValues(value, unwrapped, context)
+          ? (() => {
+              const returnedBinding = artifactOwnerLexicalBinding(
+                value,
+                unwrapped.name,
+                context
+              );
+              return returnedBinding &&
+                cloudflareFunctionOwnerAt(
+                  returnedBinding.digestNode,
+                  context
+                ) === owners[0]
+                ? cloudflareDirectLocalBindingValues(value, unwrapped, context)
+                : [];
+            })()
           : [unwrapped];
       return (
         candidates.length > 0 &&
@@ -8229,6 +8660,318 @@ const cloudflareKnownIsolatedLocalFactoryResult = (
   );
 };
 
+const cloudflareReviewedLocalRefUsesAreClosed = (
+  owner,
+  declarator,
+  assignment,
+  refName,
+  context
+) => {
+  const expectedBinding = artifactOwnerLexicalBinding(
+    declarator.id,
+    refName,
+    context
+  );
+  if (!expectedBinding) return false;
+  let safe = true;
+  new Visitor({
+    Identifier(identifier) {
+      if (!safe || identifier.name !== refName) return;
+      const binding = artifactOwnerLexicalBinding(identifier, refName, context);
+      if (binding?.digestNode !== expectedBinding.digestNode) return;
+      if (identifier === declarator.id) return;
+      if (cloudflareFunctionOwnerAt(identifier, context) !== owner) {
+        safe = false;
+        return;
+      }
+      const parent = context.parentNodes.get(identifier);
+      if (
+        nodeType(parent) === 'ReturnStatement' &&
+        parent.argument === identifier
+      ) {
+        return;
+      }
+      if (
+        nodeType(parent) !== 'MemberExpression' ||
+        parent.object !== identifier ||
+        parent.computed === true ||
+        cloudflareMemberName(parent) !== 'current'
+      ) {
+        safe = false;
+        return;
+      }
+      const container = context.parentNodes.get(parent);
+      if (
+        nodeType(container) === 'AssignmentExpression' &&
+        container.left === parent
+      ) {
+        safe = container === assignment;
+        return;
+      }
+      safe =
+        nodeType(container) === 'BinaryExpression' &&
+        new Set(['===', '!==']).has(container.operator);
+    },
+  }).visit(owner);
+  return safe;
+};
+
+const cloudflareReviewedLocalRefProofContext = (context) => {
+  if (
+    context.isReviewedLocalRefProofContext === true ||
+    !context.artifactRoot ||
+    !context.chunkFile
+  ) {
+    return context;
+  }
+  if (context.reviewedLocalRefProofContext) {
+    return context.reviewedLocalRefProofContext;
+  }
+  const proofContext = createCloudflareLexicalContext(
+    context.program,
+    context.analysisLabel
+  );
+  proofContext.artifactRoot = context.artifactRoot;
+  proofContext.chunkFile = context.chunkFile;
+  proofContext.analysisLabel = 'reviewed-owner-mutation-analysis';
+  proofContext.isReviewedLocalRefProofContext = true;
+  proofContext.mutationProgramIndexInProgress = true;
+  proofContext.receiverIdentityIndexInProgress = true;
+  context.reviewedLocalRefProofContext = proofContext;
+  return proofContext;
+};
+
+const cloudflareKnownIsolatedLocalRefCurrentResult = (
+  source,
+  node,
+  context,
+  seen,
+  returnState = false
+) => {
+  context = cloudflareReviewedLocalRefProofContext(context);
+  const sourceTarget = unwrapCloudflareExecutionTarget(source);
+  const canonicalTarget = context.nodesByRange.get(
+    `${String(sourceTarget?.start)}:${String(sourceTarget?.end)}`
+  );
+  const target =
+    nodeType(canonicalTarget) === nodeType(sourceTarget)
+      ? canonicalTarget
+      : sourceTarget;
+  if (
+    nodeType(target) !== 'MemberExpression' ||
+    cloudflareMemberName(target) !== 'current' ||
+    target.computed === true ||
+    seen.has(target)
+  ) {
+    return false;
+  }
+  const factoryCall = unwrapCloudflareExecutionTarget(target.object);
+  const callee = unwrapCloudflareExecutionTarget(factoryCall?.callee);
+  if (
+    nodeType(factoryCall) !== 'CallExpression' ||
+    nodeType(callee) !== 'Identifier'
+  ) {
+    return false;
+  }
+  const binding = artifactOwnerLexicalBinding(
+    factoryCall,
+    callee.name,
+    context
+  );
+  const owner = binding?.value;
+  if (
+    !binding ||
+    !isCloudflareFunctionNode(owner) ||
+    cloudflareBindingValueMutations(binding, callee.name, context).length > 0
+  ) {
+    return false;
+  }
+  const returned = cloudflareFunctionReturnExpressions(owner);
+  const returnedIdentifiers = returned.map((value) =>
+    unwrapCloudflareExecutionTarget(value)
+  );
+  if (returnedIdentifiers.some((value) => nodeType(value) !== 'Identifier')) {
+    return false;
+  }
+  const refNames = new Set(returnedIdentifiers.map(identifierName));
+  if (returned.length === 0 || refNames.size !== 1) return false;
+  const [refName] = refNames;
+  const nextSeen = new Set(seen).add(target);
+  const nestedRanges = nestedFunctionRanges(owner);
+  const refDeclarations = [];
+  new Visitor({
+    VariableDeclarator(declarator) {
+      if (
+        !isInsideNestedFunction(declarator, nestedRanges) &&
+        nodeType(declarator.id) === 'Identifier' &&
+        declarator.id.name === refName &&
+        declarator.init
+      ) {
+        refDeclarations.push(declarator);
+      }
+    },
+  }).visit(owner);
+  if (refDeclarations.length !== 1) return false;
+  const [refDeclarator] = refDeclarations;
+  const refBinding = artifactOwnerLexicalBinding(
+    refDeclarator.id,
+    refName,
+    context
+  );
+  if (
+    !refBinding ||
+    returnedIdentifiers.some(
+      (identifier) =>
+        artifactOwnerLexicalBinding(identifier, refName, context)
+          ?.digestNode !== refBinding.digestNode
+    )
+  ) {
+    return false;
+  }
+  const refSources = [refDeclarator.init];
+  if (
+    refSources.length === 0 ||
+    refSources.some((candidate) => {
+      const reviewedDelegatedState =
+        cloudflareReviewedIsolatedDelegatedResultState(candidate, context);
+      return reviewedDelegatedState
+        ? !cloudflareKnownReadOnlyIsolatedReviewedDelegatedResult(
+            candidate,
+            context
+          )
+        : !cloudflareKnownIsolatedReceiverSource(
+            candidate,
+            node,
+            context,
+            nextSeen
+          );
+    })
+  ) {
+    return false;
+  }
+  const currentAssignments = [];
+  new Visitor({
+    AssignmentExpression(assignment) {
+      if (
+        !isInsideNestedFunction(assignment, nestedRanges) &&
+        mutationRootName(assignment.left) === refName
+      ) {
+        currentAssignments.push(assignment);
+      }
+    },
+  }).visit(owner);
+  if (currentAssignments.length !== 1) return false;
+  const [assignment] = currentAssignments;
+  const assignedMember = cloudflareMemberName(assignment.left);
+  const initializerCall = unwrapCloudflareExecutionTarget(assignment.right);
+  const initializerName = identifierName(initializerCall?.callee);
+  if (
+    assignment.operator !== '=' ||
+    assignedMember !== 'current' ||
+    nodeType(initializerCall) !== 'CallExpression' ||
+    typeof initializerName !== 'string'
+  ) {
+    return false;
+  }
+  if (
+    !cloudflareReviewedLocalRefUsesAreClosed(
+      owner,
+      refDeclarator,
+      assignment,
+      refName,
+      context
+    )
+  ) {
+    return false;
+  }
+  const initializerParameter = cloudflareParameterEntries(owner).find(
+    ({ name }) => name === initializerName
+  );
+  const initializerArgument =
+    initializerParameter && factoryCall.arguments[initializerParameter.index];
+  if (
+    !initializerArgument ||
+    nodeType(initializerArgument) === 'SpreadElement'
+  ) {
+    return false;
+  }
+  const initializerArgumentName = identifierName(initializerArgument);
+  const initializerBinding =
+    typeof initializerArgumentName === 'string' &&
+    artifactOwnerLexicalBinding(factoryCall, initializerArgumentName, context);
+  if (
+    !initializerBinding ||
+    cloudflareBindingValueMutations(
+      initializerBinding,
+      initializerArgumentName,
+      context
+    ).length > 0
+  ) {
+    return false;
+  }
+  const initializerFactory = initializerBinding?.value;
+  const initializerFactories = initializerFactory ? [initializerFactory] : [];
+  const valid =
+    initializerFactories.length > 0 &&
+    initializerFactories.every(
+      (factory) =>
+        isCloudflareFunctionNode(factory) &&
+        factory.params.length === 0 &&
+        cloudflareFunctionReturnExpressions(factory).length > 0 &&
+        cloudflareFunctionReturnExpressions(factory).every((value) =>
+          new Set([
+            'ArrayExpression',
+            'ArrowFunctionExpression',
+            'ClassExpression',
+            'FunctionExpression',
+            'ObjectExpression',
+          ]).has(nodeType(unwrapCloudflareExecutionTarget(value)))
+        )
+    );
+  return returnState
+    ? valid
+      ? { assignment, initializerFactories, nextSeen }
+      : undefined
+    : valid;
+};
+
+const cloudflareKnownLocalRefCurrentInitializationCandidates = (
+  node,
+  target,
+  mutation,
+  context,
+  seen
+) => {
+  const state = cloudflareKnownIsolatedLocalRefCurrentResult(
+    target,
+    node,
+    context,
+    new Set(),
+    true
+  );
+  if (!state) return undefined;
+  const assignmentKey = cloudflareNodeSemanticKey(state.assignment);
+  const sourceMutationKey = cloudflareNodeSemanticKey(
+    mutation.sourceMutationNode
+  );
+  if (assignmentKey !== sourceMutationKey) return undefined;
+  const candidates = state.initializerFactories.flatMap((factory) =>
+    cloudflareFunctionReturnExpressions(factory).flatMap((value) =>
+      cloudflareLexicalTargetCandidates(
+        value,
+        value,
+        context,
+        new Set([...seen, ...state.nextSeen])
+      )
+    )
+  );
+  assert(
+    candidates.length > 0,
+    'reviewed local ref initialization must resolve its isolated value'
+  );
+  return candidates;
+};
+
 const cloudflareKnownIsolatedReceiverSource = (
   source,
   node,
@@ -8239,17 +8982,100 @@ const cloudflareKnownIsolatedReceiverSource = (
   return (
     new Set([
       'ArrayExpression',
+      'ClassDeclaration',
       'ClassExpression',
+      'FunctionDeclaration',
       'FunctionExpression',
       'ArrowFunctionExpression',
       'NewExpression',
       'ObjectExpression',
     ]).has(nodeType(target)) ||
+    cloudflareKnownIsolatedLocalRefCurrentResult(target, node, context, seen) ||
     isCloudflareObjectCreateCall(target) ||
-    cloudflareKnownIsolatedAmbientResult(target, node, context) ||
     cloudflareKnownIsolatedReviewedDelegatedResult(target, context) ||
-    cloudflareKnownIsolatedLocalFactoryResult(target, node, context, seen)
+    cloudflareKnownIsolatedLocalFactoryResult(target, node, context, seen) ||
+    cloudflareKnownIsolatedAmbientResult(target, node, context)
   );
+};
+
+export const inspectCloudflareKnownIsolatedExpressionForTesting = (
+  source,
+  expressionSource,
+  analysisLabel,
+  artifactRoot,
+  cloudflareAppChunkProvenanceKey
+) => {
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const program = parseModuleSource(analysisLabel, source).program;
+    const context = createCloudflareLexicalContext(program, analysisLabel);
+    context.artifactRoot = fs.realpathSync(artifactRoot);
+    context.chunkFile = fs.realpathSync(
+      path.resolve(artifactRoot, analysisLabel)
+    );
+    context.analysisLabel = 'reviewed-owner-mutation-analysis';
+    context.mutationProgramIndexInProgress = true;
+    context.receiverIdentityIndexInProgress = true;
+    const matches = [];
+    new Visitor({
+      MemberExpression(member) {
+        if (source.slice(member.start, member.end) === expressionSource) {
+          matches.push(member);
+        }
+      },
+    }).visit(program);
+    assert(
+      matches.length > 0,
+      'known-isolated expression fixture must resolve at least once'
+    );
+    return matches.map((match) => ({
+      localRefCurrent: cloudflareKnownIsolatedLocalRefCurrentResult(
+        match,
+        match,
+        context,
+        new Set()
+      ),
+    }));
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+  }
+};
+
+export const inspectCloudflareKnownIsolatedReceiverExpressionForTesting = (
+  source,
+  expressionSource,
+  analysisLabel,
+  artifactRoot,
+  cloudflareAppChunkProvenanceKey
+) => {
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const program = parseModuleSource(analysisLabel, source).program;
+    const context = createCloudflareLexicalContext(program, analysisLabel);
+    context.artifactRoot = fs.realpathSync(artifactRoot);
+    context.chunkFile = fs.realpathSync(
+      path.resolve(artifactRoot, analysisLabel)
+    );
+    const matches = [];
+    new Visitor({
+      CallExpression(call) {
+        if (source.slice(call.start, call.end) === expressionSource) {
+          matches.push(call);
+        }
+      },
+    }).visit(program);
+    assert(
+      matches.length > 0,
+      'known-isolated receiver expression fixture must resolve at least once'
+    );
+    return matches.map((match) =>
+      cloudflareKnownIsolatedReceiverSource(match, match, context, new Set())
+    );
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+  }
 };
 
 const cloudflareKnownReceiverPrototypeOwners = (source, node, context) => {
@@ -8290,15 +9116,92 @@ const cloudflareObjectCreatePrototypeReceiverComponents = (
   );
 };
 
-const cloudflareReceiverContainerChildren = (target) => {
+const cloudflareReceiverSpreadTargets = (
+  spread,
+  aggregateType,
+  anchor,
+  context
+) => {
+  const source = unwrapCloudflareExecutionTarget(spread.argument);
+  const direct = nodeType(source) === aggregateType ? [{ target: source }] : [];
+  const candidates =
+    direct.length > 0 || !anchor || !context
+      ? direct
+      : cloudflareLexicalTargetCandidates(anchor, source, context);
+  return candidates
+    .map(({ target }) => unwrapCloudflareExecutionTarget(target))
+    .filter((target) => nodeType(target) === aggregateType);
+};
+
+const cloudflareReceiverContainerChildren = (
+  target,
+  anchor,
+  context,
+  seen = new Set(),
+  depth = 0
+) => {
+  target = unwrapCloudflareExecutionTarget(target);
+  if (depth > cloudflareParameterProjectionDepthLimit || seen.has(target)) {
+    return [];
+  }
+  const nextSeen = new Set(seen).add(target);
   if (nodeType(target) === 'ArrayExpression') {
-    return target.elements.flatMap((value, index) =>
-      value ? [{ member: index, value }] : []
-    );
+    const children = [];
+    let index = 0;
+    target.elements.forEach((entry) => {
+      if (!entry) {
+        index += 1;
+        return;
+      }
+      if (nodeType(entry) !== 'SpreadElement') {
+        children.push({ member: index, value: entry });
+        index += 1;
+        return;
+      }
+      const spreadTargets = cloudflareReceiverSpreadTargets(
+        entry,
+        'ArrayExpression',
+        anchor,
+        context
+      );
+      spreadTargets.forEach((spreadTarget) =>
+        cloudflareReceiverContainerChildren(
+          spreadTarget,
+          anchor,
+          context,
+          nextSeen,
+          depth + 1
+        ).forEach(({ member, value }) => {
+          if (Number.isInteger(member)) {
+            children.push({ member: index + member, value });
+          }
+        })
+      );
+      index += Math.max(
+        0,
+        ...spreadTargets.map(({ elements }) => elements.length)
+      );
+    });
+    return children;
   }
   if (nodeType(target) !== 'ObjectExpression') return [];
   return target.properties.flatMap((property) => {
-    if (nodeType(property) === 'SpreadElement') return [];
+    if (nodeType(property) === 'SpreadElement') {
+      return cloudflareReceiverSpreadTargets(
+        property,
+        'ObjectExpression',
+        anchor,
+        context
+      ).flatMap((spreadTarget) =>
+        cloudflareReceiverContainerChildren(
+          spreadTarget,
+          anchor,
+          context,
+          nextSeen,
+          depth + 1
+        )
+      );
+    }
     const member = propertyKeyName(property);
     return member === undefined || !property.value
       ? []
@@ -8363,7 +9266,11 @@ const cloudflareRecordReceiverContainerAliases = (
       current.depth <= cloudflareParameterProjectionDepthLimit,
       cloudflareParameterProjectionDepthMessage
     );
-    const children = cloudflareReceiverContainerChildren(current.target);
+    const children = cloudflareReceiverContainerChildren(
+      current.target,
+      anchor,
+      context
+    );
     work += children.length;
     assert(work <= cloudflareAnalysisWorkLimit, cloudflareAnalysisWorkMessage);
     children.toReversed().forEach(({ member, value }) => {
@@ -8376,7 +9283,9 @@ const cloudflareRecordReceiverContainerAliases = (
         state
       );
       cloudflareLinkReceiverIdentities(state.graph, child, valueIdentity);
-      if (cloudflareReceiverContainerChildren(value).length > 0) {
+      if (
+        cloudflareReceiverContainerChildren(value, anchor, context).length > 0
+      ) {
         pending.push({
           base: child,
           depth: current.depth + 1,
@@ -8402,7 +9311,12 @@ const cloudflareRecordReceiverPatternAliases = (
   );
   sourceIdentities.forEach((sourceIdentity) =>
     cloudflareReceiverAliasSources(source).forEach((candidate) => {
-      if (cloudflareReceiverContainerChildren(candidate).length === 0) return;
+      if (
+        cloudflareReceiverContainerChildren(candidate, anchor, context)
+          .length === 0
+      ) {
+        return;
+      }
       cloudflareRecordReceiverContainerAliases(
         anchor,
         sourceIdentity,
@@ -8450,10 +9364,17 @@ const cloudflareRecordReceiverPatternAliases = (
         sourceProjection
       )
     );
+    const directFreshContainerDeclarator =
+      nodeType(anchor) === 'VariableDeclarator' &&
+      nodeType(pattern) === 'Identifier' &&
+      new Set(['ArrayExpression', 'ObjectExpression']).has(
+        nodeType(unwrappedSource)
+      );
     const opaqueProjection =
       path === undefined ||
       cloudflareReceiverProjectionIsOpaque(path) ||
-      cloudflareReceiverSourceHasOpaqueContainer(source, context);
+      (!directFreshContainerDeclarator &&
+        cloudflareReceiverSourceHasOpaqueContainer(source, context));
     if (bindingIdentity && opaqueProjection) {
       state.uncertainIdentities.add(bindingIdentity);
       state.opaqueUncertainIdentities.add(bindingIdentity);
@@ -8722,6 +9643,161 @@ const cloudflareLocalDirectReceiverMutationEntries = (call, owner, context) => {
   });
 };
 
+const cloudflareLocalParameterHasOnlyReceiverUses = (
+  owner,
+  parameter,
+  context,
+  seen
+) => {
+  if (nodeType(parameter) !== 'Identifier' || seen.has(parameter)) return false;
+  const binding = artifactOwnerLexicalBinding(
+    parameter,
+    parameter.name,
+    context
+  );
+  if (!binding || !cloudflareParameterBinding(binding)) return false;
+  const nextSeen = new Set(seen).add(parameter);
+  let internal = true;
+  new Visitor({
+    Identifier(identifier) {
+      if (!internal || identifier === parameter) return;
+      const reference = artifactOwnerLexicalBinding(
+        identifier,
+        identifier.name,
+        context
+      );
+      if (reference?.digestNode !== binding.digestNode) return;
+      // Nested callbacks are not part of the current load-phase receiver
+      // summary. Their captures are analyzed if and when the callback is
+      // invoked through a resolved execution site.
+      if (cloudflareFunctionOwnerAt(identifier, context) !== owner) return;
+      const parent = context.parentNodes.get(identifier);
+      const grandparent = context.parentNodes.get(parent);
+      if (
+        nodeType(parent) === 'MemberExpression' &&
+        parent.object === identifier
+      ) {
+        // A direct member call passes the receiver as `this`, so it is an
+        // escape unless a later, separate invocation proof resolves it.
+        if (
+          nodeType(grandparent) === 'CallExpression' &&
+          grandparent.callee === parent
+        ) {
+          internal = false;
+        }
+        return;
+      }
+      if (
+        nodeType(parent) === 'CallExpression' &&
+        parent.arguments.includes(identifier)
+      ) {
+        const calleeOwner = cloudflareStaticLocalFunctionOwner(parent, context);
+        const argumentIndex = parent.arguments.indexOf(identifier);
+        const calleeParameter = calleeOwner?.params[argumentIndex];
+        if (
+          !calleeOwner ||
+          !cloudflareLocalParameterHasOnlyReceiverUses(
+            calleeOwner,
+            calleeParameter,
+            context,
+            nextSeen
+          )
+        ) {
+          internal = false;
+        }
+        return;
+      }
+      internal = false;
+    },
+  }).visit(owner);
+  return internal;
+};
+
+const cloudflareKnownLoadInternalIsolatedReceiver = (
+  anchor,
+  receiver,
+  owner,
+  context
+) => {
+  const target = unwrapCloudflareExecutionTarget(receiver);
+  if (nodeType(target) !== 'Identifier') return false;
+  const binding = artifactOwnerLexicalBinding(anchor, target.name, context);
+  if (
+    !binding ||
+    cloudflareParameterBinding(binding) ||
+    nodeType(binding.digestNode) !== 'VariableDeclarator' ||
+    nodeType(binding.digestNode.id) !== 'Identifier' ||
+    cloudflareFunctionOwnerAt(binding.digestNode, context) !== owner ||
+    cloudflareBindingValueMutations(binding, target.name, context).length > 0
+  ) {
+    return false;
+  }
+  const sources = cloudflareDirectLocalBindingValues(anchor, target, context);
+  if (
+    sources.length === 0 ||
+    sources.some(
+      (source) =>
+        !cloudflareKnownIsolatedLocalRefCurrentResult(
+          source,
+          binding.digestNode,
+          context,
+          new Set()
+        )
+    )
+  ) {
+    return false;
+  }
+  let internal = true;
+  new Visitor({
+    Identifier(identifier) {
+      if (!internal || identifier === binding.digestNode.id) return;
+      const reference = artifactOwnerLexicalBinding(
+        identifier,
+        identifier.name,
+        context
+      );
+      if (reference?.digestNode !== binding.digestNode) return;
+      if (cloudflareFunctionOwnerAt(identifier, context) !== owner) return;
+      const parent = context.parentNodes.get(identifier);
+      const grandparent = context.parentNodes.get(parent);
+      if (
+        nodeType(parent) === 'MemberExpression' &&
+        parent.object === identifier
+      ) {
+        if (
+          nodeType(grandparent) === 'CallExpression' &&
+          grandparent.callee === parent
+        ) {
+          internal = false;
+        }
+        return;
+      }
+      if (
+        nodeType(parent) === 'CallExpression' &&
+        parent.arguments.includes(identifier)
+      ) {
+        const calleeOwner = cloudflareStaticLocalFunctionOwner(parent, context);
+        const argumentIndex = parent.arguments.indexOf(identifier);
+        const calleeParameter = calleeOwner?.params[argumentIndex];
+        if (
+          !calleeOwner ||
+          !cloudflareLocalParameterHasOnlyReceiverUses(
+            calleeOwner,
+            calleeParameter,
+            context,
+            new Set()
+          )
+        ) {
+          internal = false;
+        }
+        return;
+      }
+      internal = false;
+    },
+  }).visit(owner);
+  return internal;
+};
+
 const cloudflareLocalDelegatedReceiverMutationEntries = (
   call,
   calleeOwner,
@@ -8780,6 +9856,16 @@ const cloudflareLocalDelegatedReceiverMutationEntries = (
         )
       : [undefined];
     projectedReceivers.forEach((projectedReceiver) => {
+      if (
+        cloudflareKnownLoadInternalIsolatedReceiver(
+          call,
+          projectedReceiver,
+          owner,
+          context
+        )
+      ) {
+        return;
+      }
       const projection = cloudflareReceiverParameterProjection(
         call,
         projectedReceiver,
@@ -9366,6 +10452,61 @@ export const inspectCloudflareReceiverDetailsForTesting = (source, names) => {
       return [name, cloudflareReceiverDetails(identifier, identifier, context)];
     })
   );
+};
+
+export const inspectCloudflareLoadInternalIsolatedReceiverForTesting = (
+  source,
+  ownerName,
+  receiverName,
+  analysisLabel = 'internal-isolated-receiver.fixture.js',
+  artifactRoot,
+  cloudflareAppChunkProvenanceKey
+) => {
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey =
+    cloudflareAppChunkProvenanceKey ?? previousProvenanceKey;
+  try {
+    const program = parseModuleSource(analysisLabel, source).program;
+    const context = createCloudflareLexicalContext(program, analysisLabel);
+    if (artifactRoot) {
+      context.artifactRoot = fs.realpathSync(artifactRoot);
+      context.chunkFile = fs.realpathSync(
+        path.resolve(artifactRoot, analysisLabel)
+      );
+      context.analysisLabel = 'reviewed-owner-mutation-analysis';
+      context.mutationProgramIndexInProgress = true;
+      context.receiverIdentityIndexInProgress = true;
+    }
+    let owner;
+    let receiver;
+    new Visitor({
+      FunctionDeclaration(node) {
+        if (identifierName(node.id) === ownerName) owner = node;
+      },
+      VariableDeclarator(node) {
+        if (
+          identifierName(node.id) === receiverName &&
+          identifierName(cloudflareFunctionOwnerAt(node, context)?.id) ===
+            ownerName
+        ) {
+          receiver = node.id;
+        }
+      },
+    }).visit(program);
+    assert(owner, `isolated receiver fixture is missing owner ${ownerName}`);
+    assert(
+      receiver,
+      `isolated receiver fixture is missing receiver ${receiverName}`
+    );
+    return cloudflareKnownLoadInternalIsolatedReceiver(
+      receiver,
+      receiver,
+      owner,
+      context
+    );
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+  }
 };
 
 const cloudflareReceiverComponent = (node, target, context) => {
@@ -11334,7 +12475,14 @@ const cloudflarePropagateMemberMutationParameter = (
       return;
     }
     resolved = true;
-    complete &&= resolution.complete;
+    const reviewedExportComplete =
+      cloudflareReviewedExportMutationIsCompletelySummarized(
+        projection.owner,
+        mutation,
+        node,
+        context
+      );
+    complete &&= resolution.complete || reviewedExportComplete;
     const nextPropagated = new Set(propagatedParameters).add(projection.owner);
     assert(
       nextPropagated.size <= cloudflareParameterProjectionDepthLimit,
@@ -11364,6 +12512,7 @@ const cloudflarePropagateMemberMutationParameter = (
           )
             ? { ...specialized, opaque: true }
             : resolution.complete ||
+                reviewedExportComplete ||
                 !context.unsupportedImmediateFactoryResultOwners.has(
                   projection.owner
                 )
@@ -11552,14 +12701,30 @@ const cloudflareRecordMemberMutation = (
     ...mutation,
     sourceMutationNode: mutation.sourceMutationNode ?? node,
   };
+  // Parameter specialization advances receiverAnchor to each caller for
+  // ordering, but `receiver` remains the lexical expression whose binding
+  // proves whether this is a closed, per-hook local value.
+  const receiverOwner = cloudflareFunctionOwnerAt(receiver, context);
+  const skipsInternalIsolatedPropagation =
+    isCloudflareFunctionNode(receiverOwner) &&
+    cloudflareKnownLoadInternalIsolatedReceiver(
+      receiver,
+      receiver,
+      receiverOwner,
+      context
+    );
+  const receiverIdentityAnchor = skipsInternalIsolatedPropagation
+    ? receiver
+    : receiverAnchor;
   const initialReceiverDetails = cloudflareReceiverDetails(
-    receiverAnchor,
+    receiverIdentityAnchor,
     receiver,
     context
   );
   const propagation =
-    initialReceiverDetails?.isolated === true &&
-    cloudflareReviewedMutationSkipsIsolatedPropagation(mutation, context)
+    (initialReceiverDetails?.isolated === true &&
+      cloudflareReviewedMutationSkipsIsolatedPropagation(mutation, context)) ||
+    skipsInternalIsolatedPropagation
       ? false
       : cloudflarePropagateMemberMutationParameter(
           index,
@@ -11662,7 +12827,7 @@ const cloudflareRecordMemberMutation = (
     cloudflareStructuralMutationReceiver(receiver)
   ) {
     const resolvedReceivers = cloudflareResolvedMutationReceivers(
-      receiverAnchor,
+      receiverIdentityAnchor,
       receiver,
       context
     );
@@ -11698,15 +12863,41 @@ const cloudflareRecordMemberMutation = (
       ambiguousTerminalAssignment,
       incompleteOperandInvocation,
       mutationOpaque: mutation.opaque === true,
+      operandOwner: operandOwner
+        ? `${nodeType(operandOwner)}@${String(operandOwner.start)}:${String(operandOwner.end)}`
+        : undefined,
+      operandParameterOwners: [...operandParameterOwners].map(
+        (owner) =>
+          `${nodeType(owner)}@${String(owner.start)}:${String(owner.end)}`
+      ),
+      operandSources: cloudflareMutationOperandEntryFields.flatMap(
+        ([sourceField, entryField]) =>
+          cloudflareMutationOperandEntries(
+            mutation,
+            sourceField,
+            entryField,
+            node
+          ).map(
+            ({ source }) =>
+              `${nodeType(source)}@${String(source?.start)}:${String(source?.end)}`
+          )
+      ),
+      receiverSource: `${nodeType(receiver)}@${String(receiver?.start)}:${String(receiver?.end)}`,
+      receiverSourceOwner: (() => {
+        const owner = cloudflareFunctionOwnerAt(receiver, context);
+        return owner
+          ? `${nodeType(owner)}@${String(owner.start)}:${String(owner.end)}`
+          : undefined;
+      })(),
       receiverComponentMissing: receiverComponent === undefined,
       receiverCorrelatedValue: mutation.receiverCorrelatedValue === true,
     },
     owner: cloudflareFunctionOwnerAt(node, context),
     receiver,
-    receiverAnchor,
+    receiverAnchor: receiverIdentityAnchor,
     receiverComponent,
     receiverProjection: cloudflareReceiverParameterProjection(
-      receiverAnchor,
+      receiverIdentityAnchor,
       receiver,
       context
     ),
@@ -11911,50 +13102,610 @@ const cloudflareDirectGlobalOwnerName = (node, target, context) => {
     : undefined;
 };
 
+const cloudflareAmbientGlobalProxyNames = new Set([
+  'global',
+  'globalThis',
+  'self',
+]);
+
 const cloudflareGlobalThisMemberOwnerName = (node, target, context) =>
   nodeType(target) === 'MemberExpression' &&
-  identifierName(target.object) === 'globalThis' &&
-  !artifactOwnerLexicalBinding(node, 'globalThis', context) &&
-  !findStaticImport(context.program, 'globalThis')
-    ? cloudflareMemberName(target)
+  cloudflareAmbientGlobalProxyNames.has(identifierName(target.object)) &&
+  !artifactOwnerLexicalBinding(node, identifierName(target.object), context) &&
+  !findStaticImport(context.program, identifierName(target.object))
+    ? cloudflareLexicalMemberName(node, target, context)
     : undefined;
 
 const cloudflareGlobalReplacementTargetName = (node, target, context) =>
   cloudflareDirectGlobalOwnerName(node, target, context) ??
   cloudflareGlobalThisMemberOwnerName(node, target, context);
 
-const cloudflareRecordIntrinsicReplacement = (index, owner, node) => {
+const cloudflareAmbientGlobalProxyTarget = (
+  node,
+  target,
+  context,
+  seen = new Set()
+) => {
+  const current = unwrapCloudflareExecutionTarget(target);
+  const key = cloudflareNodeSemanticKey(current);
+  if (seen.has(key)) return undefined;
+  seen.add(key);
+  const name = identifierName(current);
+  if (
+    cloudflareAmbientGlobalProxyNames.has(name) &&
+    !artifactOwnerLexicalBinding(node, name, context) &&
+    !findStaticImport(context.program, name)
+  ) {
+    return name;
+  }
+  if (typeof name !== 'string') return undefined;
+  const binding = artifactOwnerLexicalBinding(node, name, context);
+  if (
+    !binding?.value ||
+    cloudflareBindingValueMutations(binding, name, context).length !== 0
+  ) {
+    return undefined;
+  }
+  return cloudflareAmbientGlobalProxyTarget(node, binding.value, context, seen);
+};
+
+const cloudflareDirectSequenceAssignmentPrecedes = (
+  mutation,
+  read,
+  context
+) => {
+  let sequence = context.parentNodes.get(mutation);
+  while (sequence && !isCloudflareFunctionNode(sequence)) {
+    if (nodeType(sequence) === 'SequenceExpression') {
+      const mutationIndex = sequence.expressions.indexOf(mutation);
+      if (mutationIndex !== -1) {
+        let readEntry = read;
+        let parent = context.parentNodes.get(readEntry);
+        while (parent && parent !== sequence) {
+          readEntry = parent;
+          parent = context.parentNodes.get(readEntry);
+        }
+        const readIndex =
+          parent === sequence ? sequence.expressions.indexOf(readEntry) : -1;
+        if (readIndex > mutationIndex) return true;
+      }
+    }
+    sequence = context.parentNodes.get(sequence);
+  }
+  return false;
+};
+
+const cloudflareDominatingBindingMutationSources = (
+  binding,
+  name,
+  read,
+  context
+) => {
+  const owner = cloudflareFunctionOwnerAt(read, context);
+  const dominating = cloudflareBindingValueMutations(binding, name, context)
+    .filter(
+      ({ node: mutation }) =>
+        nodeType(mutation) === 'AssignmentExpression' &&
+        cloudflareFunctionOwnerAt(mutation, context) === owner &&
+        (cloudflareDirectSequenceAssignmentPrecedes(mutation, read, context) ||
+          cloudflareMutationDefinitelyDominatesRead(
+            { node: mutation, owner },
+            read,
+            context
+          ))
+    )
+    .toSorted((left, right) => left.node.end - right.node.end)
+    .at(-1);
+  if (!dominating) return [];
+  return dominating.values.flatMap((value) =>
+    cloudflarePatternBindingValues(
+      dominating.node.left,
+      value,
+      name,
+      dominating.node,
+      context
+    ).map((source) => ({ anchor: dominating.node, source }))
+  );
+};
+
+const cloudflareMayTargetAmbientGlobalProxy = (
+  node,
+  target,
+  context,
+  seen = new Set(),
+  depth = 0,
+  uncertainIsAmbient = true
+) => {
+  if (depth > cloudflareParameterProjectionDepthLimit) {
+    return uncertainIsAmbient;
+  }
+  const current = unwrapCloudflareExecutionTarget(target);
+  if (!current) return uncertainIsAmbient;
+  const key = cloudflareNodeSemanticKey(current);
+  if (seen.has(key)) return uncertainIsAmbient;
+  const nextSeen = new Set(seen).add(key);
+  if (
+    cloudflareAmbientGlobalProxyTarget(node, current, context) !== undefined
+  ) {
+    return true;
+  }
+  if (
+    reviewedArtifactOwnerAmbientConsumers.has(
+      cloudflareGlobalReplacementTargetName(node, current, context)
+    )
+  ) {
+    return false;
+  }
+  if (
+    nodeType(current) === 'MemberExpression' &&
+    reviewedArtifactOwnerAmbientConsumers.has(
+      cloudflareGlobalReplacementTargetName(node, current.object, context)
+    )
+  ) {
+    return false;
+  }
+  const returnedReceiver = cloudflareAmbientReturnedReceiver(current, context);
+  const assignedArguments = returnedReceiver
+    ? undefined
+    : cloudflareUnshadowedObjectAssignArguments(current, context);
+  const returnedTarget = returnedReceiver ?? assignedArguments?.[0];
+  if (returnedTarget) {
+    return cloudflareMayTargetAmbientGlobalProxy(
+      node,
+      returnedTarget,
+      context,
+      nextSeen,
+      depth + 1,
+      uncertainIsAmbient
+    );
+  }
+  const ambientCallee =
+    nodeType(current) === 'CallExpression'
+      ? cloudflareAmbientAliasTarget(node, current.callee, context)
+      : undefined;
+  if (
+    nodeType(ambientCallee) === 'MemberExpression' &&
+    cloudflareMemberName(ambientCallee) === 'create' &&
+    cloudflareUnshadowedIntrinsicOwner(node, ambientCallee.object, context) ===
+      'Object'
+  ) {
+    return false;
+  }
+  if (
+    cloudflareKnownIsolatedReceiverSource(current, node, context, new Set())
+  ) {
+    return false;
+  }
+  const currentName = identifierName(current);
+  const currentBinding =
+    typeof currentName === 'string'
+      ? artifactOwnerLexicalBinding(node, currentName, context)
+      : undefined;
+  const currentBindingValues =
+    currentBinding &&
+    cloudflareBindingValueMutations(currentBinding, currentName, context)
+      .length === 0
+      ? cloudflareLexicalBindingValues(currentBinding, currentName, context)
+      : [];
+  if (
+    currentBindingValues.length > 0 &&
+    currentBindingValues.every((value) =>
+      cloudflareKnownIsolatedReceiverSource(value, node, context, new Set())
+    )
+  ) {
+    return false;
+  }
+  const dominatingBindingSources = currentBinding
+    ? cloudflareDominatingBindingMutationSources(
+        currentBinding,
+        currentName,
+        node,
+        context
+      )
+    : [];
+  if (dominatingBindingSources.length > 0) {
+    return dominatingBindingSources.some(({ anchor, source }) =>
+      cloudflareMayTargetAmbientGlobalProxy(
+        anchor,
+        source,
+        context,
+        nextSeen,
+        depth + 1,
+        uncertainIsAmbient
+      )
+    );
+  }
+  const parameterSources = cloudflareDirectParameterReceiverSources(
+    node,
+    current,
+    context
+  );
+  if (parameterSources !== undefined) {
+    if (parameterSources.complete && parameterSources.sources.length > 0) {
+      const sourceResults = parameterSources.sources.map(
+        ({ anchor, source }) => ({
+          anchor,
+          mayTargetAmbient: cloudflareMayTargetAmbientGlobalProxy(
+            anchor,
+            source,
+            context,
+            nextSeen,
+            depth + 1,
+            uncertainIsAmbient
+          ),
+          source,
+        })
+      );
+      return sourceResults.some(({ mayTargetAmbient }) => mayTargetAmbient);
+    }
+    const projection = cloudflareReceiverParameterProjection(
+      node,
+      current,
+      context
+    );
+    const directCallSites = projection
+      ? cloudflareIntrinsicOwnerDirectCallSites(projection.owner, context)
+      : [];
+    if (
+      projection &&
+      projection.path.length === 0 &&
+      directCallSites.length > 0 &&
+      directCallSites.every(
+        (callSite) => callSite.arguments[projection.entry.index]
+      )
+    ) {
+      const directCallResults = directCallSites.map((callSite) => ({
+        callSite,
+        mayTargetAmbient: cloudflareMayTargetAmbientGlobalProxy(
+          callSite,
+          callSite.arguments[projection.entry.index],
+          context,
+          nextSeen,
+          depth + 1,
+          uncertainIsAmbient
+        ),
+      }));
+      return directCallResults.some(({ mayTargetAmbient }) => mayTargetAmbient);
+    }
+    return uncertainIsAmbient;
+  }
+  const candidates = cloudflareLexicalTargetCandidates(
+    node,
+    current,
+    context,
+    new Set()
+  ).map(({ target: candidate }) => candidate);
+  return (
+    (candidates.length === 0 && uncertainIsAmbient) ||
+    candidates.some((candidate) => {
+      if (cloudflareNodeSemanticKey(candidate) === key) {
+        return uncertainIsAmbient;
+      }
+      return cloudflareMayTargetAmbientGlobalProxy(
+        node,
+        candidate,
+        context,
+        nextSeen,
+        depth + 1,
+        uncertainIsAmbient
+      );
+    })
+  );
+};
+
+const cloudflareDirectAmbientGlobalProxyCandidate = (
+  node,
+  target,
+  context,
+  seen = new Set(),
+  depth = 0
+) => {
+  if (depth > cloudflareParameterProjectionDepthLimit) return false;
+  const current = unwrapCloudflareExecutionTarget(target);
+  if (!current) return false;
+  const key = cloudflareNodeSemanticKey(current);
+  if (seen.has(key)) return false;
+  const nextSeen = new Set(seen).add(key);
+  if (
+    cloudflareAmbientGlobalProxyTarget(node, current, context) !== undefined
+  ) {
+    return true;
+  }
+  if (
+    reviewedArtifactOwnerAmbientConsumers.has(
+      cloudflareGlobalReplacementTargetName(node, current, context)
+    )
+  ) {
+    return false;
+  }
+  if (nodeType(current) === 'MemberExpression') {
+    const member = cloudflareLexicalMemberName(node, current, context);
+    if (member === undefined) return false;
+    const object = unwrapCloudflareExecutionTarget(current.object);
+    const containers =
+      nodeType(object) === 'ObjectExpression'
+        ? [object]
+        : nodeType(object) === 'Identifier'
+          ? cloudflareDirectLocalBindingValues(node, object, context)
+          : [];
+    return containers
+      .filter((container) => nodeType(container) === 'ObjectExpression')
+      .flatMap((container) =>
+        container.properties.filter(
+          (property) =>
+            nodeType(property) === 'Property' &&
+            cloudflareLexicalPropertyKeyName(property, context) === member
+        )
+      )
+      .some((property) =>
+        cloudflareDirectAmbientGlobalProxyCandidate(
+          node,
+          property.value,
+          context,
+          nextSeen,
+          depth + 1
+        )
+      );
+  }
+  const projection = cloudflareReceiverParameterProjection(
+    node,
+    current,
+    context
+  );
+  if (!projection || projection.path.length !== 0) return false;
+  const callSites = cloudflareIntrinsicOwnerDirectCallSites(
+    projection.owner,
+    context
+  );
+  return callSites.some((callSite) => {
+    const argument = callSite.arguments[projection.entry.index];
+    return (
+      argument !== undefined &&
+      cloudflareDirectAmbientGlobalProxyCandidate(
+        callSite,
+        argument,
+        context,
+        nextSeen,
+        depth + 1
+      )
+    );
+  });
+};
+
+const cloudflarePotentialGlobalMemberOwnerNames = (node, target, context) => {
+  const member = unwrapCloudflareExecutionTarget(target);
+  if (nodeType(member) !== 'MemberExpression') return [];
+  const directOwner = cloudflareMemberName(member);
+  if (directOwner !== undefined) {
+    if (!reviewedArtifactOwnerAmbientConsumers.has(directOwner)) return [];
+    return cloudflareMayTargetAmbientGlobalProxy(node, member.object, context)
+      ? [directOwner]
+      : [];
+  }
+  if (member.computed !== true) return [];
+  if (cloudflareComputedKeyIsProvablySymbol(node, member.property, context)) {
+    return [];
+  }
+  if (
+    !cloudflareDirectAmbientGlobalProxyCandidate(node, member.object, context)
+  ) {
+    return [];
+  }
+  const owner = cloudflareLexicalMemberName(node, member, context);
+  const owners = reviewedArtifactOwnerAmbientConsumers.has(owner)
+    ? [owner]
+    : owner === undefined
+      ? [...reviewedArtifactOwnerAmbientConsumers]
+      : [];
+  return owners;
+};
+
+const cloudflareRecordIntrinsicReplacement = (index, owner, node, target) => {
   if (!reviewedArtifactOwnerAmbientConsumers.has(owner)) return;
   const replacements = index.get(owner) ?? [];
-  replacements.push(node);
+  replacements.push({ node, target });
   index.set(owner, replacements);
 };
 
-const cloudflareRecordIntrinsicCallReplacements = (index, call, context) => {
-  const callee = unwrapCloudflareExecutionTarget(call.callee);
-  if (nodeType(callee) !== 'MemberExpression') return;
-  const helper = identifierName(callee.object);
-  if (
-    !new Set(['Object', 'Reflect']).has(helper) ||
-    artifactOwnerLexicalBinding(call, helper, context) ||
-    findStaticImport(context.program, helper)
-  ) {
-    return;
-  }
-  const operation = cloudflareMemberName(callee);
-  const target = call.arguments[0];
-  if (
-    !new Set(['defineProperty', 'set']).has(operation) ||
-    identifierName(target) !== 'globalThis' ||
-    artifactOwnerLexicalBinding(call, 'globalThis', context)
-  ) {
-    return;
-  }
-  cloudflareRecordIntrinsicReplacement(
-    index,
-    cloudflareLiteralMemberName(call.arguments[1]),
-    call
+const cloudflareIntrinsicAssignmentReceiver = (target) => {
+  const current = unwrapCloudflareExecutionTarget(target);
+  return nodeType(current) === 'MemberExpression' ? current.object : undefined;
+};
+
+const cloudflareRecordIntrinsicTargetReplacements = (
+  index,
+  anchor,
+  target,
+  context
+) => {
+  const directOwner = cloudflareGlobalReplacementTargetName(
+    anchor,
+    target,
+    context
   );
+  const owners = directOwner
+    ? [directOwner]
+    : cloudflarePotentialGlobalMemberOwnerNames(anchor, target, context);
+  owners.forEach((owner) =>
+    cloudflareRecordIntrinsicReplacement(
+      index,
+      owner,
+      anchor,
+      cloudflareIntrinsicAssignmentReceiver(target)
+    )
+  );
+};
+
+const cloudflareIntrinsicAssignmentTargets = (target) => {
+  const current = unwrapCloudflareExecutionTarget(target);
+  if (!current) return [];
+  if (new Set(['Identifier', 'MemberExpression']).has(nodeType(current))) {
+    return [current];
+  }
+  if (nodeType(current) === 'AssignmentPattern') {
+    return cloudflareIntrinsicAssignmentTargets(current.left);
+  }
+  if (nodeType(current) === 'RestElement') {
+    return cloudflareIntrinsicAssignmentTargets(current.argument);
+  }
+  if (nodeType(current) === 'ArrayPattern') {
+    return current.elements.flatMap((element) =>
+      cloudflareIntrinsicAssignmentTargets(element)
+    );
+  }
+  if (nodeType(current) === 'ObjectPattern') {
+    return current.properties.flatMap((property) =>
+      cloudflareIntrinsicAssignmentTargets(
+        nodeType(property) === 'RestElement'
+          ? property.argument
+          : property.value
+      )
+    );
+  }
+  return [];
+};
+
+const cloudflareRecordIntrinsicAssignmentReplacements = (
+  index,
+  anchor,
+  target,
+  context
+) => {
+  cloudflareIntrinsicAssignmentTargets(target).forEach((assignmentTarget) => {
+    cloudflareRecordIntrinsicTargetReplacements(
+      index,
+      anchor,
+      assignmentTarget,
+      context
+    );
+  });
+};
+
+const cloudflareRecordIntrinsicCallReplacements = (index, call, context) => {
+  const directAmbient = cloudflareDirectSyntacticAmbientMutation(call, context);
+  if (
+    !directAmbient &&
+    ![call.callee, ...(call.arguments ?? [])].some((target) =>
+      cloudflarePotentialAmbientMutationTarget(call, target, context)
+    )
+  ) {
+    return;
+  }
+  const executions = directAmbient
+    ? [
+        {
+          ambient: directAmbient,
+          arguments_: call.arguments ?? [],
+          node: call,
+          target: call.callee,
+        },
+      ]
+    : cloudflareNormalizedMetaExecutions(
+        { node: call, target: call.callee },
+        context,
+        false
+      );
+  executions.forEach((execution) => {
+    const ambient =
+      execution.ambient ??
+      cloudflareAmbientMutationTarget(
+        execution.node,
+        execution.target,
+        context
+      );
+    if (!cloudflareSupportedAmbientMutation(ambient)) return;
+    const arguments_ =
+      execution.arguments_ ??
+      cloudflareExpandedArguments(
+        execution.node,
+        execution.node.arguments ?? [],
+        context
+      );
+    const operation = ambient.operation;
+    const propertyMutation = new Set([
+      '__defineGetter__',
+      '__defineSetter__',
+      'defineProperty',
+      'set',
+    ]).has(operation);
+    const propertyIndex = ambient.owner === 'prototype' ? 0 : 1;
+    const propertyName = propertyMutation
+      ? cloudflareLiteralMemberName(arguments_[propertyIndex])
+      : undefined;
+    if (
+      propertyMutation &&
+      propertyName !== undefined &&
+      !reviewedArtifactOwnerAmbientConsumers.has(propertyName)
+    ) {
+      return;
+    }
+    const target =
+      ambient.owner === 'prototype' ? ambient.receiver : arguments_[0];
+    if (
+      !cloudflareMayTargetAmbientGlobalProxy(execution.node, target, context)
+    ) {
+      return;
+    }
+    if (propertyMutation) {
+      if (propertyName === undefined) {
+        reviewedArtifactOwnerAmbientConsumers.forEach((owner) =>
+          cloudflareRecordIntrinsicReplacement(index, owner, call, target)
+        );
+      } else {
+        cloudflareRecordIntrinsicReplacement(index, propertyName, call, target);
+      }
+      return;
+    }
+    const descriptorSource =
+      operation === 'defineProperties' && ambient.owner === 'Object'
+        ? arguments_[1]
+        : undefined;
+    const assignSources =
+      operation === 'assign' && ambient.owner === 'Object'
+        ? arguments_.slice(1)
+        : undefined;
+    const sources = descriptorSource ? [descriptorSource] : assignSources;
+    if (!sources) return;
+    const names = new Set();
+    let unknown = false;
+    sources.forEach((source) => {
+      const candidates = cloudflareLexicalTargetCandidates(
+        execution.node,
+        source,
+        context,
+        new Set()
+      ).map(({ target: candidate }) =>
+        unwrapCloudflareExecutionTarget(candidate)
+      );
+      if (
+        candidates.length === 0 ||
+        candidates.some(
+          (candidate) =>
+            nodeType(candidate) !== 'ObjectExpression' ||
+            candidate.properties.some(
+              (property) =>
+                nodeType(property) !== 'Property' ||
+                property.computed === true ||
+                propertyKeyName(property) === undefined
+            )
+        )
+      ) {
+        unknown = true;
+        return;
+      }
+      candidates.forEach((candidate) =>
+        candidate.properties.forEach((property) =>
+          names.add(propertyKeyName(property))
+        )
+      );
+    });
+    if (unknown) {
+      reviewedArtifactOwnerAmbientConsumers.forEach((name) => names.add(name));
+    }
+    names.forEach((name) =>
+      cloudflareRecordIntrinsicReplacement(index, name, call, target)
+    );
+  });
 };
 
 const cloudflareIntrinsicReplacementIndex = (context) => {
@@ -11962,44 +13713,270 @@ const cloudflareIntrinsicReplacementIndex = (context) => {
     return context.intrinsicReplacementNodesByOwner;
   }
   const index = new Map();
-  new Visitor({
-    AssignmentExpression(node) {
-      cloudflareRecordIntrinsicReplacement(
-        index,
-        cloudflareGlobalReplacementTargetName(node, node.left, context),
-        node
-      );
-    },
-    CallExpression(node) {
-      cloudflareRecordIntrinsicCallReplacements(index, node, context);
-    },
-    UpdateExpression(node) {
-      cloudflareRecordIntrinsicReplacement(
-        index,
-        cloudflareGlobalReplacementTargetName(node, node.argument, context),
-        node
-      );
-    },
-    UnaryExpression(node) {
-      if (node.operator !== 'delete') return;
-      cloudflareRecordIntrinsicReplacement(
-        index,
-        cloudflareGlobalReplacementTargetName(node, node.argument, context),
-        node
-      );
-    },
-  }).visit(context.program);
+  context.intrinsicReplacementIndexInProgress = true;
+  try {
+    new Visitor({
+      AssignmentExpression(node) {
+        cloudflareRecordIntrinsicAssignmentReplacements(
+          index,
+          node,
+          node.left,
+          context
+        );
+      },
+      CallExpression(node) {
+        cloudflareRecordIntrinsicCallReplacements(index, node, context);
+      },
+      ForInStatement(node) {
+        if (nodeType(node.left) === 'VariableDeclaration') return;
+        cloudflareRecordIntrinsicAssignmentReplacements(
+          index,
+          node,
+          node.left,
+          context
+        );
+      },
+      ForOfStatement(node) {
+        if (nodeType(node.left) === 'VariableDeclaration') return;
+        cloudflareRecordIntrinsicAssignmentReplacements(
+          index,
+          node,
+          node.left,
+          context
+        );
+      },
+      UpdateExpression(node) {
+        cloudflareRecordIntrinsicTargetReplacements(
+          index,
+          node,
+          node.argument,
+          context
+        );
+      },
+      UnaryExpression(node) {
+        if (node.operator !== 'delete') return;
+        cloudflareRecordIntrinsicTargetReplacements(
+          index,
+          node,
+          node.argument,
+          context
+        );
+      },
+    }).visit(context.program);
+  } finally {
+    context.intrinsicReplacementIndexInProgress = false;
+  }
   context.intrinsicReplacementNodesByOwner = index;
   return index;
 };
 
-const cloudflareIntrinsicOwnerHasPriorReplacement = (node, owner, context) => {
-  const useOwner = cloudflareFunctionOwnerAt(node, context);
-  return (cloudflareIntrinsicReplacementIndex(context).get(owner) ?? []).some(
-    (replacement) =>
-      replacement.end <= node.start &&
-      cloudflareFunctionOwnerAt(replacement, context) === useOwner
+const cloudflareIntrinsicOwnerDirectCallSites = (owner, context) => {
+  let ownerParent = context.parentNodes.get(owner);
+  while (
+    ownerParent &&
+    unwrapCloudflareExecutionTarget(ownerParent) === owner
+  ) {
+    ownerParent = context.parentNodes.get(ownerParent);
+  }
+  const immediateCall =
+    nodeType(ownerParent) === 'CallExpression' &&
+    unwrapCloudflareExecutionTarget(ownerParent.callee) === owner
+      ? ownerParent
+      : undefined;
+  const indexed = [
+    ...cloudflareSyntacticDirectCallSites(owner, context).map(
+      ({ node }) => node
+    ),
+    ...(immediateCall ? [immediateCall] : []),
+  ];
+  if (indexed.length > 0) return indexed;
+  const declarator = context.parentNodes.get(owner);
+  if (
+    nodeType(declarator) !== 'VariableDeclarator' ||
+    nodeType(declarator.id) !== 'Identifier'
+  ) {
+    return [];
+  }
+  const name = declarator.id.name;
+  const callSites = [];
+  new Visitor({
+    CallExpression(call) {
+      if (identifierName(call.callee) !== name) return;
+      const binding = artifactOwnerLexicalBinding(call, name, context);
+      if (
+        binding?.digestNode === declarator ||
+        (binding?.digestNode &&
+          cloudflareNodeSemanticKey(binding.digestNode) ===
+            cloudflareNodeSemanticKey(declarator)) ||
+        (!binding &&
+          cloudflareFunctionOwnerAt(declarator, context) === context.program)
+      ) {
+        callSites.push(call);
+      }
+    },
+  }).visit(context.program);
+  return callSites;
+};
+
+const cloudflareIntrinsicOwnerTopLevelCallSites = (
+  owner,
+  context,
+  seen = new Set()
+) => {
+  if (!owner || owner === context.program || seen.has(owner)) return [];
+  const nextSeen = new Set(seen).add(owner);
+  const activeCallSite =
+    context.activeResolvedCallSiteByFunction.get(owner)?.node;
+  const callSites = activeCallSite
+    ? [activeCallSite]
+    : cloudflareIntrinsicOwnerDirectCallSites(owner, context);
+  const topLevelCallSites = callSites.flatMap((callSite) => {
+    const callOwner = cloudflareFunctionOwnerAt(callSite, context);
+    if (callOwner === context.program) return [callSite];
+    return cloudflareIntrinsicOwnerTopLevelCallSites(
+      callOwner,
+      context,
+      nextSeen
+    );
+  });
+  const unique = new Map(
+    topLevelCallSites.map((callSite) => [
+      cloudflareNodeSemanticKey(callSite),
+      callSite,
+    ])
   );
+  return [...unique.values()];
+};
+
+const cloudflareCalculateIntrinsicReplacementMayTargetAmbientGlobal = (
+  replacement,
+  context
+) => {
+  if (
+    cloudflareReviewedClosureForContext(
+      context
+    )?.opaqueMemberMutationExemptions?.some(
+      (exemption) =>
+        exemption.suppressAmbientGlobalReplacement === true &&
+        cloudflareReviewedMutationExemptionMatches(
+          { node: replacement.node },
+          exemption,
+          context
+        )
+    ) === true
+  ) {
+    return false;
+  }
+  if (!replacement.target) return true;
+  const replacementOwner = cloudflareFunctionOwnerAt(replacement.node, context);
+  const targetName = identifierName(replacement.target);
+  const parameterIndex = replacementOwner?.params?.findIndex(
+    (parameter) =>
+      nodeType(parameter) === 'Identifier' && parameter.name === targetName
+  );
+  const directCallSites =
+    parameterIndex !== undefined && parameterIndex >= 0
+      ? cloudflareIntrinsicOwnerDirectCallSites(replacementOwner, context)
+      : [];
+  if (
+    parameterIndex !== undefined &&
+    parameterIndex >= 0 &&
+    directCallSites.length > 0 &&
+    directCallSites.every((callSite) => callSite.arguments[parameterIndex])
+  ) {
+    return directCallSites.some((callSite) =>
+      cloudflareMayTargetAmbientGlobalProxy(
+        callSite,
+        callSite.arguments[parameterIndex],
+        context
+      )
+    );
+  }
+  return cloudflareMayTargetAmbientGlobalProxy(
+    replacement.node,
+    replacement.target,
+    context
+  );
+};
+
+const cloudflareIntrinsicReplacementMayTargetAmbientGlobal = (
+  replacement,
+  context
+) => {
+  const revision = JSON.stringify([
+    cloudflareLiveExpensiveIndexRevision(context),
+    cloudflareActiveResolutionContextKey(context),
+  ]);
+  const memo = context.intrinsicReplacementTargetMemo;
+  const byRevision = memo.get(replacement) ?? new Map();
+  if (byRevision.has(revision)) return byRevision.get(revision);
+  const result = cloudflareCalculateIntrinsicReplacementMayTargetAmbientGlobal(
+    replacement,
+    context
+  );
+  if (byRevision.size >= 32) byRevision.clear();
+  byRevision.set(revision, result);
+  memo.set(replacement, byRevision);
+  return result;
+};
+
+const cloudflareIntrinsicOwnerHasPriorReplacement = (node, owner, context) => {
+  if (context.intrinsicReplacementIndexInProgress) {
+    return false;
+  }
+  const useOwner = cloudflareFunctionOwnerAt(node, context);
+  const replacement = (
+    cloudflareIntrinsicReplacementIndex(context).get(owner) ?? []
+  ).find((replacementDetail) => {
+    const replacement = replacementDetail.node;
+    context.intrinsicReplacementTargetChecks ??= new Set();
+    if (context.intrinsicReplacementTargetChecks.has(replacementDetail)) {
+      return false;
+    }
+    context.intrinsicReplacementTargetChecks.add(replacementDetail);
+    let mayTargetAmbientGlobal;
+    try {
+      mayTargetAmbientGlobal =
+        cloudflareIntrinsicReplacementMayTargetAmbientGlobal(
+          replacementDetail,
+          context
+        );
+    } finally {
+      context.intrinsicReplacementTargetChecks.delete(replacementDetail);
+    }
+    if (!mayTargetAmbientGlobal) {
+      return false;
+    }
+    if (replacement.start <= node.start && replacement.end >= node.end) {
+      return false;
+    }
+    const replacementOwner = cloudflareFunctionOwnerAt(replacement, context);
+    if (replacementOwner === useOwner) return replacement.end <= node.start;
+    if (replacementOwner === context.program) {
+      const activeCallSite =
+        useOwner &&
+        context.activeResolvedCallSiteByFunction.get(useOwner)?.node;
+      return replacement.end <= (activeCallSite?.start ?? node.start);
+    }
+    if (useOwner === context.program) {
+      return cloudflareIntrinsicOwnerTopLevelCallSites(
+        replacementOwner,
+        context
+      ).some((callSite) => callSite.end <= node.start);
+    }
+    const replacementCallsFromUseOwner =
+      cloudflareIntrinsicOwnerDirectCallSites(replacementOwner, context).filter(
+        (callSite) => cloudflareFunctionOwnerAt(callSite, context) === useOwner
+      );
+    if (replacementCallsFromUseOwner.length > 0) {
+      return replacementCallsFromUseOwner.some(
+        (callSite) => callSite.end <= node.start
+      );
+    }
+    return context.activeInvocationOwners?.has(replacementOwner) === true;
+  });
+  context.intrinsicReplacementFailure = replacement?.node;
+  return replacement !== undefined;
 };
 
 const cloudflareAmbientStaticArgumentList = (node, source, context) => {
@@ -12014,16 +13991,20 @@ const cloudflareAmbientStaticArgumentList = (node, source, context) => {
 
 const cloudflareUnshadowedIntrinsicOwner = (node, target, context) => {
   const direct = identifierName(target);
+  const globalProxyName =
+    nodeType(target) === 'MemberExpression'
+      ? identifierName(target.object)
+      : undefined;
   const global =
     nodeType(target) === 'MemberExpression' &&
-    identifierName(target.object) === 'globalThis'
+    cloudflareAmbientGlobalProxyNames.has(globalProxyName)
       ? cloudflareMemberName(target)
       : undefined;
   const owner = reviewedArtifactOwnerAmbientConsumers.has(direct)
     ? direct
     : global;
   if (!reviewedArtifactOwnerAmbientConsumers.has(owner)) return undefined;
-  const requiredGlobals = global ? ['globalThis'] : [owner];
+  const requiredGlobals = global ? [globalProxyName] : [owner];
   const unshadowed = requiredGlobals.every(
     (name) =>
       !artifactOwnerLexicalBinding(node, name, context) &&
@@ -12032,7 +14013,7 @@ const cloudflareUnshadowedIntrinsicOwner = (node, target, context) => {
   if (!unshadowed) return undefined;
   assert(
     !cloudflareIntrinsicOwnerHasPriorReplacement(node, owner, context),
-    `Cloudflare load-effect analysis rejects a replaced intrinsic global ${String(owner)} in ${context.analysisLabel}`
+    `Cloudflare load-effect analysis rejects a replaced intrinsic global ${String(owner)} in ${context.analysisLabel} (${nodeType(context.intrinsicReplacementFailure)}@${String(context.intrinsicReplacementFailure?.start)}:${String(context.intrinsicReplacementFailure?.end)} before ${nodeType(node)}@${String(node?.start)}:${String(node?.end)})`
   );
   return owner;
 };
@@ -12232,7 +14213,11 @@ const cloudflareStaticDescriptorEntries = (
   if (!staticProperties) return { entries: [], opaque: true };
   const descriptorsByMember = new Map();
   properties.forEach((property) => {
-    const member = cloudflareLexicalPropertyKeyName(property, context);
+    const resolvedMember = cloudflareLexicalPropertyKeyName(property, context);
+    const member =
+      property.computed === true && resolvedMember?.startsWith('\0symbol-')
+        ? undefined
+        : resolvedMember;
     const key =
       member === undefined
         ? `computed:${cloudflareNodeSemanticKey(property.key)}`
@@ -12421,6 +14406,16 @@ const cloudflareCreateMemberMutationIndex = (context) => {
     },
     CallExpression(node) {
       if (!nodeIsActive(node)) return;
+      cloudflareReviewedImportedReceiverMutationEntries(node, context).forEach(
+        (mutation) =>
+          cloudflareRecordMemberMutation(
+            index,
+            node,
+            mutation.receiver,
+            mutation,
+            context
+          )
+      );
       cloudflareNormalizedMetaExecutions(
         { node, target: node.callee },
         context,
@@ -14681,9 +16676,22 @@ const cloudflarePriorMemberMutationCandidates = (
     if (mutation.opaque && context.receiverIdentityIndexInProgress) {
       return [];
     }
+    if (mutation.opaque) {
+      const localRefInitializationCandidates =
+        cloudflareKnownLocalRefCurrentInitializationCandidates(
+          node,
+          target,
+          mutation,
+          context,
+          mutationSeen
+        );
+      if (localRefInitializationCandidates) {
+        return localRefInitializationCandidates;
+      }
+    }
     assert(
       !mutation.opaque,
-      `${cloudflareOpaqueMemberMutationMessage} in ${context.analysisLabel} (${nodeType(mutation.node)}@${String(mutation.node.start)}:${String(mutation.node.end)}; mutation receiver ${String(mutation.receiverComponent)}; propagated from ${String(mutation.sourceReceiverComponent)}; receiver anchor ${nodeType(mutation.receiverAnchor)}@${String(mutation.receiverAnchor?.start)}:${String(mutation.receiverAnchor?.end)}; receiver parameter ${String(mutation.receiverProjection?.entry?.name)}; opaque operands ${String([...(mutation.valueEntries ?? []), ...(mutation.sourceEntries ?? []), ...(mutation.descriptorValueEntries ?? []), ...(mutation.descriptorSourceEntries ?? [])].filter((entry) => entry.opaque === true).length)}; opaque non-member ${String(mutation.opaqueNonMember)}; opaque cause ${JSON.stringify(mutation.opaqueCause)}; read ${nodeType(target)}@${String(target?.start)}:${String(target?.end)})`
+      `${cloudflareOpaqueMemberMutationMessage} in ${context.analysisLabel} (${nodeType(mutation.node)}@${String(mutation.node.start)}:${String(mutation.node.end)}; source mutation ${nodeType(mutation.sourceMutationNode)}@${String(mutation.sourceMutationNode?.start)}:${String(mutation.sourceMutationNode?.end)}; mutation receiver ${String(mutation.receiverComponent)}; propagated from ${String(mutation.sourceReceiverComponent)}; receiver anchor ${nodeType(mutation.receiverAnchor)}@${String(mutation.receiverAnchor?.start)}:${String(mutation.receiverAnchor?.end)}; receiver parameter ${String(mutation.receiverProjection?.entry?.name)}; opaque operands ${String([...(mutation.valueEntries ?? []), ...(mutation.sourceEntries ?? []), ...(mutation.descriptorValueEntries ?? []), ...(mutation.descriptorSourceEntries ?? [])].filter((entry) => entry.opaque === true).length)}; opaque non-member ${String(mutation.opaqueNonMember)}; opaque cause ${JSON.stringify(mutation.opaqueCause)}; read ${nodeType(target)}@${String(target?.start)}:${String(target?.end)})`
     );
     if (mutation.sources) {
       assert(
@@ -15971,7 +17979,8 @@ const cloudflareReflectiveReadTargetCandidates = (
   const normalized = cloudflareNormalizedMetaExecutions(
     { node: target, target: target.callee },
     context,
-    false
+    false,
+    seen
   );
   const indirect = normalized.filter(
     ({ node: execution }) => execution !== target
@@ -16123,7 +18132,8 @@ const cloudflareMetaCallResultTargetCandidates = (
   const normalized = cloudflareNormalizedMetaExecutions(
     { node: target, target: target.callee },
     context,
-    false
+    false,
+    seen
   ).filter(
     ({ node: execution }) =>
       execution !== target && nodeType(execution) === 'CallExpression'
@@ -16268,7 +18278,8 @@ const cloudflareReflectConstructTargetCandidates = (
   const constructions = cloudflareNormalizedMetaExecutions(
     { node: target, target: target.callee },
     context,
-    false
+    false,
+    seen
   ).filter(({ node: execution }) => nodeType(execution) === 'NewExpression');
   if (constructions.length === 0) return undefined;
   return constructions.flatMap(({ node: execution }) =>
@@ -17403,7 +19414,109 @@ const cloudflareImportedAggregateSource = (spread, context) => {
   return { importedName, source };
 };
 
-const cloudflareImportedAggregateTarget = (context, importedName, source) => {
+const calculateCloudflareClosedFreshObjectIifePrimitiveMembers = (
+  target,
+  context
+) => {
+  const call = unwrapCloudflareExecutionTarget(target);
+  const owner = unwrapCloudflareExecutionTarget(call?.callee);
+  if (
+    nodeType(call) !== 'CallExpression' ||
+    call.optional === true ||
+    call.arguments.length !== 1 ||
+    call.arguments.some((argument) => nodeType(argument) === 'SpreadElement') ||
+    nodeType(owner) !== 'FunctionExpression' ||
+    owner.id !== null ||
+    owner.async === true ||
+    owner.generator === true ||
+    owner.params.length !== 1 ||
+    nodeType(owner.params[0]) !== 'Identifier' ||
+    nodeType(owner.body) !== 'BlockStatement' ||
+    nodeType(call.arguments[0]) !== 'ObjectExpression' ||
+    call.arguments[0].properties.length !== 0
+  ) {
+    return undefined;
+  }
+  const [parameter] = owner.params;
+  const parameterBinding = artifactOwnerLexicalBinding(
+    parameter,
+    parameter.name,
+    context
+  );
+  if (!parameterBinding || !cloudflareParameterBinding(parameterBinding)) {
+    return undefined;
+  }
+  const statements = owner.body.body;
+  const returned = statements.at(-1);
+  const returnedIdentifier = unwrapCloudflareExecutionTarget(
+    returned?.argument
+  );
+  if (
+    statements.length < 2 ||
+    nodeType(returned) !== 'ReturnStatement' ||
+    nodeType(returnedIdentifier) !== 'Identifier' ||
+    returnedIdentifier.name !== parameter.name ||
+    artifactOwnerLexicalBinding(
+      returnedIdentifier,
+      returnedIdentifier.name,
+      context
+    )?.digestNode !== parameterBinding.digestNode
+  ) {
+    return undefined;
+  }
+  const members = new Map();
+  for (const statement of statements.slice(0, -1)) {
+    const assignment = statement.expression;
+    const receiver = unwrapCloudflareExecutionTarget(assignment?.left?.object);
+    const member = cloudflareMemberName(assignment?.left);
+    const value = cloudflareStaticValue(assignment?.right);
+    if (
+      nodeType(statement) !== 'ExpressionStatement' ||
+      nodeType(assignment) !== 'AssignmentExpression' ||
+      assignment.operator !== '=' ||
+      nodeType(assignment.left) !== 'MemberExpression' ||
+      assignment.left.optional === true ||
+      nodeType(receiver) !== 'Identifier' ||
+      receiver.name !== parameter.name ||
+      artifactOwnerLexicalBinding(receiver, receiver.name, context)
+        ?.digestNode !== parameterBinding.digestNode ||
+      member === undefined ||
+      member === '__proto__' ||
+      value === unknownCloudflareStaticValue ||
+      new Set(['function', 'object', 'symbol']).has(typeof value) ||
+      members.has(String(member))
+    ) {
+      return undefined;
+    }
+    members.set(String(member), assignment.right);
+  }
+  return members.size > 0 ? members : undefined;
+};
+
+const cloudflareClosedFreshObjectIifePrimitiveMemberCache = new WeakMap();
+
+const cloudflareClosedFreshObjectIifePrimitiveMembers = (target, context) => {
+  const unwrapped = unwrapCloudflareExecutionTarget(target);
+  const cached =
+    cloudflareClosedFreshObjectIifePrimitiveMemberCache.get(unwrapped);
+  if (cached !== undefined) return cached || undefined;
+  const members = calculateCloudflareClosedFreshObjectIifePrimitiveMembers(
+    unwrapped,
+    context
+  );
+  cloudflareClosedFreshObjectIifePrimitiveMemberCache.set(
+    unwrapped,
+    members ?? false
+  );
+  return members;
+};
+
+const calculateCloudflareImportedAggregateTarget = (
+  context,
+  importedName,
+  source,
+  { allowMemberReads = false } = {}
+) => {
   const ownerFile = path.resolve(path.dirname(context.chunkFile), source);
   if (!isWithinDirectory(ownerFile, context.artifactRoot)) return undefined;
   const manifestRecord = assertCloudflareChunkManifestMembership(
@@ -17421,28 +19534,102 @@ const cloudflareImportedAggregateTarget = (context, importedName, source) => {
       exportedLocal === localName ? [{ exportedName, statement }] : []
     )
   );
+  const ownerArtifactContext = {
+    artifactRoot: context.artifactRoot,
+    chunkFile: ownerFile,
+  };
+  const ownerContext = createCloudflareLexicalContext(
+    ownerProgram,
+    normalizeArtifactFile(context.artifactRoot, ownerFile)
+  );
+  ownerContext.artifactRoot = context.artifactRoot;
+  ownerContext.chunkFile = ownerFile;
+  const allowedEscapeNodes = new Set([
+    ...localExports.map(({ statement }) => statement),
+    ...cloudflareReviewedAggregateEscapeNodes(
+      ownerProgram,
+      localName,
+      ownerArtifactContext
+    ),
+  ]);
+  const target = resolveCloudflareTarget(
+    { name: localName, type: 'Identifier' },
+    ownerContext.topLevelBindings
+  );
+  const closedFreshObjectIife = cloudflareClosedFreshObjectIifePrimitiveMembers(
+    target,
+    ownerContext
+  );
   if (
     localExports.length === 0 ||
     localExports.some(({ exportedName }) => exportedName !== importedName) ||
-    !cloudflareReturnedOwnersAreUnmutated(
+    (!closedFreshObjectIife &&
+      !cloudflareReturnedOwnersAreUnmutated(
+        ownerProgram,
+        [localName],
+        ownerContext,
+        allowedEscapeNodes
+      )) ||
+    !cloudflareStaticAggregateBindingUsesAreReadOnly(
       ownerProgram,
-      [localName],
-      undefined,
-      new Set(localExports.map(({ statement }) => statement))
+      localName,
+      ownerArtifactContext,
+      {
+        allowMemberReads,
+        ignoredOwner: closedFreshObjectIife
+          ? unwrapCloudflareExecutionTarget(target.callee)
+          : undefined,
+      }
     ) ||
-    !cloudflareStaticAggregateBindingUsesAreReadOnly(ownerProgram, localName) ||
     !cloudflareStaticAggregateConsumersAreReadOnly(
       ownerFile,
       importedName,
-      manifestRecord
+      manifestRecord,
+      { allowMemberReads }
     )
   ) {
     return undefined;
   }
-  return resolveCloudflareTarget(
-    { name: localName, type: 'Identifier' },
-    cloudflareTopLevelBindings(ownerProgram)
-  );
+  return target;
+};
+
+const cloudflareImportedAggregateTarget = (
+  context,
+  importedName,
+  source,
+  { allowMemberReads = false } = {}
+) => {
+  const ownerFile = path.resolve(path.dirname(context.chunkFile), source);
+  if (
+    !isWithinDirectory(ownerFile, context.artifactRoot) ||
+    !fs.statSync(ownerFile, { throwIfNoEntry: false })?.isFile()
+  ) {
+    return undefined;
+  }
+  const cacheKey = JSON.stringify([
+    fs.realpathSync(context.artifactRoot),
+    fs.realpathSync(ownerFile),
+    importedName,
+    allowMemberReads,
+  ]);
+  const cached = cloudflareImportedAggregateTargetCache.get(cacheKey);
+  if (cached !== undefined) return cached || undefined;
+  if (cloudflareImportedAggregateTargetInProgress.has(cacheKey)) {
+    return undefined;
+  }
+  cloudflareImportedAggregateTargetInProgress.add(cacheKey);
+  try {
+    const target = calculateCloudflareImportedAggregateTarget(
+      context,
+      importedName,
+      source,
+      { allowMemberReads }
+    );
+    cloudflareImportedAggregateTargetCache.set(cacheKey, target ?? false);
+    return target;
+  } finally {
+    cloudflareImportedAggregateTargetInProgress.delete(cacheKey);
+  }
 };
 
 const cloudflareStaticMemberChain = (target) => {
@@ -17461,32 +19648,343 @@ const cloudflareStaticMemberChain = (target) => {
 
 const cloudflareStaticObjectMemberValue = (object, member) => {
   if (nodeType(object) !== 'ObjectExpression') return undefined;
+  if (
+    object.properties.some(
+      (property) =>
+        nodeType(property) !== 'Property' ||
+        property.kind !== 'init' ||
+        property.computed === true ||
+        propertyKeyName(property) === undefined ||
+        propertyKeyName(property) === '__proto__'
+    )
+  ) {
+    return undefined;
+  }
   const properties = object.properties.filter(
-    (property) =>
-      nodeType(property) === 'Property' &&
-      property.kind === 'init' &&
-      propertyKeyName(property) === member
+    (property) => propertyKeyName(property) === member
   );
   return properties.length === 1 ? properties[0].value : undefined;
 };
 
+const calculateCloudflareImportedStaticPrimitiveMemberCandidates = (
+  target,
+  context
+) => {
+  if (!context.artifactRoot || !context.chunkFile) return undefined;
+  const chain = cloudflareStaticMemberChain(target);
+  if (
+    !chain ||
+    chain.members.length === 0 ||
+    chain.members.some((member) => member === '__proto__') ||
+    artifactOwnerLexicalBinding(target, chain.base.name, context)
+  ) {
+    return undefined;
+  }
+  const imports = staticImportsForBinding(context.program, chain.base.name);
+  if (imports.length !== 1) return undefined;
+  const [{ importedName, source }] = imports;
+  if (source?.startsWith('./') !== true) return undefined;
+  const ownerFile = path.resolve(path.dirname(context.chunkFile), source);
+  if (!isWithinDirectory(ownerFile, context.artifactRoot)) return undefined;
+  const aggregate = cloudflareImportedAggregateTarget(
+    context,
+    importedName,
+    source,
+    { allowMemberReads: true }
+  );
+  if (!aggregate) return undefined;
+  const ownerProgram = readParsedModule(ownerFile).program;
+  const ownerContext = createCloudflareLexicalContext(
+    ownerProgram,
+    normalizeArtifactFile(context.artifactRoot, ownerFile)
+  );
+  ownerContext.artifactRoot = context.artifactRoot;
+  ownerContext.chunkFile = ownerFile;
+  let value = aggregate;
+  const enumMembers = cloudflareClosedFreshObjectIifePrimitiveMembers(
+    aggregate,
+    ownerContext
+  );
+  if (enumMembers) {
+    if (
+      chain.members.length !== 1 ||
+      cloudflareTopLevelObjectMutationBefore({ ownerContext }, aggregate)
+    ) {
+      return undefined;
+    }
+    value = enumMembers.get(String(chain.members[0]));
+  } else {
+    for (const member of chain.members) {
+      value = cloudflareStaticObjectMemberValue(value, member);
+      if (!value) return undefined;
+    }
+  }
+  const staticValue = cloudflareStaticValue(value);
+  if (
+    staticValue === unknownCloudflareStaticValue ||
+    new Set(['function', 'object', 'symbol']).has(typeof staticValue)
+  ) {
+    return undefined;
+  }
+  return [{ target: value }];
+};
+
+const cloudflareImportedStaticPrimitiveMemberCandidates = (
+  _node,
+  target,
+  context
+) => {
+  if (!context.artifactRoot || !context.chunkFile) return undefined;
+  const chain = cloudflareStaticMemberChain(target);
+  if (!chain || chain.members.length === 0) return undefined;
+  const imports = staticImportsForBinding(context.program, chain.base.name);
+  if (imports.length !== 1 || imports[0].source?.startsWith('./') !== true) {
+    return undefined;
+  }
+  const ownerFile = path.resolve(
+    path.dirname(context.chunkFile),
+    imports[0].source
+  );
+  if (
+    !isWithinDirectory(ownerFile, context.artifactRoot) ||
+    !fs.statSync(ownerFile, { throwIfNoEntry: false })?.isFile()
+  ) {
+    return undefined;
+  }
+  const cacheKey = JSON.stringify([
+    fs.realpathSync(context.artifactRoot),
+    fs.realpathSync(ownerFile),
+    imports[0].importedName,
+    chain.members.map(String),
+  ]);
+  const cached = cloudflareImportedStaticPrimitiveMemberCache.get(cacheKey);
+  if (cached !== undefined) return cached || undefined;
+  if (cloudflareImportedStaticPrimitiveMemberInProgress.has(cacheKey)) {
+    return undefined;
+  }
+  cloudflareImportedStaticPrimitiveMemberInProgress.add(cacheKey);
+  try {
+    const candidates =
+      calculateCloudflareImportedStaticPrimitiveMemberCandidates(
+        target,
+        context
+      );
+    cloudflareImportedStaticPrimitiveMemberCache.set(
+      cacheKey,
+      candidates ?? false
+    );
+    return candidates;
+  } finally {
+    cloudflareImportedStaticPrimitiveMemberInProgress.delete(cacheKey);
+  }
+};
+
+const cloudflareReviewedAggregateSinkCallCache = new WeakMap();
+
+const cloudflareReviewedAggregateSinkCall = (
+  property,
+  program,
+  artifactContext
+) => {
+  const cached = cloudflareReviewedAggregateSinkCallCache.get(property);
+  if (cached !== undefined) return cached || undefined;
+  const reject = () => {
+    cloudflareReviewedAggregateSinkCallCache.set(property, false);
+    return undefined;
+  };
+  if (
+    nodeType(property) !== 'Property' ||
+    property.kind !== 'init' ||
+    property.computed === true ||
+    property.shorthand === true ||
+    !artifactContext?.artifactRoot ||
+    !artifactContext.chunkFile
+  ) {
+    return reject();
+  }
+  const parentNodes = createAstParentMap(program);
+  const object = parentNodes.get(property);
+  const call = parentNodes.get(object);
+  if (
+    nodeType(object) !== 'ObjectExpression' ||
+    nodeType(call) !== 'CallExpression' ||
+    nodeType(call.callee) !== 'Identifier' ||
+    object.properties.some((candidate) => nodeType(candidate) !== 'Property') ||
+    object.properties.filter(
+      (candidate) => propertyKeyName(candidate) === propertyKeyName(property)
+    ).length !== 1
+  ) {
+    return reject();
+  }
+  const analysisLabel = normalizeArtifactFile(
+    artifactContext.artifactRoot,
+    artifactContext.chunkFile
+  );
+  const context = createCloudflareLexicalContext(program, analysisLabel);
+  context.artifactRoot = artifactContext.artifactRoot;
+  context.chunkFile = artifactContext.chunkFile;
+  if (artifactOwnerLexicalBinding(call, call.callee.name, context)) {
+    return reject();
+  }
+  const invocation = directImportedCloudflareInvocation(
+    program,
+    call.callee,
+    context.topLevelBindings,
+    context
+  );
+  if (
+    invocation?.importKind !== 'named' ||
+    typeof invocation.source !== 'string' ||
+    !invocation.source.startsWith('.')
+  ) {
+    return reject();
+  }
+  const ownerFile = path.resolve(
+    path.dirname(artifactContext.chunkFile),
+    invocation.source
+  );
+  if (!isWithinDirectory(ownerFile, artifactContext.artifactRoot)) {
+    return reject();
+  }
+  const ownerRecord = assertCloudflareChunkManifestMembership(
+    artifactContext.artifactRoot,
+    ownerFile,
+    'reviewed aggregate read-only sink owner'
+  );
+  const provenance = cloudflareManifestChunkRecord(
+    ownerRecord.key,
+    ownerRecord
+  );
+  const ownerProgram = readParsedModule(ownerFile).program;
+  const reviewedClosure =
+    cloudflareReviewedClosureByProgram.get(ownerProgram) ??
+    registerReviewedCloudflareClosure(
+      ownerProgram,
+      ownerRecord.entry.file,
+      provenance
+    );
+  const localName = new Map(ownerProgram.body.flatMap(moduleExportEntries)).get(
+    invocation.importedName
+  );
+  const policies =
+    reviewedClosure?.exportedAggregateReadOnlySinks?.filter(
+      (policy) =>
+        policy.exportedLocalName === localName &&
+        policy.exportedName === invocation.importedName &&
+        policy.propertyName === propertyKeyName(property) &&
+        call.arguments[policy.exportedParameterIndex] === object
+    ) ?? [];
+  if (policies.length !== 1) return reject();
+  cloudflareReviewedAggregateSinkCallCache.set(property, call);
+  return call;
+};
+
+const cloudflareReviewedAggregateEscapeNodes = (
+  program,
+  localName,
+  artifactContext
+) => {
+  const escapeNodes = new Set();
+  const parentNodes = createAstParentMap(program);
+  new Visitor({
+    Identifier(identifier) {
+      if (identifier.name !== localName) return;
+      const property = parentNodes.get(identifier);
+      if (nodeType(property) !== 'Property' || property.value !== identifier) {
+        return;
+      }
+      const call = cloudflareReviewedAggregateSinkCall(
+        property,
+        program,
+        artifactContext
+      );
+      if (call) escapeNodes.add(call);
+    },
+  }).visit(program);
+  return escapeNodes;
+};
+
 const cloudflareStaticAggregateBindingUsesAreReadOnly = (
   program,
-  localName
+  localName,
+  artifactContext,
+  {
+    allowLocalExport = true,
+    allowMemberCalls = false,
+    allowMemberReads = false,
+    allowSpreads = true,
+    allowKeyReads = false,
+    allowedMemberCallPaths = [],
+    ignoredOwner,
+  } = {}
 ) => {
   const parentNodes = createAstParentMap(program);
+  const context = createCloudflareLexicalContext(
+    program,
+    artifactContext?.chunkFile ?? 'static-aggregate-read-only-analysis'
+  );
+  context.artifactRoot = artifactContext?.artifactRoot;
+  context.chunkFile = artifactContext?.chunkFile;
+  const declarations = [];
+  new Visitor({
+    Identifier(identifier) {
+      if (identifier.name !== localName) return;
+      const parent = parentNodes.get(identifier);
+      if (
+        (nodeType(parent) === 'VariableDeclarator' &&
+          parent.id === identifier) ||
+        (new Set(['ImportDefaultSpecifier', 'ImportSpecifier']).has(
+          nodeType(parent)
+        ) &&
+          parent.local === identifier)
+      ) {
+        declarations.push(identifier);
+      }
+    },
+  }).visit(program);
+  if (declarations.length !== 1) return false;
+  const [declaration] = declarations;
+  const declarationParent = parentNodes.get(declaration);
+  const importedDeclaration = new Set([
+    'ImportDefaultSpecifier',
+    'ImportSpecifier',
+  ]).has(nodeType(declarationParent));
+  const expectedBinding = importedDeclaration
+    ? undefined
+    : artifactOwnerLexicalBinding(declaration, localName, context);
   let safe = true;
   new Visitor({
     Identifier(identifier) {
       if (!safe || identifier.name !== localName) return;
+      if (
+        ignoredOwner &&
+        cloudflareFunctionOwnerAt(identifier, context) === ignoredOwner
+      ) {
+        return;
+      }
       const parent = parentNodes.get(identifier);
+      const binding = artifactOwnerLexicalBinding(
+        identifier,
+        localName,
+        context
+      );
+      if (
+        importedDeclaration
+          ? binding !== undefined
+          : binding !== undefined &&
+            binding.digestNode !==
+              (expectedBinding?.digestNode ?? declarationParent)
+      ) {
+        return;
+      }
       if (
         nodeType(parent) === 'ImportSpecifier' ||
-        nodeType(parent) === 'ExportSpecifier' ||
+        nodeType(parent) === 'ImportDefaultSpecifier' ||
         (nodeType(parent) === 'VariableDeclarator' && parent.id === identifier)
       ) {
         return;
       }
+      if (nodeType(parent) === 'ExportSpecifier' && allowLocalExport) return;
       if (
         (nodeType(parent) === 'MemberExpression' ||
           nodeType(parent) === 'Property') &&
@@ -17494,6 +19992,27 @@ const cloudflareStaticAggregateBindingUsesAreReadOnly = (
         parent.computed !== true &&
         parent.shorthand !== true
       ) {
+        return;
+      }
+      if (
+        nodeType(parent) === 'Property' &&
+        parent.value === identifier &&
+        cloudflareReviewedAggregateSinkCall(parent, program, artifactContext)
+      ) {
+        return;
+      }
+      if (allowKeyReads) {
+        safe = ![
+          nodeType(parent) === 'AssignmentExpression' &&
+            parent.left === identifier,
+          nodeType(parent) === 'UpdateExpression' &&
+            parent.argument === identifier,
+          nodeType(parent) === 'UnaryExpression' &&
+            parent.operator === 'delete' &&
+            parent.argument === identifier,
+          nodeType(parent) === 'ForInStatement' && parent.left === identifier,
+          nodeType(parent) === 'ForOfStatement' && parent.left === identifier,
+        ].some(Boolean);
         return;
       }
       let current = identifier;
@@ -17506,14 +20025,176 @@ const cloudflareStaticAggregateBindingUsesAreReadOnly = (
         current = container;
         container = parentNodes.get(current);
       }
+      if (allowMemberReads && current !== identifier) {
+        safe = ![
+          nodeType(container) === 'AssignmentExpression' &&
+            container.left === current,
+          nodeType(container) === 'UpdateExpression' &&
+            container.argument === current,
+          nodeType(container) === 'UnaryExpression' &&
+            container.operator === 'delete' &&
+            container.argument === current,
+          nodeType(container) === 'ForInStatement' &&
+            container.left === current,
+          nodeType(container) === 'ForOfStatement' &&
+            container.left === current,
+          !allowMemberCalls &&
+            (nodeType(container) === 'CallExpression' ||
+              nodeType(container) === 'NewExpression') &&
+            container.callee === current,
+        ].some(Boolean);
+        return;
+      }
+      const memberCallPath =
+        allowMemberCalls &&
+        nodeType(container) === 'CallExpression' &&
+        container.callee === current
+          ? cloudflareStaticMemberChain(current)
+          : undefined;
+      const reviewedMemberCall =
+        memberCallPath?.base.name === localName &&
+        allowedMemberCallPaths.some(
+          (path) =>
+            JSON.stringify(path) === JSON.stringify(memberCallPath.members)
+        );
       safe =
-        (nodeType(container) === 'CallExpression' &&
-          container.callee === current) ||
-        (nodeType(container) === 'SpreadElement' &&
+        reviewedMemberCall ||
+        (allowSpreads &&
+          nodeType(container) === 'SpreadElement' &&
           container.argument === current);
     },
   }).visit(program);
   return safe;
+};
+
+const cloudflareStaticSymbolKeyName = (anchor, target, context) => {
+  const call = unwrapCloudflareExecutionTarget(target);
+  const callee = unwrapCloudflareExecutionTarget(call?.callee);
+  if (
+    nodeType(call) !== 'CallExpression' ||
+    call.optional === true ||
+    call.arguments.length !== 1 ||
+    nodeType(call.arguments[0]) !== 'Literal' ||
+    typeof call.arguments[0].value !== 'string' ||
+    nodeType(callee) !== 'MemberExpression' ||
+    callee.optional === true ||
+    cloudflareMemberName(callee) !== 'for' ||
+    cloudflareUnshadowedIntrinsicOwner(anchor, callee.object, context) !==
+      'Symbol'
+  ) {
+    return undefined;
+  }
+  return `\0symbol-for:${JSON.stringify(call.arguments[0].value)}`;
+};
+
+const calculateCloudflareImportedStaticSymbolKeyName = (
+  anchor,
+  key,
+  context
+) => {
+  if (
+    nodeType(key) !== 'Identifier' ||
+    !context.artifactRoot ||
+    !context.chunkFile ||
+    artifactOwnerLexicalBinding(anchor, key.name, context)
+  ) {
+    return undefined;
+  }
+  const imports = staticImportsForBinding(context.program, key.name);
+  if (imports.length !== 1) return undefined;
+  const [{ importedName, source }] = imports;
+  if (source?.startsWith('./') !== true) return undefined;
+  const ownerFile = path.resolve(path.dirname(context.chunkFile), source);
+  if (!isWithinDirectory(ownerFile, context.artifactRoot)) return undefined;
+  const manifestRecord = assertCloudflareChunkManifestMembership(
+    context.artifactRoot,
+    ownerFile,
+    'static imported symbol key owner'
+  );
+  cloudflareManifestChunkRecord(manifestRecord.key, manifestRecord);
+  const ownerProgram = readParsedModule(ownerFile).program;
+  const localName = new Map(ownerProgram.body.flatMap(moduleExportEntries)).get(
+    importedName
+  );
+  if (typeof localName !== 'string') return undefined;
+  const localExports = ownerProgram.body.flatMap((statement) =>
+    moduleExportEntries(statement).flatMap(([exportedName, exportedLocal]) =>
+      exportedLocal === localName ? [{ exportedName, statement }] : []
+    )
+  );
+  if (
+    localExports.length !== 1 ||
+    localExports[0].exportedName !== importedName
+  ) {
+    return undefined;
+  }
+  const ownerContext = createCloudflareLexicalContext(
+    ownerProgram,
+    normalizeArtifactFile(context.artifactRoot, ownerFile)
+  );
+  ownerContext.artifactRoot = context.artifactRoot;
+  ownerContext.chunkFile = ownerFile;
+  if (
+    !cloudflareStaticAggregateBindingUsesAreReadOnly(
+      ownerProgram,
+      localName,
+      { artifactRoot: context.artifactRoot, chunkFile: ownerFile },
+      { allowKeyReads: true }
+    )
+  ) {
+    return undefined;
+  }
+  const target = resolveCloudflareTarget(
+    { name: localName, type: 'Identifier' },
+    ownerContext.topLevelBindings
+  );
+  return cloudflareStaticSymbolKeyName(target, target, ownerContext);
+};
+
+const cloudflareImportedStaticSymbolKeyName = (anchor, key, context) => {
+  if (
+    nodeType(key) !== 'Identifier' ||
+    !context.artifactRoot ||
+    !context.chunkFile
+  ) {
+    return undefined;
+  }
+  const imports = staticImportsForBinding(context.program, key.name);
+  if (imports.length !== 1 || imports[0].source?.startsWith('./') !== true) {
+    return undefined;
+  }
+  const ownerFile = path.resolve(
+    path.dirname(context.chunkFile),
+    imports[0].source
+  );
+  if (
+    !isWithinDirectory(ownerFile, context.artifactRoot) ||
+    !fs.statSync(ownerFile, { throwIfNoEntry: false })?.isFile()
+  ) {
+    return undefined;
+  }
+  const cacheKey = JSON.stringify([
+    fs.realpathSync(context.artifactRoot),
+    fs.realpathSync(ownerFile),
+    imports[0].importedName,
+  ]);
+  const cached = cloudflareImportedStaticSymbolKeyCache.get(cacheKey);
+  if (cached !== undefined) return cached || undefined;
+  if (cloudflareImportedStaticSymbolKeyInProgress.has(cacheKey)) {
+    return undefined;
+  }
+  cloudflareImportedStaticSymbolKeyInProgress.add(cacheKey);
+  try {
+    const name = calculateCloudflareImportedStaticSymbolKeyName(
+      anchor,
+      key,
+      context
+    );
+    cloudflareImportedStaticSymbolKeyCache.set(cacheKey, name ?? false);
+    return name;
+  } finally {
+    cloudflareImportedStaticSymbolKeyInProgress.delete(cacheKey);
+  }
 };
 
 const cloudflareStaticAggregateImportOwner = (
@@ -17529,87 +20210,1469 @@ const cloudflareStaticAggregateImportOwner = (
   return fs.realpathSync(resolved);
 };
 
+const cloudflareReviewedExportMutationPlanCache = new WeakMap();
+const cloudflareReviewedExportConsumerProofCache = new WeakMap();
+const cloudflareReviewedExportConsumerProofInProgress = new WeakSet();
+
+const cloudflareReviewedExportMutationPolicy = (owner, context) => {
+  const localName = identifierName(owner?.id);
+  if (nodeType(owner) !== 'FunctionDeclaration' || !localName) {
+    return undefined;
+  }
+  const matches =
+    cloudflareReviewedClosureForContext(
+      context
+    )?.exportedReceiverMutationSummaries?.filter(
+      (policy) => policy.exportedLocalName === localName
+    ) ?? [];
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+const cloudflareReviewedExportMutationPlan = (owner, context) => {
+  const cached = cloudflareReviewedExportMutationPlanCache.get(owner);
+  if (cached !== undefined) return cached || undefined;
+  const policy = cloudflareReviewedExportMutationPolicy(owner, context);
+  if (!policy) {
+    cloudflareReviewedExportMutationPlanCache.set(owner, false);
+    return undefined;
+  }
+  const parameter = owner.params[policy.exportedParameterIndex];
+  const localName = identifierName(owner.id);
+  const localBinding = artifactOwnerLexicalBinding(
+    owner.id,
+    localName,
+    context
+  );
+  const matchingExportSpecifiers = context.program.body.flatMap((statement) =>
+    nodeType(statement) === 'ExportNamedDeclaration' && !statement.source
+      ? statement.specifiers.filter(
+          (specifier) =>
+            identifierName(specifier.local) === localName &&
+            (identifierName(specifier.exported) ??
+              literalString(specifier.exported)) === policy.exportedName
+        )
+      : []
+  );
+  const allLocalExports = context.program.body
+    .flatMap(moduleExportEntries)
+    .filter(([, exportedLocalName]) => exportedLocalName === localName);
+  const summary = cloudflareLocalReceiverMutations(owner, context);
+  const directAssignments = [];
+  let unsupportedReceiverMutation = false;
+  const parameterBinding =
+    nodeType(parameter) === 'Identifier'
+      ? artifactOwnerLexicalBinding(parameter, parameter.name, context)
+      : undefined;
+  new Visitor({
+    AssignmentExpression(assignment) {
+      const root = mutationRootName(assignment.left);
+      if (root !== parameter?.name) return;
+      const receiverRoot = (() => {
+        let current = assignment.left;
+        while (nodeType(current) === 'MemberExpression') {
+          current = unwrapCloudflareExecutionTarget(current.object);
+        }
+        return current;
+      })();
+      const binding =
+        nodeType(receiverRoot) === 'Identifier'
+          ? artifactOwnerLexicalBinding(
+              receiverRoot,
+              receiverRoot.name,
+              context
+            )
+          : undefined;
+      if (binding?.digestNode !== parameterBinding?.digestNode) return;
+      if (
+        assignment.operator !== '=' ||
+        nodeType(assignment.left) !== 'MemberExpression'
+      ) {
+        unsupportedReceiverMutation = true;
+        return;
+      }
+      directAssignments.push(assignment);
+    },
+    UnaryExpression(expression) {
+      if (
+        expression.operator === 'delete' &&
+        mutationRootName(expression.argument) === parameter?.name
+      ) {
+        unsupportedReceiverMutation = true;
+      }
+    },
+    UpdateExpression(expression) {
+      if (mutationRootName(expression.argument) === parameter?.name) {
+        unsupportedReceiverMutation = true;
+      }
+    },
+  }).visit(owner);
+  const mutationMembers = summary.mutations.map(({ member }) => member);
+  const expectedMembers = [...policy.expectedMutationMembers].toSorted(
+    compareCodePointStrings
+  );
+  const actualMembers = mutationMembers
+    .filter((member) => typeof member === 'string')
+    .toSorted(compareCodePointStrings);
+  const eligible =
+    nodeType(parameter) === 'Identifier' &&
+    Boolean(localBinding) &&
+    cloudflareBindingValueMutations(localBinding, localName, context).length ===
+      0 &&
+    matchingExportSpecifiers.length === 1 &&
+    allLocalExports.length === 1 &&
+    allLocalExports[0][0] === policy.exportedName &&
+    Boolean(parameterBinding) &&
+    cloudflareLocalParameterHasOnlyReceiverUses(
+      owner,
+      parameter,
+      context,
+      new Set()
+    ) &&
+    !unsupportedReceiverMutation &&
+    directAssignments.length === policy.expectedMutationMembers.length &&
+    summary.complete === true &&
+    summary.mutations.length === policy.expectedMutationMembers.length &&
+    summary.mutations.every(
+      ({ anchor, projection }) =>
+        nodeType(anchor) === 'AssignmentExpression' &&
+        anchor.operator === '=' &&
+        projection.owner === owner &&
+        projection.entry.index === policy.exportedParameterIndex &&
+        projection.path.length === 0 &&
+        projection.receiverPath.length === 0
+    ) &&
+    exactSortedValues(actualMembers, expectedMembers);
+  const plan = eligible
+    ? {
+        allowedOwnerReferences: new Set([
+          owner.id,
+          matchingExportSpecifiers[0].local,
+        ]),
+        exportedName: policy.exportedName,
+        expectedConsumerCount: policy.expectedConsumerCount,
+        localBinding,
+        localName,
+        mutationKeys: new Set(
+          summary.mutations.map(({ anchor }) =>
+            cloudflareNodeSemanticKey(anchor)
+          )
+        ),
+        mutations: summary.mutations.map(({ member }) => ({ member })),
+        parameterIndex: policy.exportedParameterIndex,
+      }
+    : false;
+  cloudflareReviewedExportMutationPlanCache.set(owner, plan);
+  return plan || undefined;
+};
+
+export const inspectCloudflareReviewedExportMutationPlanForTesting = (
+  source,
+  policy
+) => {
+  const program = parseModuleSource(
+    'reviewed-export-mutation-plan.fixture.js',
+    source
+  ).program;
+  const reviewedClosure = { exportedReceiverMutationSummaries: [policy] };
+  assertCloudflareReviewedPolicy(program, reviewedClosure);
+  cloudflareReviewedClosureByProgram.set(program, reviewedClosure);
+  const context = createCloudflareLexicalContext(
+    program,
+    'reviewed-export-mutation-plan.fixture.js'
+  );
+  const owner = resolveCloudflareTarget(
+    { name: policy.exportedLocalName, type: 'Identifier' },
+    context.topLevelBindings
+  );
+  assert(
+    isCloudflareFunctionNode(owner),
+    'reviewed export mutation plan fixture must define its owner'
+  );
+  const summary = cloudflareLocalReceiverMutations(owner, context);
+  return {
+    eligible: Boolean(cloudflareReviewedExportMutationPlan(owner, context)),
+    mutationMembers: summary.mutations.map(({ member }) => member),
+    mutationPaths: summary.mutations.map(({ projection }) => projection.path),
+    summaryComplete: summary.complete,
+  };
+};
+
+const cloudflareReviewedPlainObjectAllocation = (expression) =>
+  nodeType(expression) === 'ObjectExpression' &&
+  expression.properties.every((property) => {
+    if (nodeType(property) === 'SpreadElement') return true;
+    if (
+      nodeType(property) !== 'Property' ||
+      property.kind !== 'init' ||
+      property.method === true
+    ) {
+      return false;
+    }
+    const key = identifierName(property.key) ?? literalString(property.key);
+    return property.computed === true || key !== '__proto__';
+  });
+
+const cloudflareReviewedFreshExportReceiverDetails = (
+  call,
+  parameterIndex,
+  context
+) => {
+  const noOptionalOrSpread =
+    call.optional !== true &&
+    !call.arguments.some((argument) => nodeType(argument) === 'SpreadElement');
+  if (!noOptionalOrSpread) {
+    return { eligible: false, noOptionalOrSpread };
+  }
+  const argument = unwrapCloudflareExecutionTarget(
+    call.arguments[parameterIndex]
+  );
+  if (cloudflareReviewedPlainObjectAllocation(argument)) {
+    return {
+      eligible: true,
+      noOptionalOrSpread,
+      sourceType: nodeType(argument),
+    };
+  }
+  if (nodeType(argument) !== 'Identifier') {
+    return {
+      argumentType: nodeType(argument),
+      eligible: false,
+      noOptionalOrSpread,
+    };
+  }
+  const binding = artifactOwnerLexicalBinding(argument, argument.name, context);
+  const initializer = binding?.digestNode?.init;
+  const callOwner = cloudflareFunctionOwnerAt(call, context) ?? context.program;
+  let receiverUsesAreOrdered = Boolean(binding);
+  if (receiverUsesAreOrdered) {
+    new Visitor({
+      Identifier(identifier) {
+        if (!receiverUsesAreOrdered || identifier.name !== argument.name) {
+          return;
+        }
+        if (identifier === argument || identifier === binding.digestNode.id) {
+          return;
+        }
+        const identifierBinding = artifactOwnerLexicalBinding(
+          identifier,
+          identifier.name,
+          context
+        );
+        if (identifierBinding?.digestNode !== binding.digestNode) return;
+        if (
+          (cloudflareFunctionOwnerAt(identifier, context) ??
+            context.program) !== callOwner
+        ) {
+          receiverUsesAreOrdered = false;
+          return;
+        }
+        if (identifier.start >= call.end) return;
+        const member = context.parentNodes.get(identifier);
+        const assignment = context.parentNodes.get(member);
+        const safeDirectDataWrite =
+          nodeType(member) === 'MemberExpression' &&
+          member.object === identifier &&
+          member.computed === false &&
+          cloudflareMemberName(member) !== '__proto__' &&
+          nodeType(assignment) === 'AssignmentExpression' &&
+          assignment.left === member &&
+          assignment.operator === '=';
+        if (!safeDirectDataWrite) {
+          receiverUsesAreOrdered = false;
+        }
+      },
+    }).visit(context.program);
+  }
+  const details = {
+    bindingMutationCount: binding
+      ? cloudflareBindingValueMutations(binding, argument.name, context).length
+      : undefined,
+    bindingType: nodeType(binding?.digestNode),
+    declarationIdentifier:
+      nodeType(binding?.digestNode?.id) === 'Identifier' &&
+      binding.digestNode.id.name === argument.name,
+    declaredBeforeCall: binding?.digestNode?.start < call.start,
+    initializerType: nodeType(unwrapCloudflareExecutionTarget(initializer)),
+    noOptionalOrSpread,
+    plainObjectAllocation: cloudflareReviewedPlainObjectAllocation(
+      unwrapCloudflareExecutionTarget(initializer)
+    ),
+    receiverUsesAreOrdered,
+  };
+  return {
+    ...details,
+    eligible:
+      details.bindingType === 'VariableDeclarator' &&
+      details.declarationIdentifier === true &&
+      details.declaredBeforeCall === true &&
+      details.plainObjectAllocation === true &&
+      details.bindingMutationCount === 0 &&
+      details.receiverUsesAreOrdered === true,
+  };
+};
+
+const cloudflareReviewedFreshExportReceiver = (call, parameterIndex, context) =>
+  cloudflareReviewedFreshExportReceiverDetails(call, parameterIndex, context)
+    .eligible;
+
+export const inspectCloudflareReviewedFreshExportReceiversForTesting = (
+  source,
+  localName,
+  parameterIndex
+) => {
+  const program = parseModuleSource(
+    'reviewed-fresh-export-receivers.fixture.js',
+    source
+  ).program;
+  const context = createCloudflareLexicalContext(
+    program,
+    'reviewed-fresh-export-receivers.fixture.js'
+  );
+  const details = [];
+  new Visitor({
+    CallExpression(call) {
+      if (identifierName(call.callee) !== localName) return;
+      details.push(
+        cloudflareReviewedFreshExportReceiverDetails(
+          call,
+          parameterIndex,
+          context
+        )
+      );
+    },
+  }).visit(program);
+  return details;
+};
+
+const cloudflareReviewedDirectBindingCalls = (
+  program,
+  bindingNode,
+  localName,
+  allowedReferences,
+  parameterIndex,
+  context
+) => {
+  const expectedBinding = artifactOwnerLexicalBinding(
+    bindingNode,
+    localName,
+    context
+  );
+  const importedBinding =
+    nodeType(context.parentNodes.get(bindingNode)) === 'ImportSpecifier';
+  if (!expectedBinding && !importedBinding) return undefined;
+  const calls = [];
+  let complete = true;
+  new Visitor({
+    Identifier(identifier) {
+      if (!complete || identifier.name !== localName) return;
+      if (allowedReferences.has(identifier)) return;
+      const binding = artifactOwnerLexicalBinding(
+        identifier,
+        localName,
+        context
+      );
+      if (
+        importedBinding
+          ? binding !== undefined
+          : binding?.digestNode !== expectedBinding.digestNode
+      ) {
+        return;
+      }
+      const parent = context.parentNodes.get(identifier);
+      if (
+        nodeType(parent) !== 'CallExpression' ||
+        parent.callee !== identifier ||
+        !cloudflareReviewedFreshExportReceiver(parent, parameterIndex, context)
+      ) {
+        context.reviewedDirectBindingFailure = {
+          identifierEnd: identifier.end,
+          identifierStart: identifier.start,
+          parentType: nodeType(parent),
+        };
+        complete = false;
+        return;
+      }
+      calls.push(parent);
+    },
+  }).visit(program);
+  return complete ? calls : undefined;
+};
+
+export const inspectCloudflareReviewedExportConsumerProofForTesting = (
+  ownerSource,
+  consumerSources,
+  policy
+) => {
+  const ownerProgram = parseModuleSource(
+    'reviewed-export-consumer-owner.fixture.js',
+    ownerSource
+  ).program;
+  const reviewedClosure = { exportedReceiverMutationSummaries: [policy] };
+  assertCloudflareReviewedPolicy(ownerProgram, reviewedClosure);
+  cloudflareReviewedClosureByProgram.set(ownerProgram, reviewedClosure);
+  const ownerContext = createCloudflareLexicalContext(
+    ownerProgram,
+    'reviewed-export-consumer-owner.fixture.js'
+  );
+  const owner = resolveCloudflareTarget(
+    { name: policy.exportedLocalName, type: 'Identifier' },
+    ownerContext.topLevelBindings
+  );
+  if (!isCloudflareFunctionNode(owner))
+    return { complete: false, reason: 'owner' };
+  const plan = cloudflareReviewedExportMutationPlan(owner, ownerContext);
+  if (!plan) return { complete: false, reason: 'plan' };
+  const mutationMembers = plan.mutations.map(({ member }) => member);
+  if (
+    !cloudflareReviewedObjectPrototypeWritesAreAbsent(
+      ownerProgram,
+      ownerContext,
+      mutationMembers
+    )
+  ) {
+    return { complete: false, reason: 'owner-object-prototype' };
+  }
+  const ownerCalls = cloudflareReviewedDirectBindingCalls(
+    ownerProgram,
+    owner.id,
+    plan.localName,
+    plan.allowedOwnerReferences,
+    plan.parameterIndex,
+    ownerContext
+  );
+  if (!ownerCalls) return { complete: false, reason: 'owner-calls' };
+  let consumerCount = ownerCalls.length;
+  const counts = [ownerCalls.length];
+  for (const [index, source] of consumerSources.entries()) {
+    const program = parseModuleSource(
+      `reviewed-export-consumer-${String(index)}.fixture.js`,
+      source
+    ).program;
+    const context = createCloudflareLexicalContext(
+      program,
+      `reviewed-export-consumer-${String(index)}.fixture.js`
+    );
+    if (
+      !cloudflareReviewedObjectPrototypeWritesAreAbsent(
+        program,
+        context,
+        mutationMembers
+      )
+    ) {
+      return {
+        complete: false,
+        reason: `consumer-${String(index)}-object-prototype`,
+      };
+    }
+    const targetSpecifiers = program.body.flatMap((statement) =>
+      nodeType(statement) === 'ImportDeclaration'
+        ? statement.specifiers.filter(
+            (specifier) =>
+              nodeType(specifier) === 'ImportSpecifier' &&
+              (identifierName(specifier.imported) ??
+                literalString(specifier.imported)) === plan.exportedName
+          )
+        : []
+    );
+    if (targetSpecifiers.length !== 1) {
+      return { complete: false, reason: `consumer-${String(index)}-imports` };
+    }
+    const specifier = targetSpecifiers[0];
+    const localName = identifierName(specifier.local);
+    const calls = localName
+      ? cloudflareReviewedDirectBindingCalls(
+          program,
+          specifier.local,
+          localName,
+          new Set([specifier.imported, specifier.local]),
+          plan.parameterIndex,
+          context
+        )
+      : undefined;
+    if (!calls) {
+      return {
+        complete: false,
+        diagnostic: context.reviewedDirectBindingFailure,
+        reason: `consumer-${String(index)}-calls`,
+      };
+    }
+    consumerCount += calls.length;
+    counts.push(calls.length);
+  }
+  return {
+    complete: consumerCount === plan.expectedConsumerCount,
+    consumerCount,
+    counts,
+    reason: consumerCount === plan.expectedConsumerCount ? undefined : 'count',
+  };
+};
+
+const cloudflareReviewedArtifactDependencyFiles = (
+  program,
+  consumerFile,
+  artifactRoot,
+  sources
+) => {
+  const files = [];
+  for (const source of sources(program)) {
+    if (typeof source !== 'string') return undefined;
+    if (!source.startsWith('.')) continue;
+    const resolved = path.resolve(path.dirname(consumerFile), source);
+    if (
+      !isWithinDirectory(resolved, artifactRoot) ||
+      !fs.existsSync(resolved)
+    ) {
+      return undefined;
+    }
+    files.push(normalizeArtifactFile(artifactRoot, fs.realpathSync(resolved)));
+  }
+  return [...new Set(files)].toSorted(compareCodePointStrings);
+};
+
+const cloudflareReviewedDynamicDependencySources = (program, context) =>
+  cloudflareDynamicImportNodes(program).map((node) => {
+    const direct = literalString(node.source);
+    if (direct !== undefined) return direct;
+    const source = unwrapCloudflareExecutionTarget(node.source);
+    if (nodeType(source) !== 'Identifier') return undefined;
+    const binding = artifactOwnerLexicalBinding(source, source.name, context);
+    const declarator = binding?.digestNode;
+    const declaration = context.parentNodes.get(declarator);
+    if (
+      nodeType(declarator) !== 'VariableDeclarator' ||
+      nodeType(declaration) !== 'VariableDeclaration' ||
+      declaration.kind !== 'const' ||
+      declarator.start >= source.start ||
+      cloudflareBindingValueMutations(binding, source.name, context).length !==
+        0
+    ) {
+      return undefined;
+    }
+    return literalString(unwrapCloudflareExecutionTarget(declarator.init));
+  });
+
+const cloudflareReviewedObjectPrototypeWritesAreAbsent = (
+  program,
+  context,
+  mutationMembers
+) => {
+  const reviewedMembers = new Set(mutationMembers);
+  const descriptorOperations = new Set([
+    '__defineGetter__',
+    '__defineSetter__',
+    'defineProperties',
+    'defineProperty',
+  ]);
+  const descriptorReferences = [];
+  const descriptorReferencesByCall = new Map();
+  const recordDescriptorReference = (reference) => {
+    const ambient = cloudflareAmbientMutationTarget(
+      reference,
+      reference,
+      context
+    );
+    if (!descriptorOperations.has(ambient?.operation)) return;
+    descriptorReferences.push(reference);
+    let child = reference;
+    let parent = context.parentNodes.get(child);
+    while (parent && !isCloudflareFunctionNode(parent)) {
+      if (nodeType(parent) === 'CallExpression') {
+        const references = descriptorReferencesByCall.get(parent) ?? [];
+        references.push(reference);
+        descriptorReferencesByCall.set(parent, references);
+      }
+      child = parent;
+      parent = context.parentNodes.get(child);
+    }
+  };
+  new Visitor({
+    Identifier: recordDescriptorReference,
+    MemberExpression: recordDescriptorReference,
+  }).visit(program);
+  const descriptorAmbientMutation = (execution) => {
+    const ambient = cloudflareAmbientMutationTarget(
+      execution.node,
+      execution.target,
+      context
+    );
+    return cloudflareSupportedAmbientMutation(ambient)
+      ? {
+          ...ambient,
+          arguments_: cloudflareExpandedArguments(
+            execution.node,
+            execution.node.arguments ?? [],
+            context
+          ),
+        }
+      : undefined;
+  };
+  const descriptorTargetIsDisjoint = (
+    execution,
+    ambient,
+    seen = new Set(),
+    depth = 0
+  ) => {
+    if (depth > cloudflareParameterProjectionDepthLimit) return false;
+    const receiver =
+      ambient.owner === 'prototype' ? ambient.receiver : ambient.arguments_[0];
+    const target = unwrapCloudflareExecutionTarget(receiver);
+    if (!target) return false;
+    const key = cloudflareNodeSemanticKey(target);
+    if (seen.has(key)) return false;
+    const nextSeen = new Set(seen).add(key);
+    if (
+      cloudflareKnownIsolatedReceiverSource(
+        target,
+        execution.node,
+        context,
+        new Set()
+      )
+    ) {
+      return true;
+    }
+    const parameterSources = cloudflareDirectParameterReceiverSources(
+      execution.node,
+      target,
+      context
+    );
+    if (parameterSources !== undefined) {
+      return (
+        parameterSources.complete &&
+        parameterSources.sources.length > 0 &&
+        parameterSources.sources.every(({ anchor, source }) =>
+          descriptorTargetIsDisjoint(
+            { ...execution, node: anchor },
+            { ...ambient, arguments_: [source] },
+            nextSeen,
+            depth + 1
+          )
+        )
+      );
+    }
+    const candidates = cloudflareLexicalTargetCandidates(
+      execution.node,
+      target,
+      context,
+      new Set()
+    ).map(({ target: candidate }) => candidate);
+    return (
+      candidates.length > 0 &&
+      candidates.every((candidate) => {
+        const candidateKey = cloudflareNodeSemanticKey(candidate);
+        if (candidateKey === key) return false;
+        return descriptorTargetIsDisjoint(
+          execution,
+          { ...ambient, arguments_: [candidate] },
+          nextSeen,
+          depth + 1
+        );
+      })
+    );
+  };
+  const coveredDescriptorReferences = new Set();
+  let safe = true;
+  new Visitor({
+    CallExpression(call) {
+      const references = descriptorReferencesByCall.get(call);
+      if (!safe || !references) return;
+      const executions = cloudflareNormalizedMetaExecutions(
+        { node: call, target: call.callee },
+        context,
+        false
+      );
+      const descriptorExecutions = executions
+        .map((execution) => ({
+          ambient: descriptorAmbientMutation(execution),
+          execution,
+        }))
+        .filter(({ ambient }) => descriptorOperations.has(ambient?.operation));
+      if (descriptorExecutions.length === 0) return;
+      safe = descriptorExecutions.every(({ ambient, execution }) => {
+        const mutation =
+          cloudflareLegacyAmbientMemberMutation(ambient) ??
+          cloudflareDefinePropertiesMutation(
+            ambient,
+            execution.node,
+            context
+          ) ??
+          cloudflareDefinePropertyMutation(ambient);
+        const entries = mutation?.descriptorEntries ?? [mutation];
+        return (
+          descriptorTargetIsDisjoint(execution, ambient) ||
+          entries.every(
+            (entry) =>
+              entry !== undefined &&
+              entry.member !== undefined &&
+              !reviewedMembers.has(String(entry.member))
+          )
+        );
+      });
+      if (safe) {
+        references.forEach((reference) =>
+          coveredDescriptorReferences.add(reference)
+        );
+      }
+    },
+  }).visit(program);
+  if (!safe) return false;
+  const closedAliasBindings = new WeakMap();
+  const aliasBindingIsClosed = (declarator, inProgress = new Set()) => {
+    if (nodeType(declarator.id) !== 'Identifier') return false;
+    const cached = closedAliasBindings.get(declarator);
+    if (cached !== undefined) return cached;
+    if (inProgress.has(declarator)) return false;
+    const name = declarator.id.name;
+    const binding = artifactOwnerLexicalBinding(declarator.id, name, context);
+    if (
+      !binding ||
+      cloudflareBindingValueMutations(binding, name, context).length !== 0
+    ) {
+      closedAliasBindings.set(declarator, false);
+      return false;
+    }
+    const nextInProgress = new Set(inProgress).add(declarator);
+    let closed = true;
+    new Visitor({
+      Identifier(identifier) {
+        if (!closed || identifier.name !== name) return;
+        const identifierBinding = artifactOwnerLexicalBinding(
+          identifier,
+          name,
+          context
+        );
+        if (identifierBinding?.digestNode !== binding.digestNode) return;
+        if (
+          identifier === declarator.id ||
+          coveredDescriptorReferences.has(identifier)
+        ) {
+          return;
+        }
+        const parent = context.parentNodes.get(identifier);
+        if (
+          nodeType(parent) === 'MemberExpression' &&
+          coveredDescriptorReferences.has(parent)
+        ) {
+          return;
+        }
+        if (
+          nodeType(parent) === 'VariableDeclarator' &&
+          parent.init === identifier &&
+          aliasBindingIsClosed(parent, nextInProgress)
+        ) {
+          return;
+        }
+        closed = false;
+      },
+    }).visit(program);
+    closedAliasBindings.set(declarator, closed);
+    return closed;
+  };
+  return descriptorReferences.every((reference) => {
+    if (coveredDescriptorReferences.has(reference)) return true;
+    const parent = context.parentNodes.get(reference);
+    return (
+      nodeType(parent) === 'VariableDeclarator' &&
+      parent.init === reference &&
+      aliasBindingIsClosed(parent)
+    );
+  });
+};
+
+const cloudflareReviewedProgramImportsOwner = (
+  program,
+  consumerFile,
+  ownerFile,
+  artifactRoot
+) =>
+  program.body.filter(
+    (statement) =>
+      nodeType(statement) === 'ImportDeclaration' &&
+      cloudflareStaticAggregateImportOwner(
+        consumerFile,
+        literalString(statement.source),
+        artifactRoot
+      ) === fs.realpathSync(ownerFile)
+  );
+
+const cloudflareReviewedExportConsumerProof = (owner, context) => {
+  const cached = cloudflareReviewedExportConsumerProofCache.get(owner);
+  if (cached !== undefined) return cached;
+  const reject = (reason) => {
+    context.reviewedExportConsumerProofFailure = reason;
+    return false;
+  };
+  const plan = cloudflareReviewedExportMutationPlan(owner, context);
+  if (!plan) {
+    reject('owner mutation plan is incomplete');
+    cloudflareReviewedExportConsumerProofCache.set(owner, false);
+    return false;
+  }
+  if (!context.artifactRoot || !context.chunkFile) {
+    reject('owner artifact context is unavailable');
+    cloudflareReviewedExportConsumerProofCache.set(owner, false);
+    return false;
+  }
+  if (cloudflareReviewedExportConsumerProofInProgress.has(owner)) {
+    reject('owner consumer proof re-entered');
+    cloudflareReviewedExportConsumerProofCache.set(owner, false);
+    return false;
+  }
+  cloudflareReviewedExportConsumerProofInProgress.add(owner);
+  let complete = false;
+  try {
+    const ownerRecord = assertCloudflareChunkManifestMembership(
+      context.artifactRoot,
+      context.chunkFile,
+      'reviewed exported receiver mutation owner'
+    );
+    cloudflareManifestChunkRecord(ownerRecord.key, ownerRecord);
+    const ownerRealFile = fs.realpathSync(context.chunkFile);
+    const ownerCalls = cloudflareReviewedDirectBindingCalls(
+      context.program,
+      owner.id,
+      plan.localName,
+      plan.allowedOwnerReferences,
+      plan.parameterIndex,
+      context
+    );
+    if (!ownerCalls) return reject('owner binding has an unsupported use');
+    let consumerCount = ownerCalls.length;
+    const manifestFileIndex = cloudflareManifestFileKeyIndex(
+      ownerRecord.manifest
+    );
+    const ownerArtifactFile = normalizeArtifactFile(
+      context.artifactRoot,
+      ownerRealFile
+    );
+    for (const [key, entry] of Object.entries(ownerRecord.manifest)) {
+      if (!isObjectRecord(entry) || typeof entry.file !== 'string') {
+        return reject('consumer manifest entry is malformed');
+      }
+      if (!/\.(?:[cm]?js)$/u.test(entry.file)) {
+        if (
+          [...(entry.imports ?? []), ...(entry.dynamicImports ?? [])].includes(
+            ownerRecord.key
+          )
+        ) {
+          return reject('non-module manifest entry reaches the owner');
+        }
+        continue;
+      }
+      consumeCloudflareAnalysisWork(context, 1);
+      if ((manifestFileIndex.get(entry.file) ?? []).length !== 1) {
+        return reject('consumer manifest file identity is ambiguous');
+      }
+      const provenance = cloudflareManifestChunkRecord(key, ownerRecord);
+      const consumerFile = path.resolve(context.artifactRoot, entry.file);
+      const consumerRealFile = fs.realpathSync(consumerFile);
+      const program =
+        consumerRealFile === ownerRealFile
+          ? context.program
+          : readParsedModule(consumerFile).program;
+      cloudflareProgramArtifactContexts.set(program, {
+        artifactRoot: context.artifactRoot,
+        chunkFile: consumerFile,
+      });
+      registerReviewedCloudflareClosure(program, entry.file, provenance);
+      const consumerContext =
+        consumerRealFile === ownerRealFile
+          ? context
+          : createCloudflareLexicalContext(program, entry.file);
+      if (
+        !cloudflareReviewedObjectPrototypeWritesAreAbsent(
+          program,
+          consumerContext,
+          plan.mutations.map(({ member }) => member)
+        )
+      ) {
+        return reject(
+          `consumer ${entry.file} may mutate Object.prototype for a summarized member`
+        );
+      }
+      const staticFiles = cloudflareReviewedArtifactDependencyFiles(
+        program,
+        consumerFile,
+        context.artifactRoot,
+        cloudflareStaticDependencySources
+      );
+      const dynamicFiles = cloudflareReviewedArtifactDependencyFiles(
+        program,
+        consumerFile,
+        context.artifactRoot,
+        () =>
+          cloudflareReviewedDynamicDependencySources(program, consumerContext)
+      );
+      if (
+        !staticFiles ||
+        !dynamicFiles ||
+        !exactSortedValues(staticFiles, provenance.imports) ||
+        !dynamicFiles.every((file) => provenance.dynamicImports.includes(file))
+      ) {
+        return reject(
+          `consumer ${entry.file} AST edges disagree with signed provenance (${JSON.stringify({ dynamicFiles, signedDynamicFiles: provenance.dynamicImports, signedStaticFiles: provenance.imports, staticFiles })})`
+        );
+      }
+      if (consumerRealFile === ownerRealFile) continue;
+      const dynamicOwnerImport =
+        provenance.dynamicImports.includes(ownerArtifactFile) ||
+        cloudflareReviewedDynamicDependencySources(
+          program,
+          consumerContext
+        ).some(
+          (source) =>
+            cloudflareStaticAggregateImportOwner(
+              consumerFile,
+              source,
+              context.artifactRoot
+            ) === ownerRealFile
+        );
+      const reexportsOwner = program.body.some(
+        (statement) =>
+          new Set(['ExportAllDeclaration', 'ExportNamedDeclaration']).has(
+            nodeType(statement)
+          ) &&
+          statement.source &&
+          cloudflareStaticAggregateImportOwner(
+            consumerFile,
+            literalString(statement.source),
+            context.artifactRoot
+          ) === ownerRealFile
+      );
+      if (dynamicOwnerImport || reexportsOwner) {
+        return reject('consumer reaches the owner through an unsupported edge');
+      }
+      const ownerImports = cloudflareReviewedProgramImportsOwner(
+        program,
+        consumerFile,
+        context.chunkFile,
+        context.artifactRoot
+      );
+      if (
+        provenance.imports.includes(ownerArtifactFile) &&
+        ownerImports.length === 0
+      ) {
+        return reject('consumer has an unaudited static owner edge');
+      }
+      if (
+        ownerImports.some((statement) =>
+          statement.specifiers.some(
+            (specifier) => nodeType(specifier) === 'ImportNamespaceSpecifier'
+          )
+        )
+      ) {
+        return reject('consumer uses a namespace owner import');
+      }
+      const targetSpecifiers = ownerImports.flatMap((statement) =>
+        statement.specifiers.filter(
+          (specifier) =>
+            nodeType(specifier) === 'ImportSpecifier' &&
+            (identifierName(specifier.imported) ??
+              literalString(specifier.imported)) === plan.exportedName
+        )
+      );
+      if (targetSpecifiers.length === 0) continue;
+      if (targetSpecifiers.length !== 1) {
+        return reject('consumer target import is ambiguous');
+      }
+      const specifier = targetSpecifiers[0];
+      const localName = identifierName(specifier.local);
+      const calls = localName
+        ? cloudflareReviewedDirectBindingCalls(
+            program,
+            specifier.local,
+            localName,
+            new Set([specifier.imported, specifier.local]),
+            plan.parameterIndex,
+            consumerContext
+          )
+        : undefined;
+      if (!calls) return reject('consumer binding has an unsupported use');
+      consumerCount += calls.length;
+      if (consumerCount > cloudflareParameterProjectionCountLimit) {
+        return reject('consumer count exceeds the bounded projection limit');
+      }
+    }
+    complete = consumerCount === plan.expectedConsumerCount;
+    if (!complete) {
+      reject(
+        `consumer count ${String(consumerCount)} does not equal ${String(plan.expectedConsumerCount)}`
+      );
+    }
+    return complete;
+  } finally {
+    cloudflareReviewedExportConsumerProofInProgress.delete(owner);
+    cloudflareReviewedExportConsumerProofCache.set(owner, complete);
+  }
+};
+
+export const inspectCloudflareReviewedExportArtifactProofForTesting = (
+  root,
+  ownerArtifactFile,
+  exportedLocalName,
+  cloudflareAppChunkProvenanceKey,
+  policy
+) => {
+  clearParsedModuleCaches();
+  authenticatedCloudflareModuleSources.clear();
+  verifiedCloudflareMetadataSources.clear();
+  cloudflareAppChunkProvenanceCache.clear();
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const artifactRoot = path.join(root, 'dist/server');
+    authenticateCloudflareArtifactBeforeParsing(
+      path.join(artifactRoot, 'index.js')
+    );
+    const ownerFile = path.join(artifactRoot, ownerArtifactFile);
+    const ownerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      ownerFile,
+      'reviewed exported receiver mutation fixture owner'
+    );
+    const provenance = cloudflareManifestChunkRecord(
+      ownerRecord.key,
+      ownerRecord
+    );
+    const program = readParsedModule(ownerFile).program;
+    cloudflareProgramArtifactContexts.set(program, {
+      artifactRoot,
+      chunkFile: ownerFile,
+    });
+    if (policy === undefined) {
+      registerReviewedCloudflareClosure(
+        program,
+        ownerRecord.entry.file,
+        provenance
+      );
+    } else {
+      const worker = globalThis.__vitest_worker__;
+      assert(
+        worker?.current?.type === 'test' && typeof worker.filepath === 'string',
+        'synthetic reviewed export policies are available only inside an active Vitest test'
+      );
+      const reviewedClosure = {
+        exportedReceiverMutationSummaries: [policy],
+      };
+      assertCloudflareReviewedPolicy(program, reviewedClosure);
+      cloudflareReviewedClosureByProgram.set(program, reviewedClosure);
+    }
+    const context = createCloudflareLexicalContext(
+      program,
+      ownerRecord.entry.file
+    );
+    const owner = resolveCloudflareTarget(
+      { name: exportedLocalName, type: 'Identifier' },
+      context.topLevelBindings
+    );
+    const complete =
+      isCloudflareFunctionNode(owner) &&
+      cloudflareReviewedExportConsumerProof(owner, context);
+    return {
+      complete,
+      failure: context.reviewedExportConsumerProofFailure,
+    };
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = undefined;
+    cloudflareAppChunkProvenanceCache.clear();
+    authenticatedCloudflareModuleSources.clear();
+    verifiedCloudflareMetadataSources.clear();
+    clearParsedModuleCaches();
+  }
+};
+
+export const inspectCloudflareReviewedExportArtifactLoadEffectsForTesting = (
+  root,
+  ownerArtifactFile,
+  consumerArtifactFile,
+  exportedLocalName,
+  cloudflareAppChunkProvenanceKey,
+  policy
+) => {
+  clearParsedModuleCaches();
+  authenticatedCloudflareModuleSources.clear();
+  verifiedCloudflareMetadataSources.clear();
+  cloudflareAppChunkProvenanceCache.clear();
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const artifactRoot = path.join(root, 'dist/server');
+    authenticateCloudflareArtifactBeforeParsing(
+      path.join(artifactRoot, 'index.js')
+    );
+    const ownerFile = path.join(artifactRoot, ownerArtifactFile);
+    const ownerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      ownerFile,
+      'reviewed exported receiver mutation load-effect fixture owner'
+    );
+    cloudflareManifestChunkRecord(ownerRecord.key, ownerRecord);
+    const ownerProgram = readParsedModule(ownerFile).program;
+    cloudflareProgramArtifactContexts.set(ownerProgram, {
+      artifactRoot,
+      chunkFile: ownerFile,
+    });
+    const worker = globalThis.__vitest_worker__;
+    assert(
+      worker?.current?.type === 'test' && typeof worker.filepath === 'string',
+      'synthetic reviewed export policies are available only inside an active Vitest test'
+    );
+    const reviewedClosure = {
+      exportedReceiverMutationSummaries: [policy],
+    };
+    assertCloudflareReviewedPolicy(ownerProgram, reviewedClosure);
+    cloudflareReviewedClosureByProgram.set(ownerProgram, reviewedClosure);
+    const ownerContext = createCloudflareLexicalContext(
+      ownerProgram,
+      ownerRecord.entry.file
+    );
+    const owner = resolveCloudflareTarget(
+      { name: exportedLocalName, type: 'Identifier' },
+      ownerContext.topLevelBindings
+    );
+    const complete =
+      isCloudflareFunctionNode(owner) &&
+      cloudflareReviewedExportConsumerProof(owner, ownerContext);
+    if (!complete) {
+      return {
+        complete: false,
+        effects: [],
+        failure: ownerContext.reviewedExportConsumerProofFailure,
+      };
+    }
+    const consumerFile = path.join(artifactRoot, consumerArtifactFile);
+    const consumerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      consumerFile,
+      'reviewed exported receiver mutation load-effect fixture consumer'
+    );
+    cloudflareManifestChunkRecord(consumerRecord.key, consumerRecord);
+    const consumerProgram = readParsedModule(consumerFile).program;
+    cloudflareProgramArtifactContexts.set(consumerProgram, {
+      artifactRoot,
+      chunkFile: consumerFile,
+    });
+    const analysis = dormantCloudflareFunctionRanges(
+      consumerProgram,
+      [],
+      [],
+      consumerRecord.entry.file,
+      [],
+      artifactRoot,
+      cloudflareReviewedClosureByProgram.get(consumerProgram)
+    );
+    const consumerSource = parsedModuleSourcesByProgram.get(consumerProgram);
+    assert(
+      typeof consumerSource === 'string',
+      'reviewed exported receiver mutation consumer source must be authenticated'
+    );
+    return {
+      complete: true,
+      effects: cloudflareLoadEffects(consumerProgram, analysis).map((effect) =>
+        consumerSource.slice(effect.start, effect.end)
+      ),
+      failure: undefined,
+    };
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = undefined;
+    cloudflareAppChunkProvenanceCache.clear();
+    authenticatedCloudflareModuleSources.clear();
+    verifiedCloudflareMetadataSources.clear();
+    clearParsedModuleCaches();
+  }
+};
+
+const cloudflareReviewedImportedReceiverMutationEntries = (call, context) => {
+  const cached = context.importedReviewedReceiverMutationEntries.get(call);
+  if (cached !== undefined) return cached;
+  const reject = () => {
+    context.importedReviewedReceiverMutationEntries.set(call, []);
+    return [];
+  };
+  const callee = unwrapCloudflareExecutionTarget(call.callee);
+  if (nodeType(callee) !== 'Identifier') return reject();
+  const invocation = directImportedCloudflareInvocation(
+    context.program,
+    callee,
+    context.topLevelBindings,
+    context
+  );
+  if (
+    invocation?.importKind !== 'named' ||
+    typeof invocation.source !== 'string' ||
+    !invocation.source.startsWith('.') ||
+    !context.artifactRoot ||
+    !context.chunkFile
+  ) {
+    return reject();
+  }
+  const ownerFile = path.resolve(
+    path.dirname(context.chunkFile),
+    invocation.source
+  );
+  if (!isWithinDirectory(ownerFile, context.artifactRoot)) return reject();
+  const ownerRecord = assertCloudflareChunkManifestMembership(
+    context.artifactRoot,
+    ownerFile,
+    'reviewed imported receiver mutation owner'
+  );
+  const provenance = cloudflareManifestChunkRecord(
+    ownerRecord.key,
+    ownerRecord
+  );
+  const ownerProgram = readParsedModule(ownerFile).program;
+  cloudflareProgramArtifactContexts.set(ownerProgram, {
+    artifactRoot: context.artifactRoot,
+    chunkFile: ownerFile,
+  });
+  registerReviewedCloudflareClosure(
+    ownerProgram,
+    ownerRecord.entry.file,
+    provenance
+  );
+  const ownerContext = createCloudflareLexicalContext(
+    ownerProgram,
+    ownerRecord.entry.file
+  );
+  const localName = new Map(ownerProgram.body.flatMap(moduleExportEntries)).get(
+    invocation.importedName
+  );
+  if (typeof localName !== 'string') return reject();
+  const owner = resolveCloudflareTarget(
+    { name: localName, type: 'Identifier' },
+    ownerContext.topLevelBindings
+  );
+  if (!isCloudflareFunctionNode(owner)) return reject();
+  const plan = cloudflareReviewedExportMutationPlan(owner, ownerContext);
+  if (
+    !plan ||
+    plan.exportedName !== invocation.importedName ||
+    !cloudflareReviewedExportConsumerProof(owner, ownerContext) ||
+    !cloudflareReviewedFreshExportReceiver(call, plan.parameterIndex, context)
+  ) {
+    return reject();
+  }
+  const receiver = call.arguments[plan.parameterIndex];
+  const entries = plan.mutations.map(({ member }) => ({
+    assignmentValueMutation: true,
+    member,
+    opaque: true,
+    receiver,
+    sourceMutationNode: call,
+  }));
+  context.importedReviewedReceiverMutationEntries.set(call, entries);
+  return entries;
+};
+
+const cloudflareReviewedExportMutationIsCompletelySummarized = (
+  owner,
+  mutation,
+  node,
+  context
+) => {
+  const plan = cloudflareReviewedExportMutationPlan(owner, context);
+  return (
+    plan !== undefined &&
+    plan.mutationKeys.has(
+      cloudflareNodeSemanticKey(mutation.sourceMutationNode ?? node)
+    ) &&
+    cloudflareReviewedExportConsumerProof(owner, context)
+  );
+};
+
 const cloudflareStaticAggregateConsumersAreReadOnly = (
   ownerFile,
   importedName,
-  manifestRecord
+  manifestRecord,
+  {
+    analysisNodeBudget = { work: 0 },
+    allowMemberCalls = false,
+    allowMemberReads = false,
+    allowSpreads = true,
+    allowedMemberCallPaths = [],
+  } = {}
 ) => {
-  const files = [
-    ...new Set(
-      Object.values(manifestRecord.manifest)
-        .map((entry) => entry?.file)
-        .filter((file) => typeof file === 'string' && file.endsWith('.js'))
-    ),
-  ];
-  return files.every((file) => {
-    const consumerFile = path.resolve(manifestRecord.artifactRoot, file);
-    if (!isWithinDirectory(consumerFile, manifestRecord.artifactRoot)) {
+  const ownerRealFile = fs.realpathSync(ownerFile);
+  const cacheKey = JSON.stringify([
+    ownerRealFile,
+    importedName,
+    allowMemberCalls,
+    allowMemberReads,
+    allowSpreads,
+    allowedMemberCallPaths,
+  ]);
+  const cached = cloudflareStaticAggregateConsumerProofCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  if (cloudflareStaticAggregateConsumerProofInProgress.has(cacheKey)) {
+    return false;
+  }
+  cloudflareStaticAggregateConsumerProofInProgress.add(cacheKey);
+  let readOnly = false;
+  try {
+    const manifestFileIndex = cloudflareManifestFileKeyIndex(
+      manifestRecord.manifest
+    );
+    const realArtifactRoot = fs.realpathSync(manifestRecord.artifactRoot);
+    const ownerArtifactFile = normalizeArtifactFile(
+      realArtifactRoot,
+      ownerRealFile
+    );
+    const ownerKeys = manifestFileIndex.get(ownerArtifactFile) ?? [];
+    if (ownerKeys.length !== 1 || ownerKeys[0] !== manifestRecord.key) {
       return false;
     }
-    const program = readParsedModule(consumerFile).program;
-    let unsupportedOwnerAccess = false;
-    new Visitor({
-      ExportAllDeclaration(statement) {
-        unsupportedOwnerAccess ||=
+    const consumers = Object.entries(manifestRecord.manifest).filter(
+      ([, entry]) =>
+        isObjectRecord(entry) &&
+        typeof entry.file === 'string' &&
+        /\.(?:[cm]?js)$/u.test(entry.file) &&
+        [...(entry.imports ?? []), ...(entry.dynamicImports ?? [])].includes(
+          manifestRecord.key
+        )
+    );
+    readOnly = consumers.every(([key, entry]) => {
+      if (
+        (entry.dynamicImports ?? []).includes(manifestRecord.key) ||
+        (manifestFileIndex.get(entry.file) ?? []).length !== 1
+      ) {
+        return false;
+      }
+      cloudflareManifestChunkRecord(key, manifestRecord);
+      const consumerFile = path.resolve(
+        manifestRecord.artifactRoot,
+        entry.file
+      );
+      if (!isWithinDirectory(consumerFile, manifestRecord.artifactRoot)) {
+        return false;
+      }
+      const program = readParsedModule(consumerFile).program;
+      analysisNodeBudget.work += immutableAstNodeCount(program) * 4;
+      assert(
+        analysisNodeBudget.work <= cloudflareStaticAggregateProofWorkLimit,
+        cloudflareStaticAggregateProofWorkMessage
+      );
+      let unsupportedOwnerAccess = false;
+      new Visitor({
+        ExportAllDeclaration(statement) {
+          unsupportedOwnerAccess ||=
+            cloudflareStaticAggregateImportOwner(
+              consumerFile,
+              statement.source?.value,
+              manifestRecord.artifactRoot
+            ) === ownerRealFile;
+        },
+        ExportNamedDeclaration(statement) {
+          if (!statement.source) return;
+          unsupportedOwnerAccess ||=
+            cloudflareStaticAggregateImportOwner(
+              consumerFile,
+              statement.source.value,
+              manifestRecord.artifactRoot
+            ) === ownerRealFile;
+        },
+        ImportExpression(statement) {
+          unsupportedOwnerAccess ||=
+            nodeType(statement.source) === 'Literal' &&
+            cloudflareStaticAggregateImportOwner(
+              consumerFile,
+              statement.source.value,
+              manifestRecord.artifactRoot
+            ) === ownerRealFile;
+        },
+      }).visit(program);
+      if (unsupportedOwnerAccess) return false;
+      const matchingImports = program.body.filter(
+        (statement) =>
+          nodeType(statement) === 'ImportDeclaration' &&
           cloudflareStaticAggregateImportOwner(
             consumerFile,
             statement.source?.value,
             manifestRecord.artifactRoot
-          ) === fs.realpathSync(ownerFile);
-      },
-      ExportNamedDeclaration(statement) {
-        if (!statement.source) return;
-        unsupportedOwnerAccess ||=
-          cloudflareStaticAggregateImportOwner(
-            consumerFile,
-            statement.source.value,
-            manifestRecord.artifactRoot
-          ) === fs.realpathSync(ownerFile);
-      },
-      ImportExpression(statement) {
-        unsupportedOwnerAccess ||=
-          nodeType(statement.source) === 'Literal' &&
-          cloudflareStaticAggregateImportOwner(
-            consumerFile,
-            statement.source.value,
-            manifestRecord.artifactRoot
-          ) === fs.realpathSync(ownerFile);
-      },
-    }).visit(program);
-    if (unsupportedOwnerAccess) return false;
-    const matchingImports = program.body.filter(
-      (statement) =>
-        nodeType(statement) === 'ImportDeclaration' &&
-        cloudflareStaticAggregateImportOwner(
-          consumerFile,
-          statement.source?.value,
-          manifestRecord.artifactRoot
-        ) === fs.realpathSync(ownerFile)
-    );
-    if (
-      matchingImports.some((statement) =>
-        statement.specifiers.some(
-          (specifier) => nodeType(specifier) === 'ImportNamespaceSpecifier'
-        )
-      )
-    ) {
-      return false;
-    }
-    return matchingImports.every((statement) =>
-      statement.specifiers
-        .filter(
-          (specifier) =>
-            nodeType(specifier) === 'ImportSpecifier' &&
-            identifierName(specifier.imported) === importedName
-        )
-        .every((specifier) =>
-          cloudflareStaticAggregateBindingUsesAreReadOnly(
-            program,
-            identifierName(specifier.local)
+          ) === ownerRealFile
+      );
+      if (
+        matchingImports.some((statement) =>
+          statement.specifiers.some(
+            (specifier) => nodeType(specifier) === 'ImportNamespaceSpecifier'
           )
         )
+      ) {
+        return false;
+      }
+      return matchingImports.every((statement) =>
+        statement.specifiers
+          .filter(
+            (specifier) =>
+              (nodeType(specifier) === 'ImportSpecifier' &&
+                identifierName(specifier.imported) === importedName) ||
+              (importedName === 'default' &&
+                nodeType(specifier) === 'ImportDefaultSpecifier')
+          )
+          .every((specifier) =>
+            cloudflareStaticAggregateBindingUsesAreReadOnly(
+              program,
+              identifierName(specifier.local),
+              {
+                artifactRoot: manifestRecord.artifactRoot,
+                chunkFile: consumerFile,
+              },
+              {
+                allowLocalExport: false,
+                allowMemberCalls,
+                allowMemberReads,
+                allowSpreads,
+                allowedMemberCallPaths,
+              }
+            )
+          )
+      );
+    });
+    return readOnly;
+  } finally {
+    cloudflareStaticAggregateConsumerProofInProgress.delete(cacheKey);
+    cloudflareStaticAggregateConsumerProofCache.set(cacheKey, readOnly);
+  }
+};
+
+const readCloudflareReviewedStaticMemberOwnerProgram = (
+  ownerFile,
+  provenance
+) => {
+  const cacheKey = JSON.stringify([
+    fs.realpathSync(ownerFile),
+    provenance.sha256,
+  ]);
+  const cached = cloudflareReviewedStaticMemberOwnerProgramCache.get(cacheKey);
+  if (cached) return cached;
+  const program = readParsedModule(ownerFile).program;
+  cloudflareReviewedStaticMemberOwnerProgramCache.set(cacheKey, program);
+  return program;
+};
+
+export const inspectCloudflareReviewedStaticMemberProgramCacheForTesting = (
+  ownerFile
+) => {
+  const worker = globalThis.__vitest_worker__;
+  assert(
+    worker?.current?.type === 'test' && typeof worker.filepath === 'string',
+    'reviewed static member program-cache inspection is available only inside an active Vitest test'
+  );
+  clearParsedModuleCaches();
+  try {
+    const provenance = {
+      sha256: createHash('sha256')
+        .update(fs.readFileSync(ownerFile))
+        .digest('hex'),
+    };
+    const first = readCloudflareReviewedStaticMemberOwnerProgram(
+      ownerFile,
+      provenance
     );
-  });
+    const second = readCloudflareReviewedStaticMemberOwnerProgram(
+      ownerFile,
+      provenance
+    );
+    return first === second;
+  } finally {
+    clearParsedModuleCaches();
+  }
 };
 
 const cloudflareImportedStaticMemberOwner = (target, context) => {
@@ -17630,33 +21693,115 @@ const cloudflareImportedStaticMemberOwner = (target, context) => {
     ownerFile,
     'static imported member owner'
   );
-  cloudflareManifestChunkRecord(manifestRecord.key, manifestRecord);
-  const ownerProgram = readParsedModule(ownerFile).program;
+  const provenance = cloudflareManifestChunkRecord(
+    manifestRecord.key,
+    manifestRecord
+  );
+  const signedReviewedClosure = reviewedCloudflareClosure(provenance);
+  const ownerProgram = signedReviewedClosure
+    ? readCloudflareReviewedStaticMemberOwnerProgram(ownerFile, provenance)
+    : readParsedModule(ownerFile).program;
   const localName = new Map(ownerProgram.body.flatMap(moduleExportEntries)).get(
     importedName
   );
   if (typeof localName !== 'string') return undefined;
+  const reviewedClosure =
+    cloudflareReviewedClosureByProgram.get(ownerProgram) ??
+    signedReviewedClosure;
+  const allowedMemberCallPaths = [
+    ...new Map(
+      (reviewedClosure?.exportedStaticMemberDeferredResults ?? [])
+        .filter(
+          (policy) =>
+            policy.exportedLocalName === localName &&
+            policy.exportedName === importedName
+        )
+        .map((policy) => [JSON.stringify(policy.memberPath), policy.memberPath])
+    ).values(),
+  ];
   if (
-    !cloudflareStaticAggregateBindingUsesAreReadOnly(ownerProgram, localName) ||
-    !cloudflareStaticAggregateConsumersAreReadOnly(
-      ownerFile,
-      importedName,
-      manifestRecord
+    !allowedMemberCallPaths.some(
+      (memberPath) =>
+        JSON.stringify(memberPath) === JSON.stringify(chain.members)
     )
   ) {
     return undefined;
   }
-  let value = resolveCloudflareTarget(
-    { name: localName, type: 'Identifier' },
-    cloudflareTopLevelBindings(ownerProgram)
-  );
-  for (const member of chain.members) {
-    value = cloudflareStaticObjectMemberValue(value, member);
-    if (!value) return undefined;
+  const cacheKey = JSON.stringify([
+    fs.realpathSync(context.artifactRoot),
+    fs.realpathSync(ownerFile),
+    provenance.sha256,
+    importedName,
+    chain.members,
+  ]);
+  const cached = cloudflareImportedStaticMemberOwnerCache.get(cacheKey);
+  if (cached !== undefined) return cached || undefined;
+  if (cloudflareImportedStaticMemberOwnerInProgress.has(cacheKey)) {
+    return undefined;
   }
-  return isCloudflareFunctionNode(value)
-    ? { owner: value, ownerFile, ownerProgram }
-    : undefined;
+  cloudflareImportedStaticMemberOwnerInProgress.add(cacheKey);
+  consumeCloudflareAnalysisWork(context, 1);
+  let result;
+  try {
+    const analysisNodeBudget = {
+      work: immutableAstNodeCount(ownerProgram) * 3,
+    };
+    assert(
+      analysisNodeBudget.work <= cloudflareStaticAggregateProofWorkLimit,
+      cloudflareStaticAggregateProofWorkMessage
+    );
+    if (
+      !cloudflareStaticAggregateBindingUsesAreReadOnly(
+        ownerProgram,
+        localName,
+        {
+          artifactRoot: context.artifactRoot,
+          chunkFile: ownerFile,
+        },
+        {
+          allowMemberCalls: true,
+          allowSpreads: false,
+          allowedMemberCallPaths,
+        }
+      ) ||
+      !cloudflareStaticAggregateConsumersAreReadOnly(
+        ownerFile,
+        importedName,
+        manifestRecord,
+        {
+          analysisNodeBudget,
+          allowMemberCalls: true,
+          allowSpreads: false,
+          allowedMemberCallPaths,
+        }
+      )
+    ) {
+      return undefined;
+    }
+    let value = resolveCloudflareTarget(
+      { name: localName, type: 'Identifier' },
+      cloudflareTopLevelBindings(ownerProgram)
+    );
+    for (const member of chain.members) {
+      value = cloudflareStaticObjectMemberValue(value, member);
+      if (!value) return undefined;
+    }
+    result = isCloudflareFunctionNode(value)
+      ? {
+          importedName,
+          localName,
+          memberPath: chain.members,
+          owner: value,
+          ownerFile,
+          ownerProgram,
+          provenance,
+        }
+      : undefined;
+    return result;
+  } finally {
+    cloudflareImportedStaticMemberOwnerInProgress.delete(cacheKey);
+    cloudflareImportedStaticMemberOwnerCache.set(cacheKey, result ?? false);
+  }
 };
 
 const cloudflareAggregateLiteralEntries = (target) =>
@@ -17682,6 +21827,459 @@ const cloudflareImportedAggregateSpreadCandidates = (
   if (properties.some((property) => nodeType(property) === 'SpreadElement'))
     return [];
   return [{ target }];
+};
+
+const cloudflareReviewedNamespaceBindingReadOnlyCache = new WeakMap();
+
+const cloudflareReviewedNamespaceBindingUsesAreReadOnly = (
+  program,
+  localName
+) => {
+  const cachedByBinding =
+    cloudflareReviewedNamespaceBindingReadOnlyCache.get(program) ?? new Map();
+  if (cachedByBinding.has(localName)) return cachedByBinding.get(localName);
+  cloudflareReviewedNamespaceBindingReadOnlyCache.set(program, cachedByBinding);
+  const parentNodes = createAstParentMap(program);
+  let safe = true;
+  new Visitor({
+    Identifier(identifier) {
+      if (!safe || identifier.name !== localName) return;
+      const parent = parentNodes.get(identifier);
+      if (
+        nodeType(parent) === 'ImportSpecifier' ||
+        (nodeType(parent) === 'VariableDeclarator' && parent.id === identifier)
+      ) {
+        return;
+      }
+      if (
+        nodeType(parent) === 'MemberExpression' &&
+        parent.object === identifier &&
+        parent.computed !== true &&
+        cloudflareMemberName(parent) !== undefined
+      ) {
+        let current = parent;
+        let container = parentNodes.get(current);
+        while (
+          nodeType(container) === 'MemberExpression' &&
+          container.object === current &&
+          container.computed !== true &&
+          cloudflareMemberName(container) !== undefined
+        ) {
+          current = container;
+          container = parentNodes.get(current);
+        }
+        while (
+          (nodeType(container) === 'ChainExpression' ||
+            nodeType(container) === 'ParenthesizedExpression') &&
+          container.expression === current
+        ) {
+          current = container;
+          container = parentNodes.get(current);
+        }
+        safe = ![
+          nodeType(container) === 'AssignmentExpression' &&
+            container.left === current,
+          nodeType(container) === 'UpdateExpression',
+          nodeType(container) === 'UnaryExpression' &&
+            container.operator === 'delete',
+          nodeType(container) === 'ForInStatement' &&
+            container.left === current,
+          nodeType(container) === 'ForOfStatement' &&
+            container.left === current,
+          (nodeType(container) === 'CallExpression' ||
+            nodeType(container) === 'NewExpression') &&
+            container.callee !== current,
+        ].includes(true);
+        return;
+      }
+      safe =
+        nodeType(parent) === 'SpreadElement' && parent.argument === identifier;
+    },
+  }).visit(program);
+  cachedByBinding.set(localName, safe);
+  return safe;
+};
+
+const cloudflareReviewedOpaqueAggregateSpreadCandidates = (
+  spread,
+  context,
+  expectedType
+) => {
+  const localName = identifierName(spread.argument);
+  if (
+    expectedType !== 'ObjectExpression' ||
+    typeof localName !== 'string' ||
+    !context.artifactRoot ||
+    !context.chunkFile ||
+    !cloudflareReviewedNamespaceBindingUsesAreReadOnly(
+      context.program,
+      localName
+    )
+  ) {
+    return [];
+  }
+  const lineage = cloudflareFactoryOriginLineage(
+    context.program,
+    spread.argument,
+    context
+  );
+  if (
+    !lineage.complete ||
+    lineage.origins.length === 0 ||
+    lineage.origins.some(
+      (origin) =>
+        !cloudflareReviewedAggregateSpreadOriginIsSafe(
+          context.program,
+          context.chunkFile,
+          origin,
+          context.artifactRoot,
+          expectedType
+        )
+    )
+  ) {
+    return [];
+  }
+  return [{ target: { properties: [], type: 'ObjectExpression' } }];
+};
+
+export const inspectCloudflareReviewedAggregateSpreadsForTesting = (
+  source,
+  analysisLabel,
+  artifactRoot,
+  cloudflareAppChunkProvenanceKey
+) => {
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const program = parseModuleSource(analysisLabel, source).program;
+    const context = createCloudflareLexicalContext(program, analysisLabel);
+    context.artifactRoot = fs.realpathSync(artifactRoot);
+    context.chunkFile = fs.realpathSync(
+      path.resolve(artifactRoot, analysisLabel)
+    );
+    const results = [];
+    new Visitor({
+      SpreadElement(spread) {
+        if (nodeType(context.parentNodes.get(spread)) !== 'ObjectExpression') {
+          return;
+        }
+        const localName = identifierName(spread.argument);
+        const lineage = cloudflareFactoryOriginLineage(
+          program,
+          spread.argument,
+          context
+        );
+        results.push({
+          candidates: cloudflareReviewedOpaqueAggregateSpreadCandidates(
+            spread,
+            context,
+            'ObjectExpression'
+          ).length,
+          lineageComplete: lineage.complete,
+          localName,
+          origins: lineage.origins.map((origin) => ({
+            argumentsSafe:
+              cloudflareReviewedAggregateSpreadOriginArgumentsAreSafe(
+                program,
+                context.chunkFile,
+                origin,
+                context.artifactRoot,
+                new Set()
+              ),
+            policySafe: cloudflareReviewedAggregateSpreadOriginIsSafe(
+              program,
+              context.chunkFile,
+              origin,
+              context.artifactRoot,
+              'ObjectExpression'
+            ),
+          })),
+          readOnly:
+            typeof localName === 'string' &&
+            cloudflareReviewedNamespaceBindingUsesAreReadOnly(
+              program,
+              localName
+            ),
+        });
+      },
+    }).visit(program);
+    return results;
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+  }
+};
+
+export const inspectCloudflareReviewedAggregateArtifactProofForTesting = (
+  root,
+  consumerArtifactFile,
+  sinkArtifactFile,
+  cloudflareAppChunkProvenanceKey,
+  policy
+) => {
+  clearParsedModuleCaches();
+  authenticatedCloudflareModuleSources.clear();
+  verifiedCloudflareMetadataSources.clear();
+  cloudflareAppChunkProvenanceCache.clear();
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const artifactRoot = path.join(root, 'dist/server');
+    authenticateCloudflareArtifactBeforeParsing(
+      path.join(artifactRoot, 'index.js')
+    );
+    const sinkFile = path.join(artifactRoot, sinkArtifactFile);
+    const sinkRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      sinkFile,
+      'reviewed aggregate read-only sink fixture owner'
+    );
+    cloudflareManifestChunkRecord(sinkRecord.key, sinkRecord);
+    const sinkProgram = readParsedModule(sinkFile).program;
+    const worker = globalThis.__vitest_worker__;
+    assert(
+      worker?.current?.type === 'test' && typeof worker.filepath === 'string',
+      'synthetic aggregate sink policies are available only inside an active Vitest test'
+    );
+    const reviewedClosure = {
+      exportedAggregateReadOnlySinks: [policy],
+    };
+    assertCloudflareReviewedPolicy(sinkProgram, reviewedClosure);
+    cloudflareReviewedClosureByProgram.set(sinkProgram, reviewedClosure);
+    const consumerFile = path.join(artifactRoot, consumerArtifactFile);
+    const consumerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      consumerFile,
+      'reviewed aggregate read-only sink fixture consumer'
+    );
+    cloudflareManifestChunkRecord(consumerRecord.key, consumerRecord);
+    const program = readParsedModule(consumerFile).program;
+    const context = createCloudflareLexicalContext(
+      program,
+      consumerRecord.entry.file
+    );
+    context.artifactRoot = artifactRoot;
+    context.chunkFile = consumerFile;
+    const candidates = [];
+    new Visitor({
+      SpreadElement(spread) {
+        if (nodeType(context.parentNodes.get(spread)) !== 'ObjectExpression') {
+          return;
+        }
+        candidates.push(
+          cloudflareImportedAggregateSpreadCandidates(
+            spread,
+            context,
+            'ObjectExpression'
+          ).length
+        );
+      },
+    }).visit(program);
+    return candidates;
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+    cloudflareAppChunkProvenanceCache.clear();
+    authenticatedCloudflareModuleSources.clear();
+    verifiedCloudflareMetadataSources.clear();
+    clearParsedModuleCaches();
+  }
+};
+
+export const inspectCloudflareImportedStaticPrimitiveMembersForTesting = (
+  root,
+  consumerArtifactFile,
+  expressionSource,
+  cloudflareAppChunkProvenanceKey
+) => {
+  clearParsedModuleCaches();
+  authenticatedCloudflareModuleSources.clear();
+  verifiedCloudflareMetadataSources.clear();
+  cloudflareAppChunkProvenanceCache.clear();
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const artifactRoot = path.join(root, 'dist/server');
+    authenticateCloudflareArtifactBeforeParsing(
+      path.join(artifactRoot, 'index.js')
+    );
+    const consumerFile = path.join(artifactRoot, consumerArtifactFile);
+    const consumerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      consumerFile,
+      'imported static primitive fixture consumer'
+    );
+    cloudflareManifestChunkRecord(consumerRecord.key, consumerRecord);
+    const program = readParsedModule(consumerFile).program;
+    const context = createCloudflareLexicalContext(
+      program,
+      consumerRecord.entry.file
+    );
+    context.artifactRoot = artifactRoot;
+    context.chunkFile = consumerFile;
+    const values = [];
+    new Visitor({
+      MemberExpression(member) {
+        if (
+          parsedModuleSourcesByProgram
+            .get(program)
+            ?.slice(member.start, member.end) !== expressionSource
+        ) {
+          return;
+        }
+        const candidates = cloudflareImportedStaticPrimitiveMemberCandidates(
+          member,
+          member,
+          context
+        );
+        values.push(
+          candidates?.map(({ target }) => cloudflareStaticValue(target)) ?? []
+        );
+      },
+    }).visit(program);
+    return values;
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+    cloudflareAppChunkProvenanceCache.clear();
+    authenticatedCloudflareModuleSources.clear();
+    verifiedCloudflareMetadataSources.clear();
+    clearParsedModuleCaches();
+  }
+};
+
+export const inspectCloudflareArgumentProfilesForTesting = (
+  root,
+  consumerArtifactFile,
+  expressionSource,
+  cloudflareAppChunkProvenanceKey
+) => {
+  clearParsedModuleCaches();
+  authenticatedCloudflareModuleSources.clear();
+  verifiedCloudflareMetadataSources.clear();
+  cloudflareAppChunkProvenanceCache.clear();
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const artifactRoot = path.join(root, 'dist/server');
+    authenticateCloudflareArtifactBeforeParsing(
+      path.join(artifactRoot, 'index.js')
+    );
+    const consumerFile = path.join(artifactRoot, consumerArtifactFile);
+    const consumerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      consumerFile,
+      'argument-profile fixture consumer'
+    );
+    cloudflareManifestChunkRecord(consumerRecord.key, consumerRecord);
+    const program = readParsedModule(consumerFile).program;
+    const source = parsedModuleSourcesByProgram.get(program);
+    const lexicalContext = createCloudflareLexicalContext(
+      program,
+      consumerRecord.entry.file
+    );
+    lexicalContext.artifactRoot = artifactRoot;
+    lexicalContext.chunkFile = consumerFile;
+    const context = {
+      bindings: lexicalContext.topLevelBindings,
+      lexicalContext,
+      program,
+    };
+    const profiles = [];
+    new Visitor({
+      CallExpression(call) {
+        if (source?.slice(call.start, call.end) !== expressionSource) return;
+        const profile = cloudflareArgumentProfile(call, context);
+        profiles.push({
+          completeArgumentOriginIndexes: profile.completeArgumentOriginIndexes,
+          deferredArgumentHazardIndexes: profile.deferredArgumentHazardIndexes,
+          localCallableArgumentOrigins:
+            profile.localCallableArgumentOrigins.map((origin) => ({
+              callableParameterOwnerFile: origin.callableParameterOwnerFile,
+              index: origin.index,
+              localFunctionKeys: origin.localFunctionKeys,
+            })),
+          opaqueArgumentIndexes: profile.opaqueArgumentIndexes,
+          opaqueArgumentOrigins: profile.opaqueArgumentOrigins.map(
+            (origin) => ({
+              index: origin.index,
+              invocation: cloudflareImportedInvocationIdentity(
+                origin.invocation
+              ),
+            })
+          ),
+        });
+      },
+    }).visit(program);
+    return profiles;
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+    cloudflareAppChunkProvenanceCache.clear();
+    authenticatedCloudflareModuleSources.clear();
+    verifiedCloudflareMetadataSources.clear();
+    clearParsedModuleCaches();
+  }
+};
+
+export const inspectCloudflareStaticPropertyKeysForTesting = (
+  root,
+  consumerArtifactFile,
+  propertySource,
+  cloudflareAppChunkProvenanceKey,
+  { includeSafety = false } = {}
+) => {
+  clearParsedModuleCaches();
+  authenticatedCloudflareModuleSources.clear();
+  verifiedCloudflareMetadataSources.clear();
+  cloudflareAppChunkProvenanceCache.clear();
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const artifactRoot = path.join(root, 'dist/server');
+    authenticateCloudflareArtifactBeforeParsing(
+      path.join(artifactRoot, 'index.js')
+    );
+    const consumerFile = path.join(artifactRoot, consumerArtifactFile);
+    const consumerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      consumerFile,
+      'static property-key fixture consumer'
+    );
+    cloudflareManifestChunkRecord(consumerRecord.key, consumerRecord);
+    const program = readParsedModule(consumerFile).program;
+    const source = parsedModuleSourcesByProgram.get(program);
+    const context = createCloudflareLexicalContext(
+      program,
+      consumerRecord.entry.file
+    );
+    context.artifactRoot = artifactRoot;
+    context.chunkFile = consumerFile;
+    const keys = [];
+    new Visitor({
+      Property(property) {
+        if (source?.slice(property.start, property.end) !== propertySource) {
+          return;
+        }
+        const key = cloudflareLexicalPropertyKeyName(property, context);
+        keys.push(
+          includeSafety
+            ? {
+                key,
+                safe: cloudflareComputedKeyIsSafe(
+                  property,
+                  property.key,
+                  context
+                ),
+              }
+            : key
+        );
+      },
+    }).visit(program);
+    return keys;
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+    cloudflareAppChunkProvenanceCache.clear();
+    authenticatedCloudflareModuleSources.clear();
+    verifiedCloudflareMetadataSources.clear();
+    clearParsedModuleCaches();
+  }
 };
 
 const cloudflareCalculateAggregateSpreadTargets = (
@@ -17724,7 +22322,7 @@ const cloudflareCalculateAggregateSpreadTargets = (
           )
         )
       : localCandidates;
-  const candidates = reviewedCandidates.every(
+  const importedCandidates = reviewedCandidates.every(
     (candidate) =>
       !isSupportedCloudflareAggregateSpreadCandidate(
         spread,
@@ -17735,10 +22333,19 @@ const cloudflareCalculateAggregateSpreadTargets = (
   )
     ? cloudflareImportedAggregateSpreadCandidates(spread, context, expectedType)
     : reviewedCandidates;
+  const candidates =
+    importedCandidates.length > 0
+      ? importedCandidates
+      : cloudflareReviewedOpaqueAggregateSpreadCandidates(
+          spread,
+          context,
+          expectedType
+        );
   const message = cloudflareAggregateSpreadDiagnostic(
     spread,
     context,
-    candidates
+    candidates,
+    expectedType
   );
   if (
     cloudflareMutualIndexConstructionInProgress(context) &&
@@ -17915,7 +22522,12 @@ const isSupportedCloudflareAggregateSpreadCandidate = (
       candidate.safeFalsyShortCircuit === true,
   ].includes(true);
 
-const cloudflareAggregateSpreadDiagnostic = (spread, context, candidates) =>
+const cloudflareAggregateSpreadDiagnostic = (
+  spread,
+  context,
+  candidates,
+  expectedType
+) =>
   `${cloudflareOpaqueAggregateSpreadMessage} in ${
     context.sourceAnalysisLabel ?? context.analysisLabel ?? 'unknown chunk'
   } (${nodeType(spread.argument)}@${String(spread.argument.start)}:${String(spread.argument.end)}:${identifierName(spread.argument) ?? ''} -> ${
@@ -17924,7 +22536,17 @@ const cloudflareAggregateSpreadDiagnostic = (spread, context, candidates) =>
         ({ target }) => `${nodeType(target)}:${identifierName(target) ?? ''}`
       )
       .join(',') || 'unresolved'
-  })`;
+  }; reviewed=${JSON.stringify({
+    artifactRoot: typeof context.artifactRoot === 'string',
+    chunkFile: typeof context.chunkFile === 'string',
+    expectedType,
+    readOnly:
+      typeof identifierName(spread.argument) === 'string' &&
+      cloudflareReviewedNamespaceBindingUsesAreReadOnly(
+        context.program,
+        identifierName(spread.argument)
+      ),
+  })})`;
 
 const cloudflareSymbolicArraySpreadCandidate = (candidate) => ({
   ...candidate,
@@ -19219,13 +23841,14 @@ const cloudflareMetaCallableTarget = (
 const cloudflareBoundMetaExecutions = (
   execution,
   lexicalContext,
-  allowParameterReceiver
+  allowParameterReceiver,
+  seen
 ) => {
   const candidates = cloudflareLexicalTargetCandidates(
     execution.node,
     execution.target,
     lexicalContext,
-    new Set()
+    seen
   ).filter(
     (candidate) =>
       (candidate.boundArguments !== undefined ||
@@ -19273,7 +23896,8 @@ const cloudflareBoundMetaExecutions = (
 const cloudflareNormalizedMetaExecutionStep = (
   execution,
   lexicalContext,
-  allowParameterReceiver
+  allowParameterReceiver,
+  seen
 ) => {
   const node = execution.node;
   if (nodeType(node) !== 'CallExpression') return undefined;
@@ -19295,7 +23919,8 @@ const cloudflareNormalizedMetaExecutionStep = (
   const bound = cloudflareBoundMetaExecutions(
     execution,
     lexicalContext,
-    allowParameterReceiver
+    allowParameterReceiver,
+    seen
   );
   if (bound) return bound;
   const target = cloudflareAmbientAliasTarget(
@@ -19330,6 +23955,7 @@ const cloudflareNormalizedMetaExecutions = (
   execution,
   lexicalContext,
   allowParameterReceiver,
+  seen = new Set(),
   depth = 0
 ) => {
   assert(
@@ -19339,7 +23965,8 @@ const cloudflareNormalizedMetaExecutions = (
   const normalized = cloudflareNormalizedMetaExecutionStep(
     execution,
     lexicalContext,
-    allowParameterReceiver
+    allowParameterReceiver,
+    seen
   );
   return normalized
     ? normalized.flatMap((candidate) =>
@@ -19347,6 +23974,7 @@ const cloudflareNormalizedMetaExecutions = (
           candidate,
           lexicalContext,
           allowParameterReceiver,
+          seen,
           depth + 1
         )
       )
@@ -19689,6 +24317,77 @@ const cloudflareImportedFactoryMemberStep = (
   );
 };
 
+const cloudflareImportedFactoryArgumentFacts = (
+  program,
+  factoryCall,
+  bindings,
+  lexicalContext,
+  resolution
+) => {
+  const argumentDetails = factoryCall.arguments.map((argument, index) => {
+    if (nodeType(argument) === 'SpreadElement') return { argument, index };
+    const resolved = resolveCloudflareTarget(argument, bindings);
+    const invocation = importedCloudflareFactoryResultInvocation(
+      program,
+      argument,
+      bindings,
+      lexicalContext,
+      resolution
+    );
+    return { argument, index, invocation, resolved };
+  });
+  const callableArguments = argumentDetails.filter(({ resolved }) =>
+    isCloudflareFunctionNode(resolved)
+  );
+  return {
+    factoryArgumentCount: factoryCall.arguments.every(
+      (argument) => nodeType(argument) !== 'SpreadElement'
+    )
+      ? factoryCall.arguments.length
+      : undefined,
+    factoryArgumentKeys: factoryCall.arguments.map((argument) =>
+      nodeType(argument) === 'SpreadElement'
+        ? undefined
+        : cloudflareNodeSemanticKey(argument)
+    ),
+    factoryArgumentOrigins: argumentDetails.flatMap(({ index, invocation }) =>
+      invocation
+        ? [
+            {
+              index,
+              invocation: cloudflareSerializableImportedInvocation(invocation),
+            },
+          ]
+        : []
+    ),
+    factoryArguments: factoryCall.arguments,
+    factoryCallKey: cloudflareNodeSemanticKey(factoryCall),
+    factoryCallableArgumentKeys: callableArguments.map(({ argument }) =>
+      cloudflareNodeSemanticKey(argument)
+    ),
+    factoryCallableArgumentIndexes: callableArguments.map(({ index }) => index),
+    factoryCallableArguments: callableArguments.map(({ argument }) => argument),
+    factoryNonCallableArgumentIndexes:
+      lexicalContext === undefined
+        ? factoryCall.arguments.flatMap((argument, index) =>
+            cloudflareStructuralArgumentCandidateTypes.has(nodeType(argument))
+              ? [index]
+              : []
+          )
+        : cloudflareProvablyNonCallableArgumentIndexes(
+            factoryCall,
+            lexicalContext
+          ),
+    factoryResolvedArgumentIndexes: argumentDetails.flatMap(
+      ({ index, invocation, resolved }) =>
+        cloudflareStructuralArgumentCandidateTypes.has(nodeType(resolved)) ||
+        invocation !== undefined
+          ? [index]
+          : []
+    ),
+  };
+};
+
 const cloudflareImportedFactoryCallStep = (
   program,
   factoryCall,
@@ -19713,60 +24412,14 @@ const cloudflareImportedFactoryCallStep = (
       lexicalContext
     );
   }
-  const argumentDetails = factoryCall.arguments.map((argument, index) => {
-    if (nodeType(argument) === 'SpreadElement') return { argument, index };
-    const resolved = resolveCloudflareTarget(argument, bindings);
-    const invocation = importedCloudflareFactoryResultInvocation(
+  return {
+    ...cloudflareImportedFactoryArgumentFacts(
       program,
-      argument,
+      factoryCall,
       bindings,
       lexicalContext,
       resolution
-    );
-    return { argument, index, invocation, resolved };
-  });
-  const callableArguments = argumentDetails.filter(({ resolved }) =>
-    isCloudflareFunctionNode(resolved)
-  );
-  const factoryArgumentKeys = factoryCall.arguments.map((argument) =>
-    nodeType(argument) === 'SpreadElement'
-      ? undefined
-      : cloudflareNodeSemanticKey(argument)
-  );
-  const factoryArgumentOrigins = argumentDetails.flatMap(
-    ({ index, invocation }) =>
-      invocation
-        ? [
-            {
-              index,
-              invocation: cloudflareSerializableImportedInvocation(invocation),
-            },
-          ]
-        : []
-  );
-  const resolvedArgumentIndexes = argumentDetails.flatMap(
-    ({ index, invocation, resolved }) =>
-      cloudflareStructuralArgumentCandidateTypes.has(nodeType(resolved)) ||
-      invocation !== undefined
-        ? [index]
-        : []
-  );
-  return {
-    factoryArgumentCount: factoryCall.arguments.every(
-      (argument) => nodeType(argument) !== 'SpreadElement'
-    )
-      ? factoryCall.arguments.length
-      : undefined,
-    factoryArgumentKeys,
-    factoryArgumentOrigins,
-    factoryArguments: factoryCall.arguments,
-    factoryCallKey: cloudflareNodeSemanticKey(factoryCall),
-    factoryCallableArgumentKeys: callableArguments.map(({ argument }) =>
-      cloudflareNodeSemanticKey(argument)
     ),
-    factoryCallableArgumentIndexes: callableArguments.map(({ index }) => index),
-    factoryCallableArguments: callableArguments.map(({ argument }) => argument),
-    factoryResolvedArgumentIndexes: resolvedArgumentIndexes,
     imported,
     returnedPath,
   };
@@ -19925,6 +24578,7 @@ const importedCloudflareFactoryResultInvocation = (
     factoryCallableArgumentKeys: result.factoryCallableArgumentKeys,
     factoryCallableArgumentIndexes: result.factoryCallableArgumentIndexes,
     factoryCallableArguments: result.factoryCallableArguments,
+    factoryNonCallableArgumentIndexes: result.factoryNonCallableArgumentIndexes,
     factoryResolvedArgumentIndexes: result.factoryResolvedArgumentIndexes,
     returnedPath: result.returnedPath,
   };
@@ -20178,8 +24832,25 @@ const recordCloudflareExecutionOwner = (target, owner, context, execution) => {
         (argument) => nodeType(argument) !== 'SpreadElement'
       )
     ) {
-      imported.factoryArgumentCount = executionArguments.length;
-      imported.factoryArguments = executionArguments;
+      const argumentFacts = cloudflareImportedFactoryArgumentFacts(
+        context.program,
+        executionNode,
+        context.bindings,
+        context.lexicalContext
+      );
+      Object.assign(imported, {
+        directImportedArgumentFacts: true,
+        factoryArgumentCount: argumentFacts.factoryArgumentCount,
+        factoryArgumentKeys: argumentFacts.factoryArgumentKeys,
+        factoryArguments: argumentFacts.factoryArguments,
+        factoryCallKey: argumentFacts.factoryCallKey,
+        factoryCallableArgumentIndexes:
+          argumentFacts.factoryCallableArgumentIndexes,
+        factoryCallableArgumentKeys: argumentFacts.factoryCallableArgumentKeys,
+        factoryCallableArguments: argumentFacts.factoryCallableArguments,
+        factoryResolvedArgumentIndexes:
+          argumentFacts.factoryResolvedArgumentIndexes,
+      });
       imported.factoryNonCallableArgumentIndexes =
         cloudflareProvablyNonCallableArgumentIndexes(
           executionNode,
@@ -20524,6 +25195,9 @@ const cloudflareProvablyNonCallableArgumentSourceIndexes = (
 ) =>
   sources.flatMap((argument, index) => {
     if (nodeType(argument) === 'SpreadElement') return [];
+    if (cloudflareStructuralArgumentCandidateTypes.has(nodeType(argument))) {
+      return [index];
+    }
     const candidates = cloudflareLexicalTargetCandidates(
       node,
       argument,
@@ -20795,6 +25469,231 @@ const cloudflareDeferredFactoryCallChainArguments = (
   };
 };
 
+const cloudflareDeferredValueTarget = (source, eagerTargets) => {
+  let current = source;
+  let depth = 0;
+  while (
+    new Set([
+      'AwaitExpression',
+      'ChainExpression',
+      'ParenthesizedExpression',
+      'SequenceExpression',
+    ]).has(nodeType(current))
+  ) {
+    depth += 1;
+    assert(
+      depth <= cloudflareFactoryResolutionLimit,
+      cloudflareFactoryResolutionMessage
+    );
+    if (nodeType(current) === 'AwaitExpression') return undefined;
+    if (nodeType(current) === 'SequenceExpression') {
+      eagerTargets.push(...current.expressions.slice(0, -1));
+      current = current.expressions.at(-1);
+      continue;
+    }
+    current = current.expression;
+  }
+  return current;
+};
+
+const cloudflareDeferredMemberChainEagerTargets = (source, eagerTargets) => {
+  let current = source;
+  while (nodeType(current) === 'MemberExpression') {
+    current = cloudflareDeferredValueTarget(current.object, eagerTargets);
+    if (!current) return false;
+  }
+  return true;
+};
+
+const cloudflareDeferredResultCallChain = (source, context) => {
+  const eagerTargets = [];
+  let current = cloudflareDeferredValueTarget(source, eagerTargets);
+  let returnedPath = [];
+  const outerArguments = [];
+  let depth = 0;
+  while (nodeType(current) === 'CallExpression') {
+    depth += 1;
+    assert(
+      depth <= cloudflareFactoryResolutionLimit,
+      cloudflareFactoryResolutionMessage
+    );
+    if (
+      current.optional === true ||
+      current.arguments.some(
+        (argument) => nodeType(argument) === 'SpreadElement'
+      )
+    ) {
+      return undefined;
+    }
+    const callee = cloudflareDeferredValueTarget(current.callee, eagerTargets);
+    if (!callee) return undefined;
+    if (nodeType(callee) === 'Identifier') {
+      return {
+        allArguments: [
+          ...current.arguments,
+          ...outerArguments,
+          ...eagerTargets,
+        ],
+        kind: 'local',
+        localCallee: callee,
+        returnedPath,
+        rootCall: current,
+      };
+    }
+    if (nodeType(callee) === 'MemberExpression') {
+      if (callee.optional === true) return undefined;
+      if (!cloudflareDeferredMemberChainEagerTargets(callee, eagerTargets)) {
+        return undefined;
+      }
+      const importedMemberOwner = cloudflareImportedStaticMemberOwner(
+        callee,
+        context.lexicalContext
+      );
+      if (importedMemberOwner) {
+        return {
+          allArguments: [
+            ...current.arguments,
+            ...outerArguments,
+            ...eagerTargets,
+          ],
+          importedMemberOwner,
+          kind: 'imported-static-member',
+          returnedPath,
+          rootCall: current,
+        };
+      }
+      const member = cloudflareMemberName(callee);
+      if (member === undefined) return undefined;
+      returnedPath = [
+        member,
+        cloudflareReturnedCallProjection,
+        ...returnedPath,
+      ];
+      outerArguments.push(...current.arguments);
+      current = cloudflareDeferredValueTarget(callee.object, eagerTargets);
+      if (!current) return undefined;
+      continue;
+    }
+    if (nodeType(callee) === 'CallExpression') {
+      returnedPath = [cloudflareReturnedCallProjection, ...returnedPath];
+      outerArguments.push(...current.arguments);
+      current = callee;
+      continue;
+    }
+    return undefined;
+  }
+  return undefined;
+};
+
+const cloudflareReviewedStaticMemberDeferredResult = (source, context) => {
+  const chain = cloudflareDeferredResultCallChain(source, context);
+  if (chain?.kind !== 'imported-static-member') return undefined;
+  const { importedMemberOwner: owner } = chain;
+  const reviewedClosure =
+    cloudflareReviewedClosureByProgram.get(owner.ownerProgram) ??
+    registerReviewedCloudflareClosure(
+      owner.ownerProgram,
+      normalizeArtifactFile(
+        context.lexicalContext.artifactRoot,
+        owner.ownerFile
+      ),
+      owner.provenance
+    );
+  const reviewed =
+    reviewedClosure?.exportedStaticMemberDeferredResults?.some(
+      (policy) =>
+        policy.exportedLocalName === owner.localName &&
+        policy.exportedName === owner.importedName &&
+        JSON.stringify(policy.memberPath) ===
+          JSON.stringify(owner.memberPath) &&
+        JSON.stringify(policy.returnedPath) ===
+          JSON.stringify(chain.returnedPath)
+    ) === true;
+  return reviewed
+    ? {
+        kind: 'reviewed-static-member-safe',
+        targets: chain.allArguments,
+      }
+    : undefined;
+};
+
+const cloudflareDeferredLocalExpressionFactoryResult = (source, context) => {
+  const chain = cloudflareDeferredResultCallChain(source, context);
+  if (chain?.kind !== 'local') return undefined;
+  const name = chain.localCallee.name;
+  const binding = artifactOwnerLexicalBinding(
+    chain.rootCall,
+    name,
+    context.lexicalContext
+  );
+  if (
+    !binding ||
+    cloudflareParameterBinding(binding) ||
+    cloudflareBindingValueMutations(binding, name, context.lexicalContext)
+      .length > 0
+  ) {
+    return undefined;
+  }
+  const owners = cloudflareDirectLocalBindingValues(
+    chain.rootCall,
+    chain.localCallee,
+    context.lexicalContext
+  ).filter(isCloudflareFunctionNode);
+  if (owners.length !== 1) return undefined;
+  const [owner] = owners;
+  if (
+    nodeType(owner) !== 'ArrowFunctionExpression' ||
+    owner.async === true ||
+    owner.generator === true ||
+    nodeType(owner.body) === 'BlockStatement' ||
+    owner.params.some((parameter) => nodeType(parameter) !== 'Identifier')
+  ) {
+    return undefined;
+  }
+  const invocationKey = JSON.stringify([
+    cloudflareNodeSemanticKey(chain.rootCall),
+    chain.returnedPath,
+  ]);
+  const active = context.deferredHazardVisitedLocalInvocations ?? new Set();
+  if (active.has(invocationKey)) return { hazard: true, targets: [] };
+  const nextActive = new Set(active).add(invocationKey);
+  const bindings = cloudflareFactoryParameterBindings(
+    chain.rootCall,
+    { target: owner },
+    context.lexicalContext
+  );
+  const projected = cloudflareReturnedInvocationTarget(
+    owner.body,
+    chain.returnedPath
+  );
+  const resolve = () => {
+    const nextContext = {
+      ...context,
+      deferredHazardVisitedLocalInvocations: nextActive,
+    };
+    const projectedDiffersFromBody =
+      cloudflareNodeSemanticKey(projected) !==
+      cloudflareNodeSemanticKey(owner.body);
+    return {
+      hazard:
+        chain.allArguments.some((argument) =>
+          cloudflareDeferredArgumentTargetHasHazard(argument, nextContext)
+        ) ||
+        (projectedDiffersFromBody &&
+          cloudflareDeferredArgumentTargetHasHazard(owner.body, nextContext)) ||
+        cloudflareDeferredArgumentTargetHasHazard(projected, nextContext),
+      kind: 'resolved-local-expression-factory',
+      targets: [],
+    };
+  };
+  return withCloudflareActiveFactoryBindings(
+    context.lexicalContext,
+    owner,
+    bindings,
+    resolve
+  );
+};
+
 const cloudflareDeferredImportedFactoryBindings = (
   factory,
   invocation,
@@ -20828,6 +25727,50 @@ const cloudflareDeferredImportedFactoryBindings = (
     if (candidates.length > 0) bindings.set(parameter.name, candidates);
   });
   return bindings.size === factory.params.length ? bindings : undefined;
+};
+
+const cloudflareDirectLocalProxyFactoryResult = (
+  source,
+  lexicalContext,
+  seen = new Set(),
+  depth = 0
+) => {
+  if (depth > cloudflareParameterProjectionDepthLimit) return false;
+  const target = unwrapCloudflareExecutionTarget(source);
+  if (!target) return false;
+  const key = cloudflareNodeSemanticKey(target);
+  if (seen.has(key)) return false;
+  const nextSeen = new Set(seen).add(key);
+  if (isCloudflareDirectProxyConstruction(target, lexicalContext)) return true;
+  if (nodeType(target) === 'Identifier') {
+    const resolved = resolveCloudflareTarget(
+      target,
+      lexicalContext.topLevelBindings
+    );
+    return (
+      resolved !== target &&
+      cloudflareDirectLocalProxyFactoryResult(
+        resolved,
+        lexicalContext,
+        nextSeen,
+        depth + 1
+      )
+    );
+  }
+  if (nodeType(target) !== 'CallExpression') return false;
+  const owner = resolveCloudflareTarget(
+    target.callee,
+    lexicalContext.topLevelBindings
+  );
+  if (!isCloudflareFunctionNode(owner)) return false;
+  return cloudflareFunctionReturnExpressions(owner).some((returned) =>
+    cloudflareDirectLocalProxyFactoryResult(
+      returned,
+      lexicalContext,
+      nextSeen,
+      depth + 1
+    )
+  );
 };
 
 const cloudflareDeferredImportedFactoryResult = (source, context) => {
@@ -20896,7 +25839,8 @@ const cloudflareDeferredImportedFactoryResult = (source, context) => {
     Array.isArray(invocation.factoryArguments) &&
     cloudflareReturnedOwnersAreUnmutated(
       context.program,
-      reviewedReceiverRoots
+      reviewedReceiverRoots,
+      context.lexicalContext
     );
   const reviewedTargets = factoryCallChain.complete
     ? factoryCallChain.targets
@@ -20904,6 +25848,24 @@ const cloudflareDeferredImportedFactoryResult = (source, context) => {
       ? [...invocation.factoryArguments, ...factoryCallChain.targets]
       : undefined;
   if (reviewedOpaqueResult && reviewedTargets) {
+    return {
+      kind: 'reviewed-opaque-safe',
+      targets: reviewedTargets,
+    };
+  }
+  const reviewedOriginPath =
+    invocation.returnedPath ?? (factoryCallChain.complete ? [] : undefined);
+  const reviewedOriginResult =
+    reviewedClosure === undefined &&
+    reviewedOriginPath !== undefined &&
+    cloudflareFactoryHasReviewedOrigin(
+      ownerProgram,
+      ownerFile,
+      ownerLocalName,
+      context.lexicalContext.artifactRoot,
+      reviewedOriginPath
+    );
+  if (reviewedOriginResult && reviewedTargets) {
     return {
       kind: 'reviewed-opaque-safe',
       targets: reviewedTargets,
@@ -20940,19 +25902,25 @@ const cloudflareDeferredImportedFactoryResult = (source, context) => {
   if (visitedInvocations.has(invocationKey)) return undefined;
   const nextVisitedInvocations = new Set(visitedInvocations).add(invocationKey);
   const resolvedTargetIsHazardous = () => {
-    const targets = cloudflareFunctionReturnExpressions(factory).flatMap(
-      (returned) => {
-        const target = cloudflareReturnedInvocationTarget(
-          returned,
-          invocation.returnedPath ?? []
-        );
-        return cloudflareLexicalTargetCandidates(
-          target,
-          target,
-          lexicalContext
-        ).map((candidate) => candidate.target);
-      }
-    );
+    const returnedExpressions = cloudflareFunctionReturnExpressions(factory);
+    if (
+      returnedExpressions.some((returned) =>
+        cloudflareDirectLocalProxyFactoryResult(returned, lexicalContext)
+      )
+    ) {
+      return true;
+    }
+    const targets = returnedExpressions.flatMap((returned) => {
+      const target = cloudflareReturnedInvocationTarget(
+        returned,
+        invocation.returnedPath ?? []
+      );
+      return cloudflareLexicalTargetCandidates(
+        target,
+        target,
+        lexicalContext
+      ).map((candidate) => candidate.target);
+    });
     const ownerContext = {
       bindings: lexicalContext.topLevelBindings,
       deferredHazardVisitedInvocations: nextVisitedInvocations,
@@ -20966,18 +25934,26 @@ const cloudflareDeferredImportedFactoryResult = (source, context) => {
       )
     );
   };
-  return {
-    hazard: factoryBindings
-      ? withCloudflareActiveFactoryBindings(
-          lexicalContext,
-          factory,
-          factoryBindings,
-          resolvedTargetIsHazardous
-        )
-      : resolvedTargetIsHazardous(),
-    kind: 'resolved',
-    targets: [],
-  };
+  try {
+    return {
+      hazard: factoryBindings
+        ? withCloudflareActiveFactoryBindings(
+            lexicalContext,
+            factory,
+            factoryBindings,
+            resolvedTargetIsHazardous
+          )
+        : resolvedTargetIsHazardous(),
+      kind: 'resolved',
+      targets: [],
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Deferred factory analysis failed for ${analysisLabel}#${ownerLocalName} ${JSON.stringify(invocation.returnedPath ?? [])}: ${detail}`,
+      { cause: error }
+    );
+  }
 };
 
 const cloudflareDeferredObjectHazardTargets = (target) => {
@@ -21012,7 +25988,22 @@ const cloudflareSafeDeferredAmbientData = (target, context) =>
     !artifactOwnerLexicalBinding(target, 'process', context.lexicalContext));
 
 const cloudflareDeferredArgumentHazardTargets = (target, context) => {
+  if (
+    new Set(['ChainExpression', 'ParenthesizedExpression']).has(
+      nodeType(target)
+    )
+  ) {
+    return { hazard: false, targets: [target.expression] };
+  }
   if (nodeType(target) === 'CallExpression') {
+    const reviewedStaticMember = cloudflareReviewedStaticMemberDeferredResult(
+      target,
+      context
+    );
+    if (reviewedStaticMember) return reviewedStaticMember;
+    const localExpressionFactory =
+      cloudflareDeferredLocalExpressionFactoryResult(target, context);
+    if (localExpressionFactory) return localExpressionFactory;
     const returned = cloudflareDeferredImportedFactoryResult(target, context);
     return !returned || returned.hazard === true
       ? { hazard: true, targets: [] }
@@ -21027,7 +26018,7 @@ const cloudflareDeferredArgumentHazardTargets = (target, context) => {
   if (nodeType(target) === 'ConditionalExpression') {
     return {
       hazard: false,
-      targets: [target.consequent, target.alternate],
+      targets: [target.test, target.consequent, target.alternate],
     };
   }
   if (nodeType(target) === 'LogicalExpression') {
@@ -21037,7 +26028,7 @@ const cloudflareDeferredArgumentHazardTargets = (target, context) => {
     return { hazard: false, targets: target.expressions };
   }
   if (nodeType(target) === 'AssignmentExpression') {
-    return { hazard: false, targets: [target.right] };
+    return { hazard: true, targets: [] };
   }
   if (new Set(['AwaitExpression', 'YieldExpression']).has(nodeType(target))) {
     return target.argument
@@ -21050,7 +26041,11 @@ const cloudflareDeferredArgumentHazardTargets = (target, context) => {
   if (nodeType(target) === 'BinaryExpression') {
     return { hazard: false, targets: [target.left, target.right] };
   }
-  if (new Set(['UnaryExpression', 'UpdateExpression']).has(nodeType(target))) {
+  if (nodeType(target) === 'UpdateExpression') {
+    return { hazard: true, targets: [] };
+  }
+  if (nodeType(target) === 'UnaryExpression') {
+    if (target.operator === 'delete') return { hazard: true, targets: [] };
     return { hazard: false, targets: [target.argument] };
   }
   if (new Set(['Identifier', 'MemberExpression']).has(nodeType(target))) {
@@ -21137,10 +26132,109 @@ export const inspectCloudflareDeferredArgumentHazardForTesting = (
   });
 };
 
+export const inspectCloudflareReviewedStaticMemberDeferredResultForTesting = (
+  root,
+  ownerArtifactFile,
+  consumerArtifactFile,
+  expressionSource,
+  cloudflareAppChunkProvenanceKey,
+  policy
+) => {
+  clearParsedModuleCaches();
+  authenticatedCloudflareModuleSources.clear();
+  verifiedCloudflareMetadataSources.clear();
+  cloudflareAppChunkProvenanceCache.clear();
+  const previousProvenanceKey = activeCloudflareAppChunkProvenanceKey;
+  activeCloudflareAppChunkProvenanceKey = cloudflareAppChunkProvenanceKey;
+  try {
+    const worker = globalThis.__vitest_worker__;
+    assert(
+      worker?.current?.type === 'test' && typeof worker.filepath === 'string',
+      'synthetic static member policies are available only inside an active Vitest test'
+    );
+    const artifactRoot = path.join(root, 'dist/server');
+    authenticateCloudflareArtifactBeforeParsing(
+      path.join(artifactRoot, 'index.js')
+    );
+    const ownerFile = path.join(artifactRoot, ownerArtifactFile);
+    const ownerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      ownerFile,
+      'reviewed static member fixture owner'
+    );
+    cloudflareManifestChunkRecord(ownerRecord.key, ownerRecord);
+    const ownerProgram = readParsedModule(ownerFile).program;
+    const reviewedClosure = {
+      exportedStaticMemberDeferredResults: [policy],
+    };
+    assertCloudflareReviewedPolicy(ownerProgram, reviewedClosure);
+    cloudflareReviewedClosureByProgram.set(ownerProgram, reviewedClosure);
+    const consumerFile = path.join(artifactRoot, consumerArtifactFile);
+    const consumerRecord = assertCloudflareChunkManifestMembership(
+      artifactRoot,
+      consumerFile,
+      'reviewed static member fixture consumer'
+    );
+    cloudflareManifestChunkRecord(consumerRecord.key, consumerRecord);
+    const program = readParsedModule(consumerFile).program;
+    const source = parsedModuleSourcesByProgram.get(program);
+    const lexicalContext = createCloudflareLexicalContext(
+      program,
+      consumerRecord.entry.file
+    );
+    lexicalContext.artifactRoot = artifactRoot;
+    lexicalContext.chunkFile = consumerFile;
+    const context = {
+      bindings: lexicalContext.topLevelBindings,
+      lexicalContext,
+      program,
+    };
+    const hazards = [];
+    new Visitor({
+      CallExpression(call) {
+        if (source?.slice(call.start, call.end) !== expressionSource) return;
+        hazards.push(cloudflareDeferredArgumentTargetHasHazard(call, context));
+      },
+    }).visit(program);
+    assert(
+      hazards.length === 1,
+      `expected one reviewed static member fixture expression ${expressionSource}`
+    );
+    return hazards[0];
+  } finally {
+    activeCloudflareAppChunkProvenanceKey = previousProvenanceKey;
+    cloudflareAppChunkProvenanceCache.clear();
+    authenticatedCloudflareModuleSources.clear();
+    verifiedCloudflareMetadataSources.clear();
+    clearParsedModuleCaches();
+  }
+};
+
+export const inspectCloudflareDirectLocalProxyFactoryResultForTesting = (
+  source,
+  bindingName
+) => {
+  const program = parseModuleSource(
+    'direct-proxy-result.fixture.js',
+    source
+  ).program;
+  const lexicalContext = createCloudflareLexicalContext(
+    program,
+    'direct-proxy-result.fixture.js'
+  );
+  const target = lexicalContext.topLevelBindings.get(bindingName);
+  assert(target, `missing direct-proxy-result fixture binding ${bindingName}`);
+  return cloudflareDirectLocalProxyFactoryResult(target, lexicalContext);
+};
+
 const cloudflareDeferredArgumentHasHazard = (source, candidates, context) => {
   if (
     nodeType(source) === 'Identifier' &&
-    !cloudflareReturnedOwnersAreUnmutated(context.program, [source.name])
+    !cloudflareReturnedOwnersAreUnmutated(
+      context.program,
+      [source.name],
+      context.lexicalContext
+    )
   ) {
     return true;
   }
@@ -21204,7 +26298,11 @@ const cloudflareArgumentOriginCoverageIsComplete = (
 ) => {
   if (
     nodeType(source) === 'Identifier' &&
-    !cloudflareReturnedOwnersAreUnmutated(context.program, [source.name])
+    !cloudflareReturnedOwnersAreUnmutated(
+      context.program,
+      [source.name],
+      context.lexicalContext
+    )
   ) {
     return false;
   }
@@ -21273,40 +26371,6 @@ const cloudflareArgumentOriginCoverageIsComplete = (
       }
       if (nodeType(target) === 'CallExpression') {
         const callee = unwrapCloudflareExecutionTarget(target.callee);
-        const importedMemberOwner = cloudflareImportedStaticMemberOwner(
-          callee,
-          context.lexicalContext
-        );
-        if (importedMemberOwner) {
-          const argumentsAreCovered = target.arguments.every(
-            (argument) =>
-              nodeType(argument) !== 'SpreadElement' &&
-              targetIsCovered(argument, depth + 1)
-          );
-          if (!argumentsAreCovered) return false;
-          const ownerKey = cloudflareNodeSemanticKey(importedMemberOwner.owner);
-          localFunctionKeys.add(ownerKey);
-          const originExists = profile.localCallableArgumentOrigins.some(
-            (origin) =>
-              origin.index === index &&
-              origin.callableParameterOwnerFile ===
-                importedMemberOwner.ownerFile &&
-              origin.localFunctionKeys?.includes(ownerKey)
-          );
-          if (!originExists) {
-            profile.localCallableArgumentOrigins.push({
-              callableParameterCandidates: [
-                { target: importedMemberOwner.owner },
-              ],
-              callableParameterOwnerFile: importedMemberOwner.ownerFile,
-              callableParameterProgram: importedMemberOwner.ownerProgram,
-              index,
-              localFunctionKeys: [ownerKey],
-            });
-          }
-          covered = true;
-          return covered;
-        }
         const localFactoryChain = cloudflareLocalFactoryCallChain(target);
         const localCallee = localFactoryChain?.callee ?? callee;
         const localRootCall = localFactoryChain?.rootCall ?? target;
@@ -21328,9 +26392,11 @@ const cloudflareArgumentOriginCoverageIsComplete = (
         const topLevelOwner =
           nodeType(localCallee) === 'Identifier' &&
           !calleeBinding &&
-          cloudflareReturnedOwnersAreUnmutated(context.program, [
-            localCallee.name,
-          ])
+          cloudflareReturnedOwnersAreUnmutated(
+            context.program,
+            [localCallee.name],
+            context.lexicalContext
+          )
             ? resolveCloudflareTarget(localCallee, context.bindings)
             : undefined;
         const localOwnerCandidates =
@@ -21954,7 +27020,10 @@ const cloudflareObjectAssignEnumerableProperties = (
         property,
         context.lexicalContext
       );
-      assert(member !== undefined, cloudflareOpaqueMemberMutationMessage);
+      assert(
+        member !== undefined,
+        `${cloudflareOpaqueMemberMutationMessage} in ${context.lexicalContext.analysisLabel} (Object.assign property ${nodeType(property)}@${String(property?.start)}:${String(property?.end)} from ${nodeType(candidate)}@${String(candidate?.start)}:${String(candidate?.end)} at ${nodeType(execution)}@${String(execution?.start)}:${String(execution?.end)})`
+      );
       propertyByMember.set(String(member), property);
     });
   };
@@ -26962,6 +32031,86 @@ const cloudflareConstructedSymbolKeyIsSafe = (node, source, lexicalContext) => {
   );
 };
 
+const cloudflareImmutableTopLevelBindingValues = (
+  node,
+  name,
+  lexicalContext
+) => {
+  const cache = lexicalContext.immutableTopLevelBindingValues;
+  if (cache.has(name)) return cache.get(name);
+  const declarators = topLevelBindingDeclarators(lexicalContext.program, name);
+  const declarations = topLevelDeclarationsForBinding(
+    lexicalContext.program,
+    name
+  );
+  const declarator = declarators.length === 1 ? declarators[0] : undefined;
+  let reassigned = false;
+  const writesBinding = (target, anchor) => {
+    const writes =
+      identifierName(target) === name || bindingNames(target).includes(name);
+    if (!writes) return;
+    const binding = artifactOwnerLexicalBinding(anchor, name, lexicalContext);
+    if (!binding || binding.digestNode === declarator) reassigned = true;
+  };
+  if (declarator) {
+    new Visitor({
+      AssignmentExpression(assignment) {
+        writesBinding(assignment.left, assignment);
+      },
+      ForInStatement(statement) {
+        writesBinding(statement.left, statement);
+      },
+      ForOfStatement(statement) {
+        writesBinding(statement.left, statement);
+      },
+      UpdateExpression(update) {
+        writesBinding(update.argument, update);
+      },
+    }).visit(lexicalContext.program);
+  }
+  const values =
+    declarator?.init &&
+    declarator.end <= node.start &&
+    declarations.length === 1 &&
+    !reassigned
+      ? [declarator.init]
+      : [];
+  cache.set(name, values);
+  return values;
+};
+
+const cloudflareComputedKeyIsProvablySymbol = (
+  node,
+  source,
+  lexicalContext
+) => {
+  const candidateIsSymbol = (target) =>
+    cloudflareWellKnownSymbolKeyIsSafe(node, target, lexicalContext) ||
+    cloudflareConstructedSymbolKeyIsSafe(node, target, lexicalContext);
+  if (candidateIsSymbol(source)) return true;
+  if (
+    cloudflareImportedStaticSymbolKeyName(node, source, lexicalContext) !==
+    undefined
+  ) {
+    return true;
+  }
+  const candidates =
+    nodeType(source) === 'Identifier'
+      ? [
+          ...cloudflareDirectLocalBindingValues(node, source, lexicalContext),
+          ...cloudflareImmutableTopLevelBindingValues(
+            node,
+            source.name,
+            lexicalContext
+          ),
+        ]
+      : [];
+  return (
+    candidates.length > 0 &&
+    candidates.every((target) => candidateIsSymbol(target))
+  );
+};
+
 const cloudflareComputedKeyCandidateIsPrimitive = (
   node,
   candidate,
@@ -26986,10 +32135,7 @@ const cloudflareComputedKeyCandidateIsPrimitive = (
 };
 
 const cloudflareComputedKeyIsSafe = (node, source, lexicalContext) => {
-  if (
-    cloudflareWellKnownSymbolKeyIsSafe(node, source, lexicalContext) ||
-    cloudflareConstructedSymbolKeyIsSafe(node, source, lexicalContext)
-  ) {
+  if (cloudflareComputedKeyIsProvablySymbol(node, source, lexicalContext)) {
     return true;
   }
   const candidates = cloudflareLexicalTargetCandidates(
@@ -27336,7 +32482,10 @@ const cloudflareReturnedInvocationStep = (target, projection) =>
     : cloudflareReturnedMemberTarget(target, projection);
 
 const cloudflareReturnedInvocationTarget = (returned, returnedPath) =>
-  returnedPath.reduce(cloudflareReturnedInvocationStep, returned);
+  returnedPath.reduce(
+    cloudflareReturnedInvocationStep,
+    unwrapCloudflareExecutionTarget(returned)
+  );
 
 const cloudflareFactoryCaptureNames = (factory, returnedFunction) => {
   const parameters = new Set(
@@ -27391,7 +32540,8 @@ const cloudflareMissingFactoryParameterIsNonCallable = (
 const cloudflareFactoryResultIsProvablyNonCallable = (
   factory,
   argumentCount,
-  nonCallableArgumentIndexes = []
+  nonCallableArgumentIndexes = [],
+  lexicalContext
 ) =>
   Number.isInteger(argumentCount) &&
   cloudflareFunctionReturnExpressions(factory).every((returned) =>
@@ -27402,6 +32552,27 @@ const cloudflareFactoryResultIsProvablyNonCallable = (
         'ObjectExpression',
         'TemplateLiteral',
       ]).has(nodeType(returned)),
+      (() => {
+        const target = unwrapCloudflareExecutionTarget(returned);
+        const callee = unwrapCloudflareExecutionTarget(target?.callee);
+        if (
+          nodeType(target) !== 'CallExpression' ||
+          target.arguments.length !== 1 ||
+          nodeType(callee) !== 'MemberExpression' ||
+          cloudflareMemberName(callee) !== 'has'
+        ) {
+          return false;
+        }
+        const receiver = resolveCloudflareTarget(
+          callee.object,
+          lexicalContext.topLevelBindings
+        );
+        return (
+          nodeType(receiver) === 'NewExpression' &&
+          identifierName(receiver.callee) === 'Set' &&
+          !artifactOwnerLexicalBinding(receiver.callee, 'Set', lexicalContext)
+        );
+      })(),
       cloudflareMissingFactoryParameterIsNonCallable(
         factory,
         returned,
@@ -27510,10 +32681,28 @@ const cloudflareReturnedInvocationFactory = (
   lexicalContext,
   allowUnresolved
 ) => {
-  const factory = resolveCloudflareTarget(
+  const resolvedFactory = resolveCloudflareTarget(
     { name: invocation.localName, type: 'Identifier' },
     lexicalContext.topLevelBindings
   );
+  const destructuredOwners = [
+    isCloudflareFunctionNode(resolvedFactory),
+    isCloudflareClassNode(resolvedFactory),
+  ].includes(true)
+    ? undefined
+    : cloudflareDestructuredFactoryCallableOwners(
+        lexicalContext.program,
+        invocation.localName,
+        lexicalContext
+      );
+  assert(
+    destructuredOwners === undefined || destructuredOwners.length === 1,
+    `Cloudflare load-effect analysis requires one statically analyzable destructured factory owner in ${cloudflareKeyValue(
+      lexicalContext.analysisLabel,
+      'unknown chunk'
+    )} (${invocation.localName}:${JSON.stringify(invocation.returnedPath)})`
+  );
+  const factory = destructuredOwners?.[0] ?? resolvedFactory;
   const hasAnalyzableOwner = [
     isCloudflareFunctionNode(factory),
     isCloudflareClassNode(factory),
@@ -27629,7 +32818,8 @@ const cloudflareReturnedFactoryCanRemainUnresolved = (
     ? cloudflareFactoryResultIsProvablyNonCallable(
         factory,
         invocation.factoryArgumentCount,
-        invocation.factoryNonCallableArgumentIndexes
+        invocation.factoryNonCallableArgumentIndexes,
+        lexicalContext
       )
     : false;
   const classResultIsNonCallable = isCloudflareClassNode(factory)
@@ -27714,7 +32904,13 @@ const cloudflareAssertFactoryCapture = (
       'unknown chunk'
     )} (${invocation.localName}:${JSON.stringify(
       invocation.returnedPath
-    )} -> ${uncoveredCaptureNames.join(',')})`
+    )} -> ${uncoveredCaptureNames.join(',')}; arguments=${JSON.stringify({
+      callable: invocation.factoryCallableArgumentIndexes,
+      caller: invocation.callerAnalysisLabel,
+      count: invocation.factoryArgumentCount,
+      direct: invocation.directFactoryChainProven,
+      resolved: invocation.factoryResolvedArgumentIndexes,
+    })})`
   );
 };
 
@@ -28368,6 +33564,36 @@ const cloudflareResolvedFactoryOriginLineage = (
     lexicalContext
   );
   if (imported) return { complete: true, origins: [imported] };
+  const execution = unwrapCloudflareExecutionTarget(target);
+  const memberCallee = unwrapCloudflareExecutionTarget(execution?.callee);
+  if (
+    nodeType(execution) === 'CallExpression' &&
+    nodeType(memberCallee) === 'MemberExpression'
+  ) {
+    const member = cloudflareMemberName(memberCallee);
+    if (member !== undefined) {
+      const baseLineage = cloudflareFactoryOriginLineage(
+        program,
+        memberCallee.object,
+        lexicalContext,
+        seen,
+        depth + 1
+      );
+      if (baseLineage.complete) {
+        return {
+          complete: true,
+          origins: baseLineage.origins.map((origin) => ({
+            ...origin,
+            returnedPath: [
+              ...(origin.returnedPath ?? []),
+              member,
+              cloudflareReturnedCallProjection,
+            ],
+          })),
+        };
+      }
+    }
+  }
   const resolved = resolveCloudflareTarget(
     target,
     lexicalContext.topLevelBindings
@@ -28549,6 +33775,160 @@ const cloudflareReviewedFactoryOriginPolicyIsSafe = (
   );
 };
 
+const cloudflareReviewedInvocationPolicy = (
+  program,
+  chunkFile,
+  invocation,
+  artifactRoot,
+  label
+) => {
+  const ownerFile = cloudflareReviewedOwnerFile(
+    program,
+    chunkFile,
+    invocation,
+    artifactRoot
+  );
+  if (!ownerFile) return undefined;
+  const manifestRecord = assertCloudflareChunkManifestMembership(
+    artifactRoot,
+    ownerFile,
+    label
+  );
+  const reviewedClosure = reviewedCloudflareNonAppClosure(
+    cloudflareManifestChunkRecord(manifestRecord.key, manifestRecord)
+  );
+  if (!reviewedClosure) return undefined;
+  const ownerProgram = readParsedModule(ownerFile).program;
+  const localName = new Map(ownerProgram.body.flatMap(moduleExportEntries)).get(
+    invocation.importedName
+  );
+  return typeof localName === 'string'
+    ? { localName, reviewedClosure }
+    : undefined;
+};
+
+const cloudflareReviewedAggregateSpreadOriginArgumentsAreSafe = (
+  program,
+  chunkFile,
+  origin,
+  artifactRoot,
+  seen,
+  budget = { work: 0 }
+) => {
+  const count = origin.factoryArgumentCount;
+  if (!Number.isInteger(count) || count < 0) return false;
+  const nonCallable = new Set();
+  for (const index of origin.factoryNonCallableArgumentIndexes ?? []) {
+    budget.work += 1;
+    assert(
+      budget.work <= cloudflareAnalysisWorkLimit,
+      cloudflareAnalysisWorkMessage
+    );
+    if (!Number.isInteger(index) || index < 0 || index >= count) return false;
+    nonCallable.add(index);
+  }
+  const nestedByIndex = new Map();
+  for (const nested of origin.factoryArgumentOrigins ?? []) {
+    budget.work += 1;
+    assert(
+      budget.work <= cloudflareAnalysisWorkLimit,
+      cloudflareAnalysisWorkMessage
+    );
+    if (
+      !Number.isInteger(nested.index) ||
+      nested.index < 0 ||
+      nested.index >= count
+    ) {
+      return false;
+    }
+    const values = nestedByIndex.get(nested.index) ?? [];
+    values.push(nested.invocation);
+    nestedByIndex.set(nested.index, values);
+  }
+  for (let index = 0; index < count; index += 1) {
+    budget.work += 1;
+    assert(
+      budget.work <= cloudflareAnalysisWorkLimit,
+      cloudflareAnalysisWorkMessage
+    );
+    if (nonCallable.has(index)) continue;
+    const nested = nestedByIndex.get(index) ?? [];
+    if (nested.length === 0) return false;
+    for (const invocation of nested) {
+      budget.work += 1;
+      assert(
+        budget.work <= cloudflareAnalysisWorkLimit,
+        cloudflareAnalysisWorkMessage
+      );
+      const key = JSON.stringify([
+        invocation.source,
+        invocation.importedName,
+        invocation.returnedPath,
+      ]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      try {
+        if (
+          !cloudflareReviewedFactoryOriginPolicyIsSafe(
+            program,
+            chunkFile,
+            invocation,
+            artifactRoot,
+            []
+          ) ||
+          !cloudflareReviewedAggregateSpreadOriginArgumentsAreSafe(
+            program,
+            chunkFile,
+            invocation,
+            artifactRoot,
+            seen,
+            budget
+          )
+        ) {
+          return false;
+        }
+      } finally {
+        seen.delete(key);
+      }
+    }
+  }
+  return true;
+};
+
+const cloudflareReviewedAggregateSpreadOriginIsSafe = (
+  program,
+  chunkFile,
+  origin,
+  artifactRoot,
+  expectedType
+) => {
+  const policy = cloudflareReviewedInvocationPolicy(
+    program,
+    chunkFile,
+    origin,
+    artifactRoot,
+    'reviewed aggregate spread origin'
+  );
+  if (
+    !policy?.reviewedClosure.opaqueAggregateSpreadResults?.some(
+      (candidate) =>
+        candidate.localName === policy.localName &&
+        candidate.expectedType === expectedType &&
+        JSON.stringify(candidate.returnedPath) ===
+          JSON.stringify(origin.returnedPath)
+    )
+  ) {
+    return false;
+  }
+  return cloudflareReviewedAggregateSpreadOriginArgumentsAreSafe(
+    program,
+    chunkFile,
+    origin,
+    artifactRoot,
+    new Set()
+  );
+};
+
 const cloudflareReviewedOriginImportNames = (lineages) => {
   const names = new Set();
   for (const lineage of lineages) {
@@ -28618,7 +33998,11 @@ const cloudflareReviewedOriginDirectAliasProof = (
   const directReturnCallKeys =
     cloudflareReviewedOriginDirectReturnCallKeys(factory);
   if (
-    [...originCallKeys].some((callKey) => !directReturnCallKeys.has(callKey))
+    [...originCallKeys].some(
+      (callKey) =>
+        !directReturnCallKeys.has(callKey) &&
+        !reviewedSiblingCallKeys.has(callKey)
+    )
   ) {
     return false;
   }
@@ -28684,6 +34068,24 @@ const cloudflareReviewedOriginDirectAliasProof = (
       : [];
   });
   const identities = new Set([...importNames].map((name) => `import:${name}`));
+  new Visitor({
+    Identifier(node) {
+      const parent = context.parentNodes.get(node);
+      if (
+        nodeType(parent) !== 'CallExpression' ||
+        parent.callee !== node ||
+        !reviewedSiblingCallKeys.has(cloudflareNodeSemanticKey(parent))
+      ) {
+        return;
+      }
+      const identity = cloudflareMutationBindingIdentity(
+        node,
+        node.name,
+        context
+      );
+      if (identity) identities.add(identity);
+    },
+  }).visit(program);
   const allowedAliasSources = new WeakSet();
   let changed = true;
   let work = 0;
@@ -28791,14 +34193,15 @@ const cloudflareReviewedSiblingOriginCallKeys = (
   program,
   chunkFile,
   artifactRoot,
-  lexicalContext
-) =>
-  new Set(
+  lexicalContext,
+  originResolution
+) => {
+  const keys = new Set(
     program.body
       .flatMap(topLevelFunctionEntries)
-      .map(([, candidate]) => candidate)
-      .filter((candidate) => candidate.params.length === 0)
-      .flatMap((candidate) => {
+      .map(([localName, candidate]) => ({ candidate, localName }))
+      .filter(({ candidate }) => candidate.params.length === 0)
+      .flatMap(({ candidate, localName }) => {
         const returns = cloudflareFunctionReturnExpressions(candidate);
         if (returns.length !== 1) return [];
         const directReturnCallKeys =
@@ -28811,9 +34214,21 @@ const cloudflareReviewedSiblingOriginCallKeys = (
         const originsAreExactReviewedResults =
           lineage.complete &&
           lineage.origins.length > 0 &&
-          lineage.origins.every(
-            (origin) =>
-              origin.factoryArgumentCount === 0 &&
+          lineage.origins.every((origin) => {
+            const argumentCount = origin.factoryArgumentCount;
+            const resolvedIndexes = new Set(
+              origin.factoryResolvedArgumentIndexes ?? []
+            );
+            const nonCallableIndexes = new Set(
+              origin.factoryNonCallableArgumentIndexes ?? []
+            );
+            const argumentsAreInert =
+              Number.isInteger(argumentCount) &&
+              resolvedIndexes.size === argumentCount &&
+              nonCallableIndexes.size === argumentCount &&
+              (origin.deferredArgumentHazardIndexes?.length ?? 0) === 0;
+            return (
+              argumentsAreInert &&
               directReturnCallKeys.has(origin.factoryCallKey) &&
               cloudflareInvocationHasReviewedOwner(
                 program,
@@ -28828,12 +34243,93 @@ const cloudflareReviewedSiblingOriginCallKeys = (
                 artifactRoot,
                 []
               )
-          );
-        return originsAreExactReviewedResults
-          ? lineage.origins.map(({ factoryCallKey }) => factoryCallKey)
-          : [];
+            );
+          });
+        if (!originsAreExactReviewedResults) return [];
+        const localCallKeys = [];
+        new Visitor({
+          CallExpression(node) {
+            if (
+              node.arguments.length !== 0 ||
+              identifierName(node.callee) !== localName ||
+              !cloudflareLexicalTargetCandidates(
+                node,
+                node.callee,
+                lexicalContext
+              ).some(({ target }) => target === candidate)
+            ) {
+              return;
+            }
+            localCallKeys.push(cloudflareNodeSemanticKey(node));
+          },
+        }).visit(program);
+        return [
+          ...lineage.origins.map(({ factoryCallKey }) => factoryCallKey),
+          ...localCallKeys,
+        ];
       })
   );
+  new Visitor({
+    CallExpression(node) {
+      if (node.arguments.length !== 0) return;
+      const invocation = directImportedCloudflareInvocation(
+        program,
+        node.callee,
+        lexicalContext.topLevelBindings,
+        lexicalContext
+      );
+      if (!invocation) return;
+      const reviewedInvocation = {
+        ...invocation,
+        factoryArgumentCount: 0,
+        factoryNonCallableArgumentIndexes: [],
+        returnedPath: [],
+      };
+      const ownerFile = cloudflareReviewedOwnerFile(
+        program,
+        chunkFile,
+        reviewedInvocation,
+        artifactRoot
+      );
+      if (!ownerFile) return;
+      const manifestRecord = assertCloudflareChunkManifestMembership(
+        artifactRoot,
+        ownerFile,
+        'reviewed sibling factory origin'
+      );
+      const reviewedClosure = reviewedCloudflareNonAppClosure(
+        cloudflareManifestChunkRecord(manifestRecord.key, manifestRecord)
+      );
+      const reviewed = reviewedClosure
+        ? cloudflareReviewedFactoryOriginPolicyIsSafe(
+            program,
+            chunkFile,
+            reviewedInvocation,
+            artifactRoot,
+            []
+          )
+        : (() => {
+            const ownerProgram = readParsedModule(ownerFile).program;
+            const ownerLocalName = new Map(
+              ownerProgram.body.flatMap(moduleExportEntries)
+            ).get(reviewedInvocation.importedName);
+            return (
+              typeof ownerLocalName === 'string' &&
+              cloudflareFactoryHasReviewedOrigin(
+                ownerProgram,
+                ownerFile,
+                ownerLocalName,
+                artifactRoot,
+                [],
+                originResolution
+              )
+            );
+          })();
+      if (reviewed) keys.add(cloudflareNodeSemanticKey(node));
+    },
+  }).visit(program);
+  return keys;
+};
 
 const cloudflareFactoryReturnedOwnersAreUnmutated = (
   program,
@@ -28852,12 +34348,13 @@ const cloudflareFactoryReturnedOwnersAreUnmutated = (
   );
 };
 
-const cloudflareFactoryHasReviewedOrigin = (
+const cloudflareFactoryHasReviewedOriginUncached = (
   program,
   chunkFile,
   localName,
   artifactRoot,
-  requestedReturnedPath
+  requestedReturnedPath,
+  originResolution
 ) => {
   if (!Array.isArray(requestedReturnedPath)) return false;
   const lexicalContext = createCloudflareLexicalContext(
@@ -28904,7 +34401,8 @@ const cloudflareFactoryHasReviewedOrigin = (
     program,
     chunkFile,
     artifactRoot,
-    lexicalContext
+    lexicalContext,
+    originResolution
   );
   const directAliasProof = cloudflareReviewedOriginDirectAliasProof(
     program,
@@ -28918,6 +34416,49 @@ const cloudflareFactoryHasReviewedOrigin = (
     factory,
     lexicalContext
   );
+};
+
+const cloudflareFactoryHasReviewedOrigin = (
+  program,
+  chunkFile,
+  localName,
+  artifactRoot,
+  requestedReturnedPath,
+  providedResolution
+) => {
+  const resolution = providedResolution ?? {
+    active: new Set(),
+    depth: 0,
+    memo: new Map(),
+  };
+  const key = JSON.stringify([
+    path.resolve(chunkFile),
+    localName,
+    requestedReturnedPath,
+  ]);
+  if (resolution.memo.has(key)) return resolution.memo.get(key);
+  if (resolution.active.has(key)) return false;
+  assert(
+    resolution.depth < cloudflareFactoryResolutionLimit,
+    cloudflareFactoryResolutionMessage
+  );
+  resolution.active.add(key);
+  resolution.depth += 1;
+  try {
+    const reviewed = cloudflareFactoryHasReviewedOriginUncached(
+      program,
+      chunkFile,
+      localName,
+      artifactRoot,
+      requestedReturnedPath,
+      resolution
+    );
+    resolution.memo.set(key, reviewed);
+    return reviewed;
+  } finally {
+    resolution.depth -= 1;
+    resolution.active.delete(key);
+  }
 };
 
 export const inspectCloudflareReviewedOriginDirectAliasProofForTesting = (
@@ -28984,6 +34525,13 @@ export const inspectCloudflareFactoryOriginLineagesForTesting = (
     return {
       complete: lineage.complete,
       origins: lineage.origins.map((origin) => ({
+        factoryArgumentCount: origin.factoryArgumentCount,
+        factoryArgumentOrigins: origin.factoryArgumentOrigins?.map(
+          ({ index, invocation }) => ({
+            index,
+            invocation: cloudflareSerializableImportedInvocation(invocation),
+          })
+        ),
         importedName: origin.importedName,
         localName: origin.localName,
         returnedPath: origin.returnedPath,
@@ -29068,6 +34616,8 @@ const cloudflareImportedOwner = (
             invocation.completeArgumentOriginIndexes,
           deferredArgumentHazardIndexes:
             invocation.deferredArgumentHazardIndexes,
+          directFactoryChainProven: invocation.directFactoryChainProven,
+          opaqueArgumentIndexes: invocation.opaqueArgumentIndexes,
           returnedPath: invocation.returnedPath,
         })})`
       );
@@ -29108,8 +34658,9 @@ const cloudflareImportedOwner = (
       ),
     }))
   );
-  const returnedInvocations = imports.flatMap(({ invocation }, index) =>
-    invocation.returnedPath
+  const returnedInvocations = imports.flatMap(({ invocation }, index) => {
+    const returnedPath = invocation.returnedPath;
+    return Array.isArray(returnedPath)
       ? [
           {
             callerAnalysisLabel: invocation.callerAnalysisLabel,
@@ -29136,13 +34687,14 @@ const cloudflareImportedOwner = (
               reviewedFactoryOrigins.get(
                 JSON.stringify([localNames[index], invocation.returnedPath])
               ) === true,
-            returnedPath: invocation.returnedPath,
+            returnedPath,
           },
         ]
-      : []
-  );
+      : [];
+  });
   const factoryArgumentInvocations = imports.flatMap(({ invocation }, index) =>
     typeof invocation.factoryCallKey === 'string' &&
+    Array.isArray(invocation.returnedPath) &&
     ((invocation.factoryCallableArgumentIndexes?.length ?? 0) > 0 ||
       (invocation.factoryArgumentOrigins?.length ?? 0) > 0 ||
       (invocation.factoryArgumentKeys?.some((key) => typeof key === 'string') ??
@@ -29213,7 +34765,8 @@ const cloudflareImportedOwner = (
               localNames[index],
               reviewedClosure,
               artifactRoot,
-              factoryArgumentOrigins[index]
+              factoryArgumentOrigins[index],
+              chunkFile
             ),
             reviewedFactoryOrigin:
               reviewedFactoryOrigins.get(
@@ -29431,6 +34984,14 @@ const cloudflareImportedOriginOwner = (origin, artifactRoot, resolution) => {
   const reviewedReturnedPath =
     invocation.returnedPath ??
     (invocation.directFactoryChainProven === true ? [] : undefined);
+  assert(
+    Array.isArray(reviewedReturnedPath),
+    'Cloudflare imported factory callback provenance must preserve its returned path'
+  );
+  const resolvedInvocation =
+    invocation.returnedPath === reviewedReturnedPath
+      ? invocation
+      : { ...invocation, returnedPath: reviewedReturnedPath };
   const reviewedInvocationCanRemainUnresolved =
     reviewedClosure !== undefined &&
     (reviewedClosure.exactInvocationPoliciesOnly !== true ||
@@ -29440,7 +35001,7 @@ const cloudflareImportedOriginOwner = (origin, artifactRoot, resolution) => {
         reviewedReturnedPath
       ));
   const factory = cloudflareReturnedInvocationFactory(
-    invocation,
+    resolvedInvocation,
     ownerLexicalContext,
     reviewedInvocationCanRemainUnresolved
   );
@@ -29454,7 +35015,7 @@ const cloudflareImportedOriginOwner = (origin, artifactRoot, resolution) => {
   ownerLexicalContext.activeInvocationEpoch += 1;
   const owners = cloudflareReturnedInvocationFunctions(
     ownerProgram,
-    [invocation],
+    [resolvedInvocation],
     ownerLexicalContext,
     reviewedInvocationCanRemainUnresolved
   );
@@ -29462,25 +35023,31 @@ const cloudflareImportedOriginOwner = (origin, artifactRoot, resolution) => {
     cloudflareActivateInvocationOwner(ownerLexicalContext, owner)
   );
   const eligibleIndexes = new Set([
-    ...(invocation.factoryCallableArgumentIndexes ?? []),
-    ...(invocation.factoryArgumentOrigins ?? []).map(({ index }) => index),
-    ...(invocation.factoryArgumentKeys ?? []).flatMap((key, index) =>
+    ...(resolvedInvocation.factoryCallableArgumentIndexes ?? []),
+    ...(resolvedInvocation.factoryArgumentOrigins ?? []).map(
+      ({ index }) => index
+    ),
+    ...(resolvedInvocation.factoryArgumentKeys ?? []).flatMap((key, index) =>
       typeof key === 'string' ? [index] : []
     ),
   ]);
-  const capturedProjections = cloudflareInvokedFactoryCaptureProjections(
-    ownerProgram,
-    factory,
-    owners,
-    ownerLexicalContext,
-    eligibleIndexes
-  );
+  const factoryCaptureOwner = isCloudflareClassNode(factory)
+    ? cloudflareClassConstructor(factory)
+    : factory;
+  const capturedProjections = isCloudflareFunctionNode(factoryCaptureOwner)
+    ? cloudflareInvokedFactoryCaptureProjections(
+        ownerProgram,
+        factoryCaptureOwner,
+        owners,
+        ownerLexicalContext,
+        eligibleIndexes
+      )
+    : [];
   const returnedCallableNames =
-    Array.isArray(invocation.returnedPath) &&
-    invocation.returnedPath.length === 0
+    resolvedInvocation.returnedPath.length === 0
       ? cloudflareFactoryReturnedCallableArgumentNames(
           factory,
-          invocation,
+          resolvedInvocation,
           ownerLexicalContext
         )
       : undefined;
@@ -29512,7 +35079,7 @@ const cloudflareImportedOriginOwner = (origin, artifactRoot, resolution) => {
   ];
   const callerLexicalContext = createCloudflareLexicalContext(
     callerProgram,
-    invocation.callerAnalysisLabel ??
+    resolvedInvocation.callerAnalysisLabel ??
       normalizeArtifactFile(artifactRoot, callerFile)
   );
   resolution.active.add(resolutionKey);
@@ -29522,7 +35089,7 @@ const cloudflareImportedOriginOwner = (origin, artifactRoot, resolution) => {
     callerFile,
     callerLexicalContext,
     callerProgram,
-    invocation,
+    invocation: resolvedInvocation,
     projections,
   };
 };
@@ -29972,6 +35539,458 @@ const reviewedTanStackRouterClosureHashes = Object.freeze([
 ]);
 
 const reviewedCloudflareNonAppClosures = Object.freeze([
+  Object.freeze({
+    exactInvocationPoliciesOnly: true,
+    modulePrefixes: [
+      'node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/coerce.js',
+    ],
+    opaqueDeferredArgumentResults: [
+      {
+        localName: 'number',
+        reason:
+          'The authenticated Zod coercion wrapper returns an inert number schema after its optional parameters are checked.',
+        returnedPath: [],
+      },
+    ],
+    sha256: 'f8721d3ce014bfcde702328dd675f6df780b0f2ba39dae475858ac714f4a9008',
+  }),
+  Object.freeze({
+    exactInvocationPoliciesOnly: true,
+    modulePrefixes: [
+      'node_modules/.pnpm/@tanstack+zod-adapter@1.167.0_@tanstack+react-router@1.170.16_react-dom@19.2.7_react@19.2.7__react@19.2.7__zod@4.4.3/node_modules/@tanstack/zod-adapter/dist/esm/index.js',
+    ],
+    opaqueDataArgumentInvocations: [
+      {
+        dataIndex: 0,
+        localName: 'zodValidator',
+        returnedPath: undefined,
+        transformerStartIndex: 1,
+      },
+    ],
+    opaqueDeferredArgumentResults: [
+      {
+        localName: 'fallback',
+        reason:
+          'The authenticated TanStack Zod fallback helper returns an inert schema after its caller-owned schema and fallback value are checked.',
+        returnedPath: [],
+      },
+      {
+        localName: 'fallback',
+        reason:
+          'The authenticated TanStack Zod fallback helper returns an inert optional schema after its caller-owned schema and fallback value are checked.',
+        returnedPath: ['optional'],
+      },
+    ],
+    sha256: 'ff4de5b7c6bb23bb3d0201c5daa6cf8ee326a914b33ce5b697c81f8efd3ed31e',
+  }),
+  Object.freeze({
+    modulePrefixes: [
+      'node_modules/.pnpm/@tanstack+start-server-core@1.169.15_crossws@0.4.12_srvx@0.11.22_/node_modules/@tanstack/start-server-core/dist/esm/createSsrRpc.js',
+    ],
+    opaqueDeferredArgumentResults: [
+      {
+        localName: 'createSsrRpc',
+        reason:
+          'The authenticated TanStack SSR RPC factory returns a server-function proxy bound to its exact function identifier and resolver owner.',
+        returnedPath: [],
+      },
+    ],
+    sha256: '6e3a8274d3052da08ab618e2d232ca33f05b38c1ead4fb12c756723d092fb4f5',
+  }),
+  Object.freeze({
+    deferredArgumentInvocations: [
+      { localName: 'object', returnedPath: ['transform'] },
+      {
+        localName: 'object',
+        returnedPath: ['extend', cloudflareReturnedCallProjection, 'transform'],
+      },
+      {
+        localName: 'string',
+        returnedPath: ['trim', cloudflareReturnedCallProjection, 'pipe'],
+      },
+      { localName: 'string', returnedPathSuffix: ['refine'] },
+      { localName: 'preprocess', returnedPath: undefined },
+    ],
+    modulePrefixes: ['node_modules/.pnpm/zod@4.4.3/node_modules/zod/'],
+    opaqueDeferredArgumentResults: [
+      {
+        localName: 'object',
+        reason:
+          'The reviewed direct object factory returns an inert schema after its caller-owned shape is checked.',
+        returnedPath: [],
+      },
+      {
+        localName: 'object',
+        reason:
+          'The reviewed object prefault chain returns an inert schema value after its caller-owned shape and default are checked.',
+        returnedPath: ['prefault', cloudflareReturnedCallProjection],
+      },
+      {
+        localName: 'object',
+        reason:
+          'The reviewed object transform chain returns an inert schema value after its caller-owned shape and deferred transform are checked.',
+        returnedPath: ['transform', cloudflareReturnedCallProjection],
+      },
+      {
+        localName: 'object',
+        reason:
+          'The reviewed object extension and transform chain returns an inert schema value after both caller-owned shapes and the deferred transform are checked.',
+        returnedPath: [
+          'extend',
+          cloudflareReturnedCallProjection,
+          'transform',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'preprocess',
+        reason:
+          'The reviewed preprocess factory returns an inert schema value after its caller-owned transform and schema arguments are completely checked.',
+        returnedPath: [],
+      },
+      {
+        localName: 'string',
+        reason: 'The reviewed direct string factory returns an inert schema.',
+        returnedPath: [],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed string prefault chain returns an inert schema after its caller-owned default is checked.',
+        returnedPath: ['prefault', cloudflareReturnedCallProjection],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed string factory path preserves an inert schema owner.',
+        returnedPath: ['trim'],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed string pipe invocation returns an inert schema value after its caller-owned schema is checked.',
+        returnedPath: ['trim', cloudflareReturnedCallProjection, 'pipe'],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed minimum-length string path preserves an inert schema owner after its caller-owned minimum is checked.',
+        returnedPath: ['trim', cloudflareReturnedCallProjection, 'min'],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed bounded string path preserves an inert schema owner after its caller-owned limits are checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'max',
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed, bounded, regex-constrained string path preserves an inert schema owner after its caller-owned constraints are checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'max',
+          cloudflareReturnedCallProjection,
+          'regex',
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed, bounded, refined string path preserves an inert schema owner after its caller-owned constraints and predicate are checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'max',
+          cloudflareReturnedCallProjection,
+          'refine',
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed, bounded, regex-constrained string chain returns an inert schema after every caller-owned constraint is checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'max',
+          cloudflareReturnedCallProjection,
+          'regex',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed, bounded, refined string chain returns an inert schema after every caller-owned constraint and predicate are checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'max',
+          cloudflareReturnedCallProjection,
+          'refine',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed branded string chain returns an inert schema value after its caller-owned minimum is checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'brand',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed bounded branded string chain returns an inert schema value after its caller-owned limits are checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'max',
+          cloudflareReturnedCallProjection,
+          'brand',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: '_enum',
+        reason:
+          'The reviewed enum factory returns an inert schema value after its caller-owned alternatives are checked.',
+        returnedPath: [],
+      },
+      {
+        localName: '_enum',
+        reason:
+          'The reviewed enum nullish chain returns an inert schema value after its caller-owned alternatives are checked.',
+        returnedPath: ['nullish', cloudflareReturnedCallProjection],
+      },
+      {
+        localName: 'email',
+        reason:
+          'The reviewed zero-argument email factory returns an inert schema value.',
+        returnedPath: [],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed pipe and brand chain returns an isolated inert schema value after its caller-owned schema argument is completely checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'pipe',
+          cloudflareReturnedCallProjection,
+          'brand',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed maximum-length branded string chain returns an inert schema value after its caller-owned maximum is checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'max',
+          cloudflareReturnedCallProjection,
+          'brand',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed branded optional string chain returns an inert schema value after its caller-owned minimum is checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'brand',
+          cloudflareReturnedCallProjection,
+          'optional',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed branded nullish string chain returns an inert schema value after its caller-owned minimum is checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'min',
+          cloudflareReturnedCallProjection,
+          'brand',
+          cloudflareReturnedCallProjection,
+          'nullish',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed trimmed maximum-length branded nullish string chain returns an inert schema value after its caller-owned maximum is checked.',
+        returnedPath: [
+          'trim',
+          cloudflareReturnedCallProjection,
+          'max',
+          cloudflareReturnedCallProjection,
+          'brand',
+          cloudflareReturnedCallProjection,
+          'nullish',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: '_undefined',
+        reason:
+          'The reviewed zero-argument undefined factory returns an inert schema value.',
+        returnedPath: [],
+      },
+      {
+        localName: 'array',
+        reason:
+          'The reviewed bounded array chain returns an inert schema value after its caller-owned element schema and maximum are completely checked.',
+        returnedPath: ['max', cloudflareReturnedCallProjection],
+      },
+      {
+        localName: 'literal',
+        reason:
+          'The reviewed literal factory returns an inert schema value after its caller-owned arguments are checked.',
+        returnedPath: [],
+      },
+      {
+        localName: 'strictObject',
+        reason:
+          'The reviewed strict object factory returns an inert schema value after its caller-owned shape is completely checked.',
+        returnedPath: [],
+      },
+      {
+        localName: 'string',
+        reason:
+          'The reviewed bounded untrimmed string validation chain returns an inert schema value after its caller-owned limits and expression are checked.',
+        returnedPath: [
+          'min',
+          cloudflareReturnedCallProjection,
+          'max',
+          cloudflareReturnedCallProjection,
+          'regex',
+          cloudflareReturnedCallProjection,
+        ],
+      },
+      {
+        localName: 'union',
+        reason:
+          'The reviewed union factory returns an inert schema value after its caller-owned alternatives are completely checked.',
+        returnedPath: [],
+      },
+    ],
+    opaqueMemberMutationExemptions: [
+      {
+        expectedMutationSource:
+          'Object.defineProperty(inst, "_zod", {\n\t\t\tvalue: {\n\t\t\t\tdef,\n\t\t\t\tconstr: _,\n\t\t\t\ttraits: /* @__PURE__ */ new Set()\n\t\t\t},\n\t\t\tenumerable: false\n\t\t})',
+        memberPathPart: '_zod',
+        mutationEnd: 430,
+        mutationStart: 287,
+        mutationType: 'CallExpression',
+        reason:
+          'The constructor metadata definition owns the _zod path it initializes.',
+        suppressOpaqueMutation: true,
+      },
+      {
+        expectedMutationContainerSource:
+          'Object.defineProperty(object, key, {\n\t\tget() {\n\t\t\tif (value === EVALUATING) return;\n\t\t\tif (value === void 0) {\n\t\t\t\tvalue = EVALUATING;\n\t\t\t\tvalue = getter();\n\t\t\t}\n\t\t\treturn value;\n\t\t},\n\t\tset(v) {\n\t\t\tObject.defineProperty(object, key, { value: v });\n\t\t},\n\t\tconfigurable: true\n\t})',
+        mutationContainerEnd: 3440,
+        mutationContainerStart: 3163,
+        mutationContainerType: 'CallExpression',
+        reason:
+          'The lazy property helper owns the exact accessor descriptor it installs on its supplied object.',
+        suppressUnrelatedOpaquePropagation: true,
+      },
+      {
+        expectedMutationSource: 'inst[k] = proto[k].bind(inst)',
+        memberPathPart: '_zod',
+        mutationEnd: 708,
+        mutationStart: 679,
+        mutationType: 'AssignmentExpression',
+        reason:
+          'The guarded prototype copy cannot replace the _zod metadata path that was initialized before the key loop.',
+        suppressOpaqueMutation: true,
+      },
+      {
+        expectedMutationSource: 'inst[k] = proto[k].bind(inst)',
+        mutationEnd: 708,
+        mutationStart: 679,
+        mutationType: 'AssignmentExpression',
+        reason:
+          'The guarded prototype copy mutates only its concrete instance receiver, so unresolved propagation cannot reach unrelated receiver components.',
+        suppressUnrelatedReceiverOpaqueMutation: true,
+      },
+      {
+        expectedMutationSource: 'Object.assign(schema, refSchema)',
+        mutationEnd: 97961,
+        mutationStart: 97929,
+        mutationType: 'CallExpression',
+        reason:
+          'The authenticated JSON-schema flattener mutates its registry-owned local schema record and cannot replace an ambient intrinsic global.',
+        suppressAmbientGlobalReplacement: true,
+      },
+      {
+        expectedMutationSource: 'Object.assign(result.schema, meta)',
+        mutationEnd: 94478,
+        mutationStart: 94444,
+        mutationType: 'CallExpression',
+        reason:
+          'The authenticated JSON-schema processor copies registry metadata into its result-owned schema and cannot replace an ambient intrinsic global.',
+        suppressAmbientGlobalReplacement: true,
+      },
+      {
+        expectedMutationContainerSource:
+          'Object.defineProperty(proto, key, {\n\t\t\tconfigurable: true,\n\t\t\tenumerable: false,\n\t\t\tget() {\n\t\t\t\tconst bound = fn.bind(this);\n\t\t\t\tObject.defineProperty(this, key, {\n\t\t\t\t\tconfigurable: true,\n\t\t\t\t\twritable: true,\n\t\t\t\t\tenumerable: true,\n\t\t\t\t\tvalue: bound\n\t\t\t\t});\n\t\t\t\treturn bound;\n\t\t\t},\n\t\t\tset(v) {\n\t\t\t\tObject.defineProperty(this, key, {\n\t\t\t\t\tconfigurable: true,\n\t\t\t\t\twritable: true,\n\t\t\t\t\tenumerable: true,\n\t\t\t\t\tvalue: v\n\t\t\t\t});\n\t\t\t}\n\t\t})',
+        mutationContainerEnd: 117268,
+        mutationContainerStart: 116834,
+        mutationContainerType: 'CallExpression',
+        reason:
+          'The authenticated lazy-method installer owns the Zod instance prototype and the accessor receivers on which it materializes bound methods.',
+        suppressAmbientGlobalReplacement: true,
+      },
+      {
+        expectedMutationSource: 'Object.assign(schema, _cached)',
+        mutationEnd: 97996,
+        mutationStart: 97966,
+        mutationType: 'CallExpression',
+        reason:
+          'The authenticated JSON-schema flattener restores its local schema snapshot and cannot replace an ambient intrinsic global.',
+        suppressAmbientGlobalReplacement: true,
+      },
+    ],
+    reason:
+      'The authenticated non-app-only Zod 4.4.3 chunk owns its reviewed top-level constructor and lazy-property initialization.',
+    sha256: 'b2e3828594675b9262c546998aa09ba14d1c0a98d9cb1c38f7eb6ebd04c8ea06',
+  }),
   Object.freeze({
     modulePrefixes: [
       'node_modules/.pnpm/remeda@2.39.0/node_modules/remeda/dist/',
@@ -30756,6 +36775,15 @@ const reviewedCloudflareNonAppClosures = Object.freeze([
     modulePrefixes: [
       'non-app:66364e236ec24f3d62d60f62f82cca5694450afb05a0f51ab2a16d0d73781ed3',
     ],
+    opaqueAggregateSpreadResults: [
+      {
+        expectedType: 'ObjectExpression',
+        localName: '__toESM',
+        reason:
+          'The authenticated Rolldown namespace adapter may be cloned only when every source argument has a recursively authenticated inert origin.',
+        returnedPath: [],
+      },
+    ],
     sha256: 'ee6f7f26af65d579908c6904c08fa7fd954f22673d48974bf74dd8036a83cc71',
   }),
   ...reviewedTanStackRouterClosureHashes.map((sha256) =>
@@ -30778,6 +36806,13 @@ const reviewedCloudflareNonAppClosures = Object.freeze([
     isolatedMemberInvocationResults: [
       {
         localName: 'require_react',
+        member: 'forwardRef',
+        reason:
+          'The authenticated React forwardRef implementation returns a fresh isolated component type for each invocation.',
+        singletonFactoryResult: true,
+      },
+      {
+        localName: 'require_react',
         member: 'useRef',
         reason:
           'The authenticated React useRef implementation returns one component-local stable ref object for each hook position.',
@@ -30785,6 +36820,14 @@ const reviewedCloudflareNonAppClosures = Object.freeze([
       },
     ],
     modulePrefixes: ['node_modules/.pnpm/react@19.2.7/node_modules/react/'],
+    opaqueDeferredArgumentResults: [
+      {
+        localName: 'require_react',
+        reason:
+          'The authenticated React module facade returns the reviewed runtime namespace whose deferred members are constrained separately.',
+        returnedPath: [],
+      },
+    ],
     sha256: '8b823a5b4929d5cb9a1cf9e52db920df93e4b472192815dba366c7b9ab086296',
   }),
 ]);
@@ -30802,6 +36845,97 @@ const reviewedCloudflareNonAppClosure = (record) =>
           )
       )
     : undefined;
+
+const reviewedCloudflareMixedClosures = Object.freeze([
+  Object.freeze({
+    exportedAggregateReadOnlySinks: [
+      {
+        exportedLocalName: 'useRenderElement',
+        exportedName: 'c',
+        exportedParameterIndex: 2,
+        propertyName: 'stateAttributesMapping',
+        reason:
+          'The authenticated Base UI renderer reads the state-attribute mapping from its options object without retaining or mutating it. Aggregate bindings may flow only through this exact property of its direct third argument.',
+      },
+    ],
+    moduleSuffixes: ['/@base-ui/react/internals/useRenderElement.mjs'],
+    sha256: 'd52c1344eb1aea2210a9b605a5102d257cb18139dadbd23e85b46c20a3522d6a',
+  }),
+  Object.freeze({
+    appModuleSuffixes: ['src/platform/lib/zod/zod-utils.ts'],
+    exportedStaticMemberDeferredResults: [
+      {
+        exportedLocalName: 'zu',
+        exportedName: 'M',
+        memberPath: ['fieldText', 'nullish'],
+        reason:
+          'The authenticated application Zod helper returns an inert nullish text schema; its exact caller-owned options are evaluated before the helper call.',
+        returnedPath: [],
+      },
+      {
+        exportedLocalName: 'zu',
+        exportedName: 'M',
+        memberPath: ['fieldText', 'required'],
+        reason:
+          'The authenticated application Zod helper returns an inert required text schema; its exact caller-owned options are evaluated before the helper call.',
+        returnedPath: [],
+      },
+      {
+        exportedLocalName: 'zu',
+        exportedName: 'M',
+        memberPath: ['fieldText', 'required'],
+        reason:
+          'The authenticated required-text schema may flow through this exact Zod pipe call after the pipe schema argument is evaluated and checked.',
+        returnedPath: ['pipe', cloudflareReturnedCallProjection],
+      },
+    ],
+    exportedReceiverMutationSummaries: [
+      {
+        expectedConsumerCount: 4,
+        expectedMutationMembers: [
+          'activeTriggerElement',
+          'activeTriggerId',
+          'preventUnmountingOnClose',
+          'preventUnmountingOnClose',
+        ],
+        exportedLocalName: 'setPopupOpenState',
+        exportedName: 'zt',
+        exportedParameterIndex: 0,
+        reason:
+          'The authenticated Base UI popup helper mutates only its first receiver parameter. Every direct local or signed cross-chunk call is summarized on that concrete caller receiver.',
+      },
+    ],
+    moduleSuffixes: [
+      '/@base-ui/react/floating-ui-react/hooks/useListNavigation.mjs',
+      '/@base-ui/react/utils/popups/popupStoreUtils.mjs',
+    ],
+    sha256: '19bc864fb883884a0099e49637398e7f7a2165c6c00bbc835481b33aa5207d49',
+  }),
+]);
+
+const reviewedCloudflareMixedClosure = (record) =>
+  record.ownership === 'mixed'
+    ? reviewedCloudflareMixedClosures.find(
+        ({ appModuleSuffixes = [], moduleSuffixes, sha256 }) =>
+          record.sha256 === sha256 &&
+          record.modules.some(({ owner }) => owner === 'app') &&
+          record.modules.some(({ owner }) => owner === 'non-app') &&
+          moduleSuffixes.every((suffix) =>
+            record.modules.some(
+              ({ id, owner }) => owner === 'non-app' && id.endsWith(suffix)
+            )
+          ) &&
+          appModuleSuffixes.every((suffix) =>
+            record.modules.some(
+              ({ id, owner }) => owner === 'app' && id.endsWith(suffix)
+            )
+          )
+      )
+    : undefined;
+
+const reviewedCloudflareClosure = (record) =>
+  reviewedCloudflareNonAppClosure(record) ??
+  reviewedCloudflareMixedClosure(record);
 
 const cloudflareReviewedPolicyLocationFields = (prefix) => [
   `${prefix}End`,
@@ -30871,6 +37005,51 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
     reviewedClosure.exactInvocationPoliciesOnly === undefined ||
       reviewedClosure.exactInvocationPoliciesOnly === true,
     'Reviewed Cloudflare exact-invocation policy mode must be enabled explicitly'
+  );
+  const opaqueAggregateSpreadKeys = new Set();
+  (reviewedClosure.opaqueAggregateSpreadResults ?? []).forEach(
+    (policy, index) => {
+      const label = `Reviewed Cloudflare opaque aggregate spread ${String(index)}`;
+      assert(
+        Object.keys(policy).every((field) =>
+          new Set(['expectedType', 'localName', 'reason', 'returnedPath']).has(
+            field
+          )
+        ),
+        `${label} must not define unknown policy fields`
+      );
+      assert(
+        policy.expectedType === 'ObjectExpression',
+        `${label} must name the exact supported aggregate type`
+      );
+      assert(
+        typeof policy.localName === 'string' && policy.localName.length > 0,
+        `${label} must name one exported factory`
+      );
+      assert(
+        Array.isArray(policy.returnedPath) &&
+          policy.returnedPath.every(
+            (part) =>
+              typeof part === 'string' ||
+              isCloudflareReturnedCallProjection(part)
+          ),
+        `${label} must define one exact returned path`
+      );
+      assert(
+        typeof policy.reason === 'string' && policy.reason.trim().length > 0,
+        `${label} must explain its safety invariant`
+      );
+      const key = JSON.stringify({
+        expectedType: policy.expectedType,
+        localName: policy.localName,
+        returnedPath: policy.returnedPath,
+      });
+      assert(
+        !opaqueAggregateSpreadKeys.has(key),
+        `${label} must not duplicate another policy`
+      );
+      opaqueAggregateSpreadKeys.add(key);
+    }
   );
   const opaqueDeferredResultKeys = new Set();
   (reviewedClosure.opaqueDeferredArgumentResults ?? []).forEach(
@@ -30952,6 +37131,185 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
       isolatedMemberResultKeys.add(key);
     }
   );
+  const aggregateReadOnlySinkKeys = new Set();
+  (reviewedClosure.exportedAggregateReadOnlySinks ?? []).forEach(
+    (policy, index) => {
+      const label = `Reviewed Cloudflare aggregate read-only sink ${String(index)}`;
+      assert(
+        Object.keys(policy).every((field) =>
+          new Set([
+            'exportedLocalName',
+            'exportedName',
+            'exportedParameterIndex',
+            'propertyName',
+            'reason',
+          ]).has(field)
+        ),
+        `${label} must not define unknown policy fields`
+      );
+      assert(
+        typeof policy.exportedLocalName === 'string' &&
+          policy.exportedLocalName.length > 0 &&
+          typeof policy.exportedName === 'string' &&
+          policy.exportedName.length > 0 &&
+          Number.isInteger(policy.exportedParameterIndex) &&
+          policy.exportedParameterIndex >= 0 &&
+          typeof policy.propertyName === 'string' &&
+          policy.propertyName.length > 0,
+        `${label} must define one exact export, parameter, and property`
+      );
+      assert(
+        typeof policy.reason === 'string' && policy.reason.trim().length > 0,
+        `${label} must explain its safety invariant`
+      );
+      const exports = program.body
+        .flatMap(moduleExportEntries)
+        .filter(([, localName]) => localName === policy.exportedLocalName);
+      assert(
+        exports.length === 1 && exports[0][0] === policy.exportedName,
+        `${label} must resolve one exact local export`
+      );
+      const owner = resolveCloudflareTarget(
+        { name: policy.exportedLocalName, type: 'Identifier' },
+        cloudflareTopLevelBindings(program)
+      );
+      assert(
+        isCloudflareFunctionNode(owner) &&
+          owner.params.length > policy.exportedParameterIndex,
+        `${label} must resolve one callable owner parameter`
+      );
+      const key = JSON.stringify({
+        exportedLocalName: policy.exportedLocalName,
+        exportedName: policy.exportedName,
+        exportedParameterIndex: policy.exportedParameterIndex,
+        propertyName: policy.propertyName,
+      });
+      assert(
+        !aggregateReadOnlySinkKeys.has(key),
+        `${label} must not duplicate another sink`
+      );
+      aggregateReadOnlySinkKeys.add(key);
+    }
+  );
+  const staticMemberResultKeys = new Set();
+  (reviewedClosure.exportedStaticMemberDeferredResults ?? []).forEach(
+    (policy, index) => {
+      const label = `Reviewed Cloudflare static member deferred result ${String(index)}`;
+      assert(
+        Object.keys(policy).every((field) =>
+          new Set([
+            'exportedLocalName',
+            'exportedName',
+            'memberPath',
+            'reason',
+            'returnedPath',
+          ]).has(field)
+        ),
+        `${label} must not define unknown policy fields`
+      );
+      assert(
+        typeof policy.exportedLocalName === 'string' &&
+          policy.exportedLocalName.length > 0 &&
+          typeof policy.exportedName === 'string' &&
+          policy.exportedName.length > 0 &&
+          Array.isArray(policy.memberPath) &&
+          policy.memberPath.length > 0 &&
+          policy.memberPath.every(
+            (member) => typeof member === 'string' && member.length > 0
+          ) &&
+          Array.isArray(policy.returnedPath) &&
+          policy.returnedPath.every(
+            (part) =>
+              typeof part === 'string' ||
+              isCloudflareReturnedCallProjection(part)
+          ),
+        `${label} must define one exact export, member path, and returned path`
+      );
+      assert(
+        typeof policy.reason === 'string' && policy.reason.trim().length > 0,
+        `${label} must explain its safety invariant`
+      );
+      const exports = program.body
+        .flatMap(moduleExportEntries)
+        .filter(([, localName]) => localName === policy.exportedLocalName);
+      assert(
+        exports.length === 1 && exports[0][0] === policy.exportedName,
+        `${label} must resolve one exact local export`
+      );
+      let owner = resolveCloudflareTarget(
+        { name: policy.exportedLocalName, type: 'Identifier' },
+        cloudflareTopLevelBindings(program)
+      );
+      for (const member of policy.memberPath) {
+        owner = cloudflareStaticObjectMemberValue(owner, member);
+        assert(owner, `${label} must resolve every static member`);
+      }
+      assert(
+        isCloudflareFunctionNode(owner),
+        `${label} must resolve one callable member owner`
+      );
+      const key = JSON.stringify({
+        exportedLocalName: policy.exportedLocalName,
+        exportedName: policy.exportedName,
+        memberPath: policy.memberPath,
+        returnedPath: policy.returnedPath,
+      });
+      assert(
+        !staticMemberResultKeys.has(key),
+        `${label} must not duplicate another result policy`
+      );
+      staticMemberResultKeys.add(key);
+    }
+  );
+  const exportedReceiverSummaryKeys = new Set();
+  (reviewedClosure.exportedReceiverMutationSummaries ?? []).forEach(
+    (policy, index) => {
+      const label = `Reviewed Cloudflare exported receiver mutation summary ${String(index)}`;
+      assert(
+        Object.keys(policy).every((field) =>
+          new Set([
+            'expectedConsumerCount',
+            'expectedMutationMembers',
+            'exportedLocalName',
+            'exportedName',
+            'exportedParameterIndex',
+            'reason',
+          ]).has(field)
+        ),
+        `${label} must not define unknown policy fields`
+      );
+      assert(
+        typeof policy.exportedLocalName === 'string' &&
+          policy.exportedLocalName.length > 0 &&
+          typeof policy.exportedName === 'string' &&
+          policy.exportedName.length > 0 &&
+          Number.isInteger(policy.exportedParameterIndex) &&
+          policy.exportedParameterIndex >= 0 &&
+          Number.isInteger(policy.expectedConsumerCount) &&
+          policy.expectedConsumerCount > 0 &&
+          Array.isArray(policy.expectedMutationMembers) &&
+          policy.expectedMutationMembers.length > 0 &&
+          policy.expectedMutationMembers.every(
+            (member) => typeof member === 'string' && member.length > 0
+          ),
+        `${label} must define one exact export, parameter, consumer count, and mutation-member multiset`
+      );
+      assert(
+        typeof policy.reason === 'string' && policy.reason.trim().length > 0,
+        `${label} must explain its safety invariant`
+      );
+      const key = JSON.stringify({
+        exportedLocalName: policy.exportedLocalName,
+        exportedName: policy.exportedName,
+        exportedParameterIndex: policy.exportedParameterIndex,
+      });
+      assert(
+        !exportedReceiverSummaryKeys.has(key),
+        `${label} must not duplicate another summary`
+      );
+      exportedReceiverSummaryKeys.add(key);
+    }
+  );
   const policyKeys = new Set();
   const allowedPolicyFields = new Set([
     ...cloudflareReviewedPolicyLocationFields('mutation'),
@@ -30965,6 +37323,7 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
     'memberPathPart',
     'reason',
     'receiverComponent',
+    'suppressAmbientGlobalReplacement',
     'suppressDisjointMutationForRead',
     'suppressOpaqueMutation',
     'suppressOpaqueMutationFromNonExportedOwner',
@@ -31035,6 +37394,7 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
         );
       }
       const suppressionCount = [
+        'suppressAmbientGlobalReplacement',
         'suppressDisjointMutationForRead',
         'suppressOpaqueMutation',
         'suppressOpaqueMutationFromNonExportedOwner',
@@ -31051,6 +37411,11 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
           hasExactRead ||
           hasContainerRead,
         `${label} disjoint mutation suppression must define one exact read selector`
+      );
+      assert(
+        policy.suppressAmbientGlobalReplacement !== true ||
+          (!hasExactRead && !hasContainerRead),
+        `${label} ambient-global replacement suppression must not define a read selector`
       );
       const key = JSON.stringify(
         Object.fromEntries(
@@ -31072,14 +37437,13 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
 
 const registerReviewedCloudflareClosure = (
   program,
-  analysisLabel,
+  _analysisLabel,
   provenance
 ) => {
-  const reviewedClosure = reviewedCloudflareNonAppClosure(provenance);
+  const reviewedClosure = reviewedCloudflareClosure(provenance);
   if (!reviewedClosure) return undefined;
   assertCloudflareReviewedPolicy(program, reviewedClosure);
   cloudflareReviewedClosureByProgram.set(program, reviewedClosure);
-  cloudflareReviewedClosureByAnalysisLabel.set(analysisLabel, reviewedClosure);
   return reviewedClosure;
 };
 
@@ -31087,13 +37451,43 @@ const isReviewedCloudflareNonAppClosure = (record) =>
   reviewedCloudflareNonAppClosure(record) !== undefined;
 
 export const inspectCloudflareReviewedClosurePolicyForTesting = (record) => {
-  const reviewed = reviewedCloudflareNonAppClosure(record);
+  const reviewed = reviewedCloudflareClosure(record);
   return {
+    exportedAggregateReadOnlySinks:
+      reviewed?.exportedAggregateReadOnlySinks ?? [],
+    exportedStaticMemberDeferredResults:
+      reviewed?.exportedStaticMemberDeferredResults ?? [],
     opaqueMemberMutationExemptions:
       reviewed?.opaqueMemberMutationExemptions ?? [],
     safeCallExemptions: [],
   };
 };
+
+export const inspectCloudflareReviewedClosureProgramIsolationForTesting =
+  () => {
+    const reviewedProgram = parseModuleSource(
+      'reviewed-policy-isolation-reviewed.fixture.js',
+      'export const reviewed = true;'
+    ).program;
+    const unrelatedProgram = parseModuleSource(
+      'reviewed-policy-isolation-unrelated.fixture.js',
+      'export const unrelated = true;'
+    ).program;
+    const reviewedClosure = reviewedCloudflareNonAppClosures.at(-1);
+    assert(reviewedClosure, 'reviewed policy isolation fixture');
+    cloudflareReviewedClosureByProgram.set(reviewedProgram, reviewedClosure);
+    const analysisLabel = 'reviewed-owner-mutation-analysis';
+    return {
+      reviewed:
+        cloudflareReviewedClosureForContext(
+          createCloudflareLexicalContext(reviewedProgram, analysisLabel)
+        ) === reviewedClosure,
+      unrelated:
+        cloudflareReviewedClosureForContext(
+          createCloudflareLexicalContext(unrelatedProgram, analysisLabel)
+        ) === undefined,
+    };
+  };
 
 export const inspectCloudflareReviewedFactoryResultPathForTesting = (
   record,
@@ -31688,7 +38082,8 @@ const isSafeReviewedDeferredInvocation = (
   ownerLocalName,
   reviewedClosure,
   artifactRoot,
-  factoryArgumentOrigins
+  factoryArgumentOrigins,
+  chunkFile
 ) => {
   const reviewed = isReviewedDeferredArgumentInvocation(
     reviewedClosure,
@@ -31700,7 +38095,11 @@ const isSafeReviewedDeferredInvocation = (
     : cloudflareReviewedReceiverRoots(program, invocation);
   const receiversUnmutated =
     invocation.directFactoryChainProven === true ||
-    cloudflareReturnedOwnersAreUnmutated(program, receiverRoots);
+    cloudflareReturnedOwnersAreUnmutated(program, receiverRoots, {
+      analysisLabel: normalizeArtifactFile(artifactRoot, chunkFile),
+      artifactRoot,
+      chunkFile,
+    });
   const reviewedDelegation = isReviewedDelegatedArgumentInvocation(
     reviewedClosure,
     ownerLocalName,
@@ -31848,6 +38247,10 @@ const cloudflareLoadEffectAnalysis = (
     manifestRecord.key,
     manifestRecord
   );
+  cloudflareProgramArtifactContexts.set(program, {
+    artifactRoot: fs.realpathSync(manifestRecord.artifactRoot),
+    chunkFile: cloudflareManifestChunkFile(manifestRecord),
+  });
   const reviewedClosure = registerReviewedCloudflareClosure(
     program,
     manifestRecord.entry.file,
@@ -33250,14 +39653,20 @@ const cloudflareTanStackOwnerDigests = Object.freeze({
     'e1e88ab713c682ecc3c074e3db0d0f06be6d13329e037d328f343d1f32ea6463',
   observedStreamHandler:
     '12c050807148475cb72b05be210798a6ed598629567cc254ce9e53e0fcb93b4f',
+  // Reviewed v5 graph: 236 canonical owners, 743 edges, and the same exact
+  // 59-module provenance set as the preceding router closure. The only
+  // semantic owner delta is RootDocument's typed language-presentation lookup.
   routerLocalClosure:
-    '104b289a05ffb491127ac7a64eb51f5f7b6cf3024e0e73a09ff3551bada525da',
+    '428251121ec83a42213899cd872a665ce28587843abeab5bdbb69f0f9d67c421',
   serverClosure:
     '9ae59e0b6fed6b31842a1cc68e867041025ff20022f3356eaf5157b5c8b113ef',
   serverEdgeClosure:
     '50d491e50e67b143096bc0abec5efabefb6013cd9341143fd998fd20a3764a48',
+  // Reviewed v5 graph: 56 canonical owners, 74 edges, and the same exact
+  // 13-module logical provenance set as the preceding start closure. Its
+  // emitted-identity substitutions add no owner, edge, or start.ts mutation.
   startOwnerClosure:
-    '79aef70ecc2d8992fdcd44e17a4b5dc861517ed54ba3e4141363ced1cf7839c6',
+    '8132a8027f31bc465bf13821ebeb6e01620961541fdcf6ca001e4c9aad4f6e05',
 });
 const ignoredAstDigestKeys = new Set(['end', 'loc', 'raw', 'start']);
 const normalizeAstDigestValue = (key, value) => {
@@ -33844,7 +40253,7 @@ const cloudflareJavaScriptArtifactCoverage = (
   );
   const manifestFiles = manifestEntries
     .map(({ file }) => file)
-    .filter((file) => typeof file === 'string' && file.endsWith('.js'));
+    .filter((file) => typeof file === 'string' && /\.(?:[cm]?js)$/u.test(file));
   assert(
     new Set(manifestFiles).size === manifestFiles.length,
     'Cloudflare app-owned manifest must map one record to each JavaScript output'
@@ -33855,9 +40264,9 @@ const cloudflareJavaScriptArtifactCoverage = (
   );
   const artifactFiles = [
     ...new Set(
-      findFilesNamedLike(realArtifactRoot, (name) => name.endsWith('.js')).map(
-        (file) => normalizeArtifactFile(realArtifactRoot, file)
-      )
+      findFilesNamedLike(realArtifactRoot, (name) =>
+        /\.(?:[cm]?js)$/u.test(name)
+      ).map((file) => normalizeArtifactFile(realArtifactRoot, file))
     ),
   ];
   return { artifactFiles, manifestFiles };
@@ -35111,24 +41520,16 @@ const assertCloudflareTanStackEntryChunk = (
   );
 };
 
-const assertBoundedCloudflareChunkTopLevel = (
+const assertCloudflareChunkInertTopLevel = (
   program,
   chunkFile,
-  manifestRecord,
-  allowedInitializers = {},
-  loadEffectVisited = new Map()
+  allowedInitializers = {}
 ) => {
   assert(
     program.body.every((statement) =>
       isInertTopLevelStatement(statement, allowedInitializers)
     ),
     `${chunkFile} must contain only inert top-level declarations`
-  );
-  assertExactCloudflareStaticImports(
-    program,
-    chunkFile,
-    manifestRecord,
-    loadEffectVisited
   );
   const mutated = mutatedNames(program);
   for (const constructor of inertTopLevelConstructors) {
@@ -35138,6 +41539,45 @@ const assertBoundedCloudflareChunkTopLevel = (
       `${chunkFile} must use trusted inert collection constructors`
     );
   }
+};
+
+const assertBoundedCloudflareChunkTopLevel = (
+  program,
+  chunkFile,
+  manifestRecord,
+  allowedInitializers = {},
+  loadEffectVisited = new Map()
+) => {
+  assertCloudflareChunkInertTopLevel(program, chunkFile, allowedInitializers);
+  assertExactCloudflareStaticImports(
+    program,
+    chunkFile,
+    manifestRecord,
+    loadEffectVisited
+  );
+};
+
+const assertFocusedCloudflareChunkTopLevel = (
+  program,
+  chunkFile,
+  manifestRecord,
+  allowedInitializers = {}
+) => {
+  assert(
+    program.body.every((statement) =>
+      isInertTopLevelStatement(statement, allowedInitializers)
+    ),
+    `${chunkFile} must contain only inert top-level declarations`
+  );
+  const mutated = mutatedNames(program);
+  for (const constructor of inertTopLevelConstructors) {
+    assert(
+      topLevelDeclarationsForBinding(program, constructor).length === 0 &&
+        !mutated.has(constructor),
+      `${chunkFile} must use trusted inert collection constructors`
+    );
+  }
+  recordReviewedCloudflareManifestKeys([manifestRecord.key], manifestRecord);
 };
 
 const isCreateNoOpTelemetryCall = (node) =>
@@ -37995,11 +44435,576 @@ const assertCloudflareEntryModuleBoundary = (program, filePath) => {
   );
 };
 
+const assertCloudflareV5LifecycleChunk = (program, chunkFile) => {
+  const owner = topLevelVariableInitializer(
+    program,
+    'scheduleCloudflareRequestFlush'
+  );
+  assert(
+    nodeType(owner) === 'ArrowFunctionExpression',
+    `${chunkFile} must define its Cloudflare request flush owner`
+  );
+  assert(
+    owner.params.map(identifierName).join(':') ===
+      'request:telemetry:waitUntil',
+    `${chunkFile} request flush owner must accept its captured telemetry adapter`
+  );
+  const flushCalls = directNamedCalls(owner, 'forceFlushRequestTelemetry');
+  assert(
+    flushCalls.length === 1 &&
+      flushCalls[0].arguments.length === 2 &&
+      identifierName(flushCalls[0].arguments[0]) === 'request' &&
+      identifierName(flushCalls[0].arguments[1]) === 'telemetry',
+    `${chunkFile} request flush owner must flush the captured request adapter exactly once`
+  );
+  assert(
+    identifierOccurrenceCount(owner, 'getTelemetry') === 0,
+    `${chunkFile} request flush owner must not resolve mutable global telemetry`
+  );
+};
+
+const verifyCloudflareV5OwnerStage = (label, action) => {
+  try {
+    return action();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cloudflare v5 ${label} verification failed: ${detail}`, {
+      cause: error,
+    });
+  }
+};
+
+const assertCloudflareV5ScopeOwner = (program, filePath, loadEffectVisited) => {
+  const owners = [
+    'initializeCloudflareTelemetryRequestScope',
+    'runWithCloudflareTelemetry',
+  ];
+  const imported = assertCloudflareNamedOwnerImport(program, filePath, {
+    assetPattern: /^\.\/assets\/telemetry-request-scope(?:-[\w-]+)?\.js$/,
+    exportedNames: owners,
+    requiredCalls: {
+      initializeCloudflareTelemetryRequestScope: [
+        'installTelemetryScopeResolver',
+      ],
+    },
+    requiredIdentifiers: {
+      runWithCloudflareTelemetry: ['requestTelemetryStorage'],
+    },
+  });
+  assertCloudflareChunkProvenance(
+    filePath,
+    imported.chunkFile,
+    'src/runtime/cloudflare/telemetry-request-scope.ts',
+    'telemetry request scope owner'
+  );
+  assertExactCloudflareStaticImportSources(
+    imported.program,
+    imported.chunkFile,
+    [/^\.\/telemetry(?:-[\w-]+)?\.js$/, /^node:async_hooks$/]
+  );
+  assertBoundedCloudflareChunkTopLevel(
+    imported.program,
+    imported.chunkFile,
+    imported.manifestRecord,
+    {
+      requestTelemetryStorage: (initializer) =>
+        nodeType(initializer) === 'NewExpression' &&
+        identifierName(initializer.callee) === 'AsyncLocalStorage' &&
+        initializer.arguments.length === 0,
+    },
+    loadEffectVisited
+  );
+  const installCalls = directNamedCalls(
+    program,
+    'initializeCloudflareTelemetryRequestScope'
+  );
+  assert(
+    installCalls.length === 1 && installCalls[0].arguments.length === 0,
+    `${filePath} must install its telemetry request scope exactly once`
+  );
+  const ownerIndex = topLevelDeclaratorStatementIndex(
+    program,
+    imported.declarator
+  );
+  const installStatement = program.body[ownerIndex + 1];
+  assert(
+    installStatement?.type === 'ExpressionStatement' &&
+      installStatement.expression === installCalls[0],
+    `${filePath} must install telemetry scope immediately after importing its owner`
+  );
+  return { ...imported, installIndex: ownerIndex + 1 };
+};
+
+const assertCloudflareV5RequestTelemetryOwner = (program, filePath) => {
+  const imported = assertCloudflareNamedOwnerImport(program, filePath, {
+    assetPattern: /^\.\/assets\/request-telemetry(?:-[\w-]+)?\.js$/,
+    exportedNames: ['configureCloudflareRequestTelemetry'],
+    requiredCalls: {
+      configureCloudflareRequestTelemetry: [
+        'parseRequestTelemetryConfig',
+        'createNoOpTelemetry',
+        'createCloudflareTelemetryAdapter',
+        'assertRequiredTelemetrySignals',
+        'isTelemetrySignalRequired',
+      ],
+    },
+    requiredIdentifiers: {
+      configureCloudflareRequestTelemetry: [
+        'createCloudflareSentryOptions',
+        'createTelemetrySignalReadiness',
+        'isCloudflareAnalyticsEngine',
+        'isCloudflareTracing',
+      ],
+    },
+  });
+  assertCloudflareChunkProvenance(
+    filePath,
+    imported.chunkFile,
+    'src/runtime/cloudflare/request-telemetry.ts',
+    'request telemetry owner'
+  );
+  assert(
+    identifierOccurrenceCount(imported.program, 'setTelemetry') === 0 &&
+      identifierOccurrenceCount(imported.program, 'getTelemetry') === 0,
+    `${imported.chunkFile} must return request telemetry without mutating or reading a global adapter`
+  );
+  assertExactCloudflareStaticImportSources(
+    imported.program,
+    imported.chunkFile,
+    [
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      /^\.\/sanitize-log-fields(?:-[\w-]+)?\.js$/,
+      /^\.\/backend(?:-[\w-]+)?\.js$/,
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  // This owner imports the shared configuration gate, whose generated Zod
+  // schemas are already verified by their owning artifact checks. Keep this
+  // check focused on the authenticated request owner so schema implementation
+  // details cannot weaken or destabilize its lifecycle contract.
+  assertFocusedCloudflareChunkTopLevel(
+    imported.program,
+    imported.chunkFile,
+    imported.manifestRecord,
+    {}
+  );
+  return imported;
+};
+
+const assertCloudflareV5LifecycleOwner = (
+  program,
+  filePath,
+  loadEffectVisited
+) => {
+  const imported = assertCloudflareNamedOwnerImport(program, filePath, {
+    assetPattern: /^\.\/assets\/request-lifecycle(?:-[\w-]+)?\.js$/,
+    exportedNames: ['scheduleCloudflareRequestFlush'],
+    requiredCalls: {
+      scheduleCloudflareRequestFlush: ['forceFlushRequestTelemetry'],
+    },
+  });
+  assertCloudflareChunkProvenance(
+    filePath,
+    imported.chunkFile,
+    'src/runtime/cloudflare/request-lifecycle.ts',
+    'request lifecycle owner'
+  );
+  assertCloudflareV5LifecycleChunk(imported.program, imported.chunkFile);
+  assertExactCloudflareStaticImportSources(
+    imported.program,
+    imported.chunkFile,
+    [
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      /^\.\/request-completion(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  assertBoundedCloudflareChunkTopLevel(
+    imported.program,
+    imported.chunkFile,
+    imported.manifestRecord,
+    {},
+    loadEffectVisited
+  );
+  return imported;
+};
+
+const assertCloudflareV5SentryOwner = (
+  program,
+  filePath,
+  loadEffectVisited
+) => {
+  const owners = [
+    'initializeCloudflareSentryApplication',
+    'runWithCloudflareSentry',
+  ];
+  const imported = assertCloudflareNamedOwnerImport(program, filePath, {
+    assetPattern: /^\.\/assets\/sentry-request(?:-[\w-]+)?\.js$/,
+    exportedNames: owners,
+    requiredCalls: {
+      initializeCloudflareSentryApplication: [
+        'initializeCloudflareSentryIsolation',
+      ],
+      runWithCloudflareSentry: ['reportTelemetryFailure'],
+    },
+    requiredIdentifiers: {
+      runWithCloudflareSentry: [
+        'applicationWork',
+        'requireSentryOwner',
+        'withScope',
+        'wrapRequestHandler',
+      ],
+    },
+  });
+  assertCloudflareChunkProvenance(
+    filePath,
+    imported.chunkFile,
+    'src/runtime/cloudflare/sentry-request.ts',
+    'Sentry request owner'
+  );
+  assertExactCloudflareStaticImportSources(
+    imported.program,
+    imported.chunkFile,
+    [
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+      /^\.\/request-completion(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  assertBoundedCloudflareChunkTopLevel(
+    imported.program,
+    imported.chunkFile,
+    imported.manifestRecord,
+    {},
+    loadEffectVisited
+  );
+  return imported;
+};
+
+const assertCloudflareV5DatabaseOwnerImport = (
+  program,
+  filePath,
+  loadEffectVisited
+) => {
+  const imported = assertCloudflareNamedOwnerImport(program, filePath, {
+    assetPattern: /^\.\/assets\/database-request(?:-[\w-]+)?\.js$/,
+    exportedNames: ['runWithCloudflareDatabase'],
+    requiredCalls: {
+      runWithCloudflareDatabase: [
+        'createHyperdriveDbClient',
+        'runWithRuntimeDatabaseClient',
+      ],
+    },
+    requiredIdentifiers: {
+      runWithCloudflareDatabase: ['validateServerConfig'],
+    },
+  });
+  assertCloudflareChunkProvenance(
+    filePath,
+    imported.chunkFile,
+    'src/runtime/cloudflare/database-request.ts',
+    'database request owner'
+  );
+  assertCloudflareDatabaseChunk(
+    imported.program,
+    imported.chunkFile,
+    loadEffectVisited
+  );
+  assertExactCloudflareStaticImportSources(
+    imported.program,
+    imported.chunkFile,
+    [
+      /^\.\/client(?:-[\w-]+)?\.js$/,
+      /^\.\/backend(?:-[\w-]+)?\.js$/,
+      /^\.\/telemetry(?:-[\w-]+)?\.js$/,
+    ]
+  );
+  // The database owner imports validated server configuration, whose generated
+  // Zod schemas are verified by the configuration artifact checks. Verify this
+  // authenticated owner and its exact helpers without recursively treating
+  // schema-library initialization as request lifecycle code.
+  assertFocusedCloudflareChunkTopLevel(
+    imported.program,
+    imported.chunkFile,
+    imported.manifestRecord,
+    {}
+  );
+  return imported;
+};
+
+const assertCloudflareV5SentryFunction = (program, filePath) => {
+  const owner = topLevelVariableInitializer(
+    program,
+    'fetchCloudflareApplication'
+  );
+  assert(
+    nodeType(owner) === 'ArrowFunctionExpression' && owner.params.length === 1,
+    `${filePath} must define its active Cloudflare Sentry request owner`
+  );
+  assert(
+    shorthandBindingSignature({ id: owner.params[0] }) ===
+      expectedShorthandBindingSignature([
+        'context',
+        'handle',
+        'request',
+        'requireSentryOwner',
+        'sentryOptions',
+      ]),
+    `${filePath} Cloudflare Sentry owner must accept exact active request inputs`
+  );
+  assert(
+    nodeType(owner.body) === 'ConditionalExpression' &&
+      identifierName(owner.body.test) === 'sentryOptions',
+    `${filePath} Cloudflare Sentry owner must branch on validated Sentry options`
+  );
+  const sentryCall = owner.body.consequent;
+  assert(
+    nodeType(sentryCall) === 'CallExpression' &&
+      identifierName(sentryCall.callee) === 'runWithCloudflareSentry' &&
+      sentryCall.arguments.length === 1,
+    `${filePath} Cloudflare Sentry owner must invoke its trusted wrapper`
+  );
+  const options = ownerProperties(
+    sentryCall.arguments[0],
+    filePath,
+    'the Cloudflare Sentry request owner'
+  );
+  assert(
+    identifierName(options.get('requireSentryOwner')) === 'requireSentryOwner',
+    `${filePath} Cloudflare Sentry owner must forward required exception ownership`
+  );
+  assertCloudflareSentryCallOptions(sentryCall.arguments[0], filePath);
+};
+
+const assertCloudflareV5RequestConfiguration = (fetchFunction, filePath) => {
+  const owners = directBodyVariableDeclarators(fetchFunction, 'telemetry');
+  assert(
+    owners.length === 1 && owners[0].index === 0,
+    `${filePath} Worker fetch must resolve request telemetry first`
+  );
+  const owner = owners[0];
+  assert(
+    owner.declaration.kind === 'const' &&
+      owner.declaration.declarations.length === 1 &&
+      owner.declarator.id.type === 'ObjectPattern' &&
+      shorthandBindingSignature(owner.declarator) ===
+        expectedShorthandBindingSignature([
+          'requireSentryOwner',
+          'sentryOptions',
+          'telemetry',
+        ]),
+    `${filePath} Worker fetch must keep exact request telemetry owners immutable`
+  );
+  const call = owner.declarator.init;
+  assert(
+    nodeType(call) === 'CallExpression' &&
+      identifierName(call.callee) === 'configureCloudflareRequestTelemetry' &&
+      call.arguments.length === 1,
+    `${filePath} Worker fetch must configure request telemetry exactly once`
+  );
+  const options = ownerProperties(
+    call.arguments[0],
+    filePath,
+    'the Cloudflare request telemetry configurator'
+  );
+  assert(
+    options.size === 5 &&
+      identifierName(options.get('environment')) === 'environment' &&
+      identifierName(options.get('request')) === 'request' &&
+      identifierName(options.get('sentry')) === 'Sentry' &&
+      identifierName(options.get('sentryRequestIsolationReady')) ===
+        'sentryRequestIsolationReady' &&
+      identifierName(options.get('tracing')) === 'tracing',
+    `${filePath} Cloudflare request telemetry configurator must receive exact trusted inputs`
+  );
+};
+
+const assertCloudflareV5RequestOwner = (fetchFunction, filePath) => {
+  const statements = fetchFunction.body.body;
+  assert(
+    statements.length === 4 &&
+      directBodyVariableDeclarators(fetchFunction, 'telemetry')[0]?.index ===
+        0 &&
+      directBodyVariableDeclarators(fetchFunction, 'handleApplication')[0]
+        ?.index === 1 &&
+      directBodyVariableDeclarators(fetchFunction, 'handleDatabase')[0]
+        ?.index === 2 &&
+      nodeType(statements[3]) === 'TryStatement',
+    `${filePath} Worker fetch must contain only its bounded request ownership sequence`
+  );
+  const requestScope = statements[3];
+  assert(
+    requestScope.handler === null &&
+      requestScope.block.body.length === 1 &&
+      requestScope.finalizer?.body.length === 1,
+    `${filePath} Worker fetch must preserve one request scope and one flush owner`
+  );
+  const responseReturn = requestScope.block.body[0];
+  const scopedCall = unwrapAwaitExpression(responseReturn.argument);
+  assert(
+    responseReturn.type === 'ReturnStatement' &&
+      nodeType(responseReturn.argument) === 'AwaitExpression' &&
+      nodeType(scopedCall) === 'CallExpression' &&
+      identifierName(scopedCall.callee) === 'runWithCloudflareTelemetry' &&
+      scopedCall.arguments.length === 2 &&
+      identifierName(scopedCall.arguments[0]) === 'telemetry',
+    `${filePath} Worker fetch must run application work in the captured telemetry scope`
+  );
+  const handle = scopedCall.arguments[1];
+  assert(
+    nodeType(handle) === 'ArrowFunctionExpression' &&
+      handle.params.length === 0 &&
+      nodeType(handle.body) === 'CallExpression' &&
+      identifierName(handle.body.callee) === 'fetchCloudflareApplication',
+    `${filePath} Worker fetch must scope its exact application owner`
+  );
+  const sentryOptions = ownerProperties(
+    handle.body.arguments[0],
+    filePath,
+    'the active Cloudflare Sentry request owner'
+  );
+  assert(
+    sentryOptions.size === 5 &&
+      identifierName(sentryOptions.get('context')) === 'context' &&
+      identifierName(sentryOptions.get('handle')) === 'handleDatabase' &&
+      identifierName(sentryOptions.get('request')) === 'request' &&
+      identifierName(sentryOptions.get('requireSentryOwner')) ===
+        'requireSentryOwner' &&
+      identifierName(sentryOptions.get('sentryOptions')) === 'sentryOptions',
+    `${filePath} Worker fetch must forward exact Sentry request ownership`
+  );
+  const flushStatement = requestScope.finalizer.body[0];
+  const flushCall = flushStatement.expression;
+  assert(
+    flushStatement.type === 'ExpressionStatement' &&
+      nodeType(flushCall) === 'CallExpression' &&
+      identifierName(flushCall.callee) === 'scheduleCloudflareRequestFlush' &&
+      flushCall.arguments.length === 3 &&
+      identifierName(flushCall.arguments[0]) === 'request' &&
+      identifierName(flushCall.arguments[1]) === 'telemetry',
+    `${filePath} Worker fetch must flush its captured telemetry adapter`
+  );
+  assertCloudflareWaitUntilOwner(flushCall.arguments[2], filePath);
+};
+
+const assertCloudflareV5DatabaseOwner = (
+  filePath,
+  tanStackOwnerDigests,
+  loadEffectVisited
+) => {
+  const { program } = readParsedModule(filePath);
+  assertCloudflareV5SentryFunction(program, filePath);
+  const fetchFunction = findDefaultWorkerFetch(program, filePath);
+  assert(
+    fetchFunction.params.map(identifierName).join(':') ===
+      'request:environment:context',
+    `${filePath} Worker fetch must expose exact active inputs`
+  );
+  assertCloudflareV5RequestConfiguration(fetchFunction, filePath);
+  assertCloudflareApplicationHandler(fetchFunction, filePath);
+  const databaseOptions = cloudflareDatabaseOwnerProperties(
+    fetchFunction,
+    filePath
+  );
+  assert(
+    identifierMemberSignature(databaseOptions.get('binding')) ===
+      'MemberExpression:false:environment:START_UI_DATABASE' &&
+      identifierName(databaseOptions.get('handle')) === 'handleApplication' &&
+      identifierName(databaseOptions.get('request')) === 'request',
+    `${filePath} must bind its database owner to exact request inputs`
+  );
+  assertCloudflareV5RequestOwner(fetchFunction, filePath);
+  const scopeOwner = verifyCloudflareV5OwnerStage('telemetry scope owner', () =>
+    assertCloudflareV5ScopeOwner(program, filePath, loadEffectVisited)
+  );
+  const sdkDeclarator = verifyCloudflareV5OwnerStage('SDK owner', () =>
+    assertCloudflareSdkOwner(program, filePath)
+  );
+  const sentryOwner = verifyCloudflareV5OwnerStage('Sentry owner', () =>
+    assertCloudflareV5SentryOwner(program, filePath, loadEffectVisited)
+  );
+  const applicationDeclarator = verifyCloudflareV5OwnerStage(
+    'application owner',
+    () =>
+      assertCloudflareApplicationOwner(
+        program,
+        filePath,
+        tanStackOwnerDigests,
+        loadEffectVisited
+      )
+  );
+  assertExactEntryDynamicImport(
+    program,
+    filePath,
+    ['tracing'],
+    /^cloudflare:workers$/
+  );
+  const databaseOwner = verifyCloudflareV5OwnerStage('database owner', () =>
+    assertCloudflareV5DatabaseOwnerImport(program, filePath, loadEffectVisited)
+  );
+  const requestOwner = verifyCloudflareV5OwnerStage(
+    'request telemetry owner',
+    () => assertCloudflareV5RequestTelemetryOwner(program, filePath)
+  );
+  const lifecycleOwner = verifyCloudflareV5OwnerStage(
+    'request lifecycle owner',
+    () => assertCloudflareV5LifecycleOwner(program, filePath, loadEffectVisited)
+  );
+  const fetchOwner = topLevelBindingDeclarators(
+    program,
+    'fetchCloudflareApplication'
+  )[0];
+  const order = [
+    scopeOwner.declarator,
+    sdkDeclarator,
+    sentryOwner.declarator,
+    applicationDeclarator,
+    topLevelBindingDeclarators(program, 'tracing')[0],
+    databaseOwner.declarator,
+    requestOwner.declarator,
+    lifecycleOwner.declarator,
+    fetchOwner,
+  ].map((declarator) => topLevelDeclaratorStatementIndex(program, declarator));
+  assert(
+    order.every((index, position) =>
+      position === 0 ? index === 0 : order[position - 1] < index
+    ) && scopeOwner.installIndex < order[1],
+    `${filePath} must initialize Cloudflare runtime owners in dependency order`
+  );
+  const trustedBindings = ['requireSentryOwner', 'sentryOptions', 'telemetry'];
+  const catchBindings = directCatchBindingNames(
+    fetchFunction,
+    nestedFunctionRanges(fetchFunction)
+  );
+  const mutations = mutatedNames(fetchFunction);
+  assert(
+    trustedBindings.every(
+      (binding) => !mutations.has(binding) && !catchBindings.has(binding)
+    ),
+    `${filePath} Worker fetch must keep request telemetry bindings immutable`
+  );
+  assert(
+    identifierOccurrenceCount(program, 'lastKnownNativeTelemetry') === 0 &&
+      identifierOccurrenceCount(fetchFunction, 'nativeTelemetry') === 0,
+    `${filePath} must not retain telemetry across Worker requests`
+  );
+  assertTrustedChunkBuiltIns(program, filePath, { Response: 0 });
+  assert(
+    program.body.length === 12,
+    `${filePath} must contain only its bounded Cloudflare v5 module ownership sequence`
+  );
+};
+
 const assertCloudflareDatabaseOwner = (
   filePath,
   tanStackOwnerDigests,
   loadEffectVisited
 ) => {
+  if (!activeLegacyCloudflareTelemetryFixture) {
+    return assertCloudflareV5DatabaseOwner(
+      filePath,
+      tanStackOwnerDigests,
+      loadEffectVisited
+    );
+  }
   const { program } = readParsedModule(filePath);
   assertCloudflareSentryOwner(program, filePath);
   const fetchFunction = findDefaultWorkerFetch(program, filePath);
@@ -38136,7 +45141,8 @@ const staticImportSpecifierDetails = {
     importKind: 'namespace',
   }),
   ImportSpecifier: (specifier) => ({
-    importedName: identifierName(specifier.imported),
+    importedName:
+      identifierName(specifier.imported) ?? literalString(specifier.imported),
     importKind: 'named',
   }),
 };
@@ -39206,20 +46212,53 @@ const recordArtifactOwnerImportConsumers = (
 };
 
 const astParentMapByRoot = new WeakMap();
+const astNodeRangeMapByRoot = new WeakMap();
+const astNodeCountByRoot = new WeakMap();
 
-const immutableAstParentMap = (root) => {
+const immutableAstParentMap = (
+  root,
+  workLimit = runtimeArtifactTraversalWorkLimit
+) => {
   const cached = astParentMapByRoot.get(root);
   if (cached) return cached;
   const parents = new WeakMap();
+  const nodesByRange = new Map();
   const pending = [root];
+  let work = 0;
   while (pending.length > 0) {
     const node = pending.pop();
+    work += 1;
+    assert(work <= workLimit, runtimeArtifactTraversalWorkMessage);
+    if (Number.isInteger(node?.start) && Number.isInteger(node?.end)) {
+      nodesByRange.set(`${String(node.start)}:${String(node.end)}`, node);
+    }
     const children = astVisitorChildren(node);
+    assert(
+      work + pending.length + children.length <= workLimit,
+      runtimeArtifactTraversalWorkMessage
+    );
     children.forEach((child) => parents.set(child, node));
     children.forEach((child) => pending.push(child));
   }
   astParentMapByRoot.set(root, parents);
+  astNodeRangeMapByRoot.set(root, nodesByRange);
+  astNodeCountByRoot.set(root, work);
   return parents;
+};
+
+const immutableAstNodeCount = (root) => {
+  immutableAstParentMap(root);
+  return astNodeCountByRoot.get(root) ?? 0;
+};
+
+export const inspectAstParentMapBoundForTesting = (nodes, workLimit) => {
+  const root = {
+    body: Array.from({ length: nodes }, () => ({ type: 'EmptyStatement' })),
+    sourceType: 'module',
+    type: 'Program',
+  };
+  immutableAstParentMap(root, workLimit);
+  return true;
 };
 
 const createAstParentMap = (root) => {
@@ -40791,10 +47830,20 @@ const recordArtifactOwnerImportConsumerPrograms = (
 const artifactOwnerMutationDigestMap = (
   program,
   owners,
-  moduleSourceReplacement
+  moduleSourceReplacement,
+  analysisLabel,
+  artifactRoot
 ) => {
   const mutationsByOwner = new Map();
-  const { ranges: dormantRanges } = dormantCloudflareFunctionRanges(program);
+  const { ranges: dormantRanges } = dormantCloudflareFunctionRanges(
+    program,
+    [],
+    [],
+    analysisLabel,
+    [],
+    artifactRoot,
+    cloudflareReviewedClosureByProgram.get(program)
+  );
   const reachableOwners = new Map();
   const referenceNodes = collectFreeIdentifierReferences(program).nodes;
   const consumerNamesByOwner = new Map();
@@ -40944,15 +47993,20 @@ const createArtifactOwnerModuleAnalysis = (
   program,
   owners
 ) =>
-  artifactOwnerMutationDigestMap(program, owners, (source, kind) =>
-    artifactOwnerModuleSource(
-      source,
-      kind,
-      chunkFile,
-      manifestRecord,
-      (linkedFile) => artifactOwnerManifestRecordFor(context, linkedFile),
-      context.message
-    )
+  artifactOwnerMutationDigestMap(
+    program,
+    owners,
+    (source, kind) =>
+      artifactOwnerModuleSource(
+        source,
+        kind,
+        chunkFile,
+        manifestRecord,
+        (linkedFile) => artifactOwnerManifestRecordFor(context, linkedFile),
+        context.message
+      ),
+    manifestRecord.entry.file,
+    manifestRecord.artifactRoot
   );
 
 const authenticatedCloudflareSourceFor = (chunkFile, message) => {
@@ -41022,6 +48076,8 @@ const runArtifactOwnerModuleAnalysis = (artifactRoot, chunkFile) => {
   return result;
 };
 
+const cloudflareIsolatedArtifactOwnerTimeoutMs = 90_000;
+
 const readIsolatedArtifactOwnerAnalysis = (context, chunkFile) => {
   const manifestRecord = artifactOwnerManifestRecordFor(context, chunkFile);
   cloudflareManifestChunkRecord(manifestRecord.key, manifestRecord);
@@ -41033,29 +48089,37 @@ const readIsolatedArtifactOwnerAnalysis = (context, chunkFile) => {
     manifestRecord.manifestFile,
     context.message
   );
-  const output = execFileSync(
-    process.execPath,
-    [
-      '--max-old-space-size=2048',
-      runtimeProfileVerifierFile,
-      '--artifact-owner-analysis',
-      context.rootRecord.artifactRoot,
-      chunkFile,
-    ],
-    {
-      encoding: 'utf8',
-      env: activeCloudflareAppChunkProvenanceKey
-        ? {
-            [cloudflareAppChunkProvenanceKeyEnvironment]:
-              activeCloudflareAppChunkProvenanceKey,
-          }
-        : {},
-      killSignal: 'SIGKILL',
-      maxBuffer: 32 * 1_024 * 1_024,
-      stdio: ['ignore', 'pipe', 'inherit'],
-      timeout: 30_000,
-    }
-  );
+  let output;
+  try {
+    output = execFileSync(
+      process.execPath,
+      [
+        '--max-old-space-size=2048',
+        runtimeProfileVerifierFile,
+        '--artifact-owner-analysis',
+        context.rootRecord.artifactRoot,
+        chunkFile,
+      ],
+      {
+        encoding: 'utf8',
+        env: activeCloudflareAppChunkProvenanceKey
+          ? {
+              [cloudflareAppChunkProvenanceKeyEnvironment]:
+                activeCloudflareAppChunkProvenanceKey,
+            }
+          : {},
+        killSignal: 'SIGKILL',
+        maxBuffer: 32 * 1_024 * 1_024,
+        stdio: ['ignore', 'pipe', 'inherit'],
+        timeout: cloudflareIsolatedArtifactOwnerTimeoutMs,
+      }
+    );
+  } catch (error) {
+    throw new Error(
+      `${normalizeArtifactFile(context.rootRecord.artifactRoot, chunkFile)} isolated artifact owner analysis failed (timeout ${String(cloudflareIsolatedArtifactOwnerTimeoutMs)}ms): ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
+    );
+  }
   const result = JSON.parse(output);
   const message = `${chunkFile} isolated artifact owner analysis integrity`;
   assert(isObjectRecord(result) && isObjectRecord(result.integrity), message);
@@ -42328,7 +49392,7 @@ const verifyCloudflare = (root, expectedAppSlug, tanStackOwnerDigests) => {
   assertNoForbiddenRuntimeTokens(path.join(output, 'server'), 'cloudflare');
 };
 
-export const verifyRuntimeProfile = (
+const verifyRuntimeProfileWithOptions = (
   profile,
   root = process.cwd(),
   {
@@ -42338,13 +49402,13 @@ export const verifyRuntimeProfile = (
     expectedAppSlug = process.env.APP_SLUG,
     forbiddenArtifactSecrets = [],
     forbiddenBuildTokens = [],
-  } = {}
+  } = {},
+  legacyCloudflareTelemetryFixtureForTesting = false
 ) => {
   clearParsedModuleCaches();
   authenticatedCloudflareModuleSources.clear();
   verifiedCloudflareMetadataSources.clear();
   cloudflareAppChunkProvenanceCache.clear();
-  cloudflareReviewedClosureByAnalysisLabel.clear();
   reviewedCloudflareOutputFiles.clear();
   shallowScannedCloudflareOutputFiles.clear();
   shallowScannedCloudflareOutputQueue.length = 0;
@@ -42352,6 +49416,8 @@ export const verifyRuntimeProfile = (
     cloudflareAppChunkProvenanceKey ??
     process.env[cloudflareAppChunkProvenanceKeyEnvironment];
   activeCloudflareOriginFactStats = cloudflareOriginFactStats;
+  activeLegacyCloudflareTelemetryFixture =
+    legacyCloudflareTelemetryFixtureForTesting === true;
   if (activeCloudflareOriginFactStats) {
     Object.assign(activeCloudflareOriginFactStats, {
       attemptedFacts: 0,
@@ -42381,8 +49447,8 @@ export const verifyRuntimeProfile = (
   } finally {
     activeCloudflareAppChunkProvenanceKey = undefined;
     activeCloudflareOriginFactStats = undefined;
+    activeLegacyCloudflareTelemetryFixture = false;
     cloudflareAppChunkProvenanceCache.clear();
-    cloudflareReviewedClosureByAnalysisLabel.clear();
     reviewedCloudflareOutputFiles.clear();
     shallowScannedCloudflareOutputFiles.clear();
     shallowScannedCloudflareOutputQueue.length = 0;
@@ -42390,6 +49456,35 @@ export const verifyRuntimeProfile = (
     verifiedCloudflareMetadataSources.clear();
     clearParsedModuleCaches();
   }
+};
+
+export const verifyRuntimeProfile = (
+  profile,
+  root = process.cwd(),
+  options
+) => {
+  if (
+    options &&
+    'legacyCloudflareTelemetryFixtureForTesting' in Object(options)
+  ) {
+    fail(
+      'legacy Cloudflare telemetry fixtures are unavailable through production verification'
+    );
+  }
+  return verifyRuntimeProfileWithOptions(profile, root, options);
+};
+
+export const verifyLegacyCloudflareTelemetryFixtureForTesting = (
+  profile,
+  root = process.cwd(),
+  options = {}
+) => {
+  const worker = globalThis.__vitest_worker__;
+  assert(
+    worker?.current?.type === 'test' && typeof worker.filepath === 'string',
+    'legacy Cloudflare telemetry fixture verification is available only inside an active Vitest test'
+  );
+  return verifyRuntimeProfileWithOptions(profile, root, options, true);
 };
 
 const isEntryPoint =

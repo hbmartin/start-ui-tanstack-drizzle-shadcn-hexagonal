@@ -4,12 +4,14 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 import { parseSync } from 'oxc-parser';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   inspectArtifactOwnerConsumerSourcesForTesting,
   inspectArtifactOwnerCallerComponentsForTesting,
+  inspectAstParentMapBoundForTesting,
   inspectAstTraversalForTesting,
   inspectAstDigestForTesting,
   inspectCloudflareAnalysisBudgetForTesting,
@@ -17,26 +19,46 @@ import {
   inspectCloudflareAggregateResolutionDepthForTesting,
   inspectCloudflareAppOnlyTopLevelInertForTesting,
   inspectCloudflareDeferredArgumentHazardForTesting,
+  inspectCloudflareDirectLocalProxyFactoryResultForTesting,
   inspectCloudflareFactorySpecializationLifecycleForTesting,
   inspectCloudflareInvokedParameterProjectionsForTesting,
   inspectCloudflareImportedFactoryCycleForTesting,
   inspectCloudflareImportedFactoryContextReentryForTesting,
+  inspectCloudflareImportedStaticPrimitiveMembersForTesting,
+  inspectCloudflareKnownIsolatedExpressionForTesting,
+  inspectCloudflareKnownIsolatedReceiverExpressionForTesting,
   inspectCloudflareLoadEffectsForTesting,
+  inspectCloudflareLoadInternalIsolatedReceiverForTesting,
   inspectCloudflareShallowLoadEffectsForTesting,
+  inspectCloudflareStaticPropertyKeysForTesting,
   inspectCloudflareSyntheticMutationTargetKeysForTesting,
   inspectCloudflareUncertainReceiverIndexForTesting,
   inspectCloudflareModuleGraphBoundForTesting,
   inspectCloudflareReviewedLoadEffectsForTesting,
   inspectCloudflareReviewedClosurePolicyForTesting,
+  inspectCloudflareReviewedClosureProgramIsolationForTesting,
   inspectCloudflareReviewedFactoryResultPathForTesting,
+  inspectCloudflareReviewedAggregateArtifactProofForTesting,
+  inspectCloudflareReviewedAggregateSpreadsForTesting,
+  inspectCloudflareReviewedExportArtifactLoadEffectsForTesting,
+  inspectCloudflareReviewedExportArtifactProofForTesting,
+  inspectCloudflareReviewedExportConsumerProofForTesting,
+  inspectCloudflareReviewedExportMutationPlanForTesting,
+  inspectCloudflareReviewedFreshExportReceiversForTesting,
   inspectCloudflareReviewedPolicyValidationForTesting,
   inspectCloudflareReviewedOriginDirectAliasProofForTesting,
+  inspectCloudflareReviewedStaticMemberDeferredResultForTesting,
+  inspectCloudflareReviewedStaticMemberProgramCacheForTesting,
   inspectCloudflareProvisionalReceiverDetailsForTesting,
+  inspectCloudflareProductionKernelStaticShapeForTesting,
   inspectCloudflareReceiverDetailsForTesting,
   inspectCloudflareReviewedReceiverMutationsForTesting,
   inspectCloudflareReviewedSingletonReceiverRootsForTesting,
+  inspectCloudflareFactoryOriginLineagesForTesting,
   inspectFreeIdentifierReferencesForTesting,
+  inspectParsedModulePathIdentityForTesting,
   inspectTopLevelOwnerConsumerBoundForTesting,
+  verifyLegacyCloudflareTelemetryFixtureForTesting,
   verifyRuntimeProfile as verifyRuntimeProfileImplementation,
 } from '../../../scripts/verify-runtime-profile.mjs';
 
@@ -57,6 +79,12 @@ const fixtureEmptyPluginAdaptersSource =
 const fixtureCloudflareProvenanceKey = Buffer.alloc(32, 7).toString(
   'base64url'
 );
+// These compressed bytes are the exact reviewed production-v5 chunks whose
+// digests and module ownership are authenticated by the verifier policy.
+const reviewedRolldownRuntimeChunkGzip =
+  'H4sIAAAAAAAAE3VVTW/bMAw9x7+CcYFCRgWn52ZZMWy7DGgzILtlQeHYdOLWlgJZbhu0+e8jJTt2mvVSV+Qj9fT4kcnkwuCm0Ar+Xhtdlpl+URPTKFtUGD/WwXNi4OEhNZhYhBnM14+Y2tifp603w/y30bveTYZCIdvQ2H0H26Cdvyi2/sA67dG9ndHsM8XOanMed59UWH8W6JyDGLJbPc9P4M5m9zuc5x1ym9Rtkh6562Bx7x2+BOvqrlCEF7mSYLCWgMZEMPsKwv19C0ZFDsIZ7dboF/Yvr1fTYGTNnt0jg7YxCnIFl5cgjHtXrighfa+jyKUl+AHSxKZbyhW5sGM2gi1xRRczKDh01FJdVVr9WrT80rWESmcDaoKO8P7OLuH+n8Eb4OtOG1vfwNsBDlHcHn2ohHRNINWUZeQsnTs6yuHO38qSb0zKUoLSD/W+Wuuy7uQo0YJNDNWALyS6o1wbEJxAUeGA6FJk1HeT8Gjp3NK9nY43jFqyaSXJgqqp0CTrEm/AmgZJCmLltB8POZxnXThXbPXCmkJt/iQbugOek7KhVOGdzpoSQ3DZ2kr5yOlQ6t2ec3LlhNUScqMrKshriju6IaNGHjYDe7nW3Fc6d2CYzWYQatd0IRflzJc3KrU0nWEER72ecM9Xng2Gu4FKVHAHkW70YWhcotrYreTDlJxfQNHn6sr3Exlb3LLg9vTaDcciTkly9z5CRfwCjhkTO//SE3U9ypfL10uIJ6cCk1s+raJ4XahMcDf5hFzGkzqORebXw8eNIby+HBSxWAyL+0jK48p16CumB9Wy+ufijitFHUwa1fc6QyoztZYvrB+OY4vyZIx918PtcQOK4WbhTMSEh0YO20H0yZnmuB04/sa8O3xzOdO5zo5dSHomTWmp6rf/6d2j2+nc9iwHBucDcWCCXaAj3Avyvd0VrSpOgc8YVY50N/qOGJmWH+0rum0oRU+eRQr754eDcWOiNGqe3zSYTC5QZf5XKfCJCdtVMKkhkaf0yVTIfi3TUcmTtUQWIz8sR7JZoO74BxNri7MBBwAA';
+const reviewedReactChunkGzip =
+  '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';
 const fixtureTanStackOwnerDigests = {
   createStartHandler:
     '6a9731e0a46846cce538b09b6afe5c18b74ad3e12349bfd87d5e25fe5f86bb70',
@@ -77,7 +105,7 @@ const fixtureTanStackOwnerDigests = {
 };
 const verifyRuntimeProfile = (profile, root, options = {}) => {
   if (profile === 'cloudflare') writeFixtureCloudflareProvenance(root);
-  return verifyRuntimeProfileImplementation(profile, root, {
+  return verifyLegacyCloudflareTelemetryFixtureForTesting(profile, root, {
     cloudflareAppChunkProvenanceKey: fixtureCloudflareProvenanceKey,
     cloudflareTanStackOwnerDigests: fixtureTanStackOwnerDigests,
     ...options,
@@ -95,32 +123,24 @@ const emittedReviewDigest = (verify) => {
   }
 };
 
-const subprocessReviewDigest = (root, locale) => {
+const ambientLocaleReviewDigest = (root, locale) => {
   writeFixtureCloudflareProvenance(root);
-  const verifierUrl = pathToFileURL(
-    path.resolve(process.cwd(), 'scripts/verify-runtime-profile.mjs')
-  ).href;
-  const program = `import { verifyRuntimeProfile } from ${JSON.stringify(verifierUrl)};
-try {
-  verifyRuntimeProfile('cloudflare', ${JSON.stringify(root)}, {
-    cloudflareAppChunkProvenanceKey: ${JSON.stringify(fixtureCloudflareProvenanceKey)},
-    cloudflareTanStackOwnerDigests: ${JSON.stringify(fixtureTanStackOwnerDigests)},
-    expectedAppSlug: 'acme-app',
-  });
-  throw new Error('Expected a reviewed artifact digest diagnostic');
-} catch (error) {
-  const match = String(error?.message).match(/\\(([a-f0-9]{64})\\)$/u);
-  if (!match) throw error;
-  process.stdout.write(match[1]);
-}`;
-  return execFileSync(
-    process.execPath,
-    ['--input-type=module', '--eval', program],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, LANG: locale, LC_ALL: locale },
-    }
-  );
+  const priorLang = process.env.LANG;
+  const priorLocale = process.env.LC_ALL;
+  process.env.LANG = locale;
+  process.env.LC_ALL = locale;
+  try {
+    return emittedReviewDigest(() =>
+      verifyRuntimeProfile('cloudflare', root, {
+        expectedAppSlug: 'acme-app',
+      })
+    );
+  } finally {
+    if (priorLang === undefined) delete process.env.LANG;
+    else process.env.LANG = priorLang;
+    if (priorLocale === undefined) delete process.env.LC_ALL;
+    else process.env.LC_ALL = priorLocale;
+  }
 };
 
 const temporaryDirectories = [];
@@ -173,7 +193,7 @@ const fixtureJavaScriptFiles = (directory) =>
   fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const candidate = path.join(directory, entry.name);
     if (entry.isDirectory()) return fixtureJavaScriptFiles(candidate);
-    return entry.isFile() && entry.name.endsWith('.js') ? [candidate] : [];
+    return entry.isFile() && /\.(?:m?js)$/u.test(entry.name) ? [candidate] : [];
   });
 
 const fixtureCloudflareOwnership = (modules) => {
@@ -323,6 +343,58 @@ const writeFixtureCloudflareProvenance = (
       .digest('base64url'),
     version: 1,
   });
+};
+
+const createReviewedReactAnalyzerFixture = (consumerSource) => {
+  const root = fixture();
+  const rolldownFile = 'assets/rolldown-runtime-7_rZTKki.js';
+  const reactFile = 'assets/react-m4gW-Tkn.js';
+  const consumerFile = 'assets/reviewed-consumer.js';
+  write(
+    root,
+    `dist/server/${rolldownFile}`,
+    gunzipSync(
+      Buffer.from(reviewedRolldownRuntimeChunkGzip, 'base64')
+    ).toString('utf8')
+  );
+  write(
+    root,
+    `dist/server/${reactFile}`,
+    gunzipSync(Buffer.from(reviewedReactChunkGzip, 'base64')).toString('utf8')
+  );
+  write(root, `dist/server/${consumerFile}`, consumerSource);
+  writeJson(root, 'dist/server/.vite/manifest.json', {
+    '_react-m4gW-Tkn.js': {
+      file: reactFile,
+      imports: ['_rolldown-runtime-7_rZTKki.js'],
+      name: 'react',
+    },
+    '_rolldown-runtime-7_rZTKki.js': {
+      file: rolldownFile,
+      imports: [],
+      name: 'rolldown-runtime',
+    },
+    'src/reviewed-consumer.ts': {
+      file: consumerFile,
+      imports: ['_rolldown-runtime-7_rZTKki.js', '_react-m4gW-Tkn.js'],
+      isEntry: true,
+      name: 'reviewed-consumer',
+      src: 'src/reviewed-consumer.ts',
+    },
+  });
+  markFixtureAppOwnedChunk(root, reactFile, [
+    'node_modules/.pnpm/react@19.2.7/node_modules/react/cjs/react.production.js',
+    'node_modules/.pnpm/react@19.2.7/node_modules/react/index.js',
+  ]);
+  markFixtureAppOwnedChunk(root, rolldownFile, [
+    'non-app:66364e236ec24f3d62d60f62f82cca5694450afb05a0f51ab2a16d0d73781ed3',
+  ]);
+  markFixtureAppOwnedChunk(root, consumerFile, ['src/reviewed-consumer.ts']);
+  writeFixtureCloudflareProvenance(root);
+  return {
+    analysisLabel: consumerFile,
+    artifactRoot: path.join(root, 'dist/server'),
+  };
 };
 
 const replaceManifestBackedHashedDependency = (
@@ -1080,6 +1152,198 @@ const addCloudflareRouterEffectModule = (
   }
 };
 
+const reviewedAggregateSinkPolicy = Object.freeze({
+  exportedLocalName: 'useRenderElement',
+  exportedName: 'c',
+  exportedParameterIndex: 2,
+  propertyName: 'stateAttributesMapping',
+  reason:
+    'The fixture sink reads the exact aggregate property without retaining or mutating it.',
+});
+
+const createReviewedAggregateSinkArtifact = ({
+  consumerSource,
+  ownerSource,
+  sinkSource = 'function useRenderElement(_element,_props,params={}){void params.stateAttributesMapping;return null}export{useRenderElement as c};',
+}) => {
+  const root = fixture();
+  createCloudflareArtifact(root);
+  const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest['_aggregate-sink-AAAAAAAA.js'] = {
+    file: 'assets/aggregate-sink-AAAAAAAA.js',
+    imports: [],
+    name: 'aggregate-sink',
+  };
+  manifest['_aggregate-owner-AAAAAAAA.js'] = {
+    file: 'assets/aggregate-owner-AAAAAAAA.js',
+    imports: ['_aggregate-sink-AAAAAAAA.js'],
+    name: 'aggregate-owner',
+  };
+  manifest['_aggregate-consumer-AAAAAAAA.js'] = {
+    file: 'assets/aggregate-consumer-AAAAAAAA.js',
+    imports: ['_aggregate-owner-AAAAAAAA.js', '_aggregate-sink-AAAAAAAA.js'],
+    name: 'aggregate-consumer',
+  };
+  writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+  write(root, 'dist/server/assets/aggregate-sink-AAAAAAAA.js', sinkSource);
+  write(root, 'dist/server/assets/aggregate-owner-AAAAAAAA.js', ownerSource);
+  write(
+    root,
+    'dist/server/assets/aggregate-consumer-AAAAAAAA.js',
+    consumerSource
+  );
+  writeFixtureCloudflareProvenance(root);
+  return root;
+};
+
+const inspectReviewedAggregateSinkArtifact = (root) =>
+  inspectCloudflareReviewedAggregateArtifactProofForTesting(
+    root,
+    'assets/aggregate-consumer-AAAAAAAA.js',
+    'assets/aggregate-sink-AAAAAAAA.js',
+    fixtureCloudflareProvenanceKey,
+    reviewedAggregateSinkPolicy
+  );
+
+const createImportedStaticPrimitiveArtifact = ({
+  consumerSource,
+  extraConsumerSources = [],
+  ownerSource,
+}) => {
+  const root = fixture();
+  createCloudflareArtifact(root);
+  const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest['_primitive-owner-AAAAAAAA.js'] = {
+    file: 'assets/primitive-owner-AAAAAAAA.js',
+    imports: [],
+    name: 'primitive-owner',
+  };
+  manifest['_primitive-consumer-AAAAAAAA.js'] = {
+    file: 'assets/primitive-consumer-AAAAAAAA.js',
+    imports: ['_primitive-owner-AAAAAAAA.js'],
+    name: 'primitive-consumer',
+  };
+  extraConsumerSources.forEach((_source, index) => {
+    manifest[`_primitive-extra-${String(index)}-AAAAAAAA.js`] = {
+      file: `assets/primitive-extra-${String(index)}-AAAAAAAA.js`,
+      imports: ['_primitive-owner-AAAAAAAA.js'],
+      name: `primitive-extra-${String(index)}`,
+    };
+  });
+  writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+  write(root, 'dist/server/assets/primitive-owner-AAAAAAAA.js', ownerSource);
+  write(
+    root,
+    'dist/server/assets/primitive-consumer-AAAAAAAA.js',
+    consumerSource
+  );
+  extraConsumerSources.forEach((source, index) =>
+    write(
+      root,
+      `dist/server/assets/primitive-extra-${String(index)}-AAAAAAAA.js`,
+      source
+    )
+  );
+  writeFixtureCloudflareProvenance(root);
+  return root;
+};
+
+const inspectImportedStaticPrimitiveArtifact = (root, expressionSource) =>
+  inspectCloudflareImportedStaticPrimitiveMembersForTesting(
+    root,
+    'assets/primitive-consumer-AAAAAAAA.js',
+    expressionSource,
+    fixtureCloudflareProvenanceKey
+  );
+
+const reviewedStaticMemberNullishPolicy = Object.freeze({
+  exportedLocalName: 'zu',
+  exportedName: 'M',
+  memberPath: ['fieldText', 'nullish'],
+  reason: 'The fixture helper returns an inert nullish schema.',
+  returnedPath: [],
+});
+
+const reviewedStaticMemberRequiredPolicy = Object.freeze({
+  exportedLocalName: 'zu',
+  exportedName: 'M',
+  memberPath: ['fieldText', 'required'],
+  reason: 'The fixture helper returns an inert required schema.',
+  returnedPath: [],
+});
+
+const reviewedStaticMemberPipePolicy = Object.freeze({
+  exportedLocalName: 'zu',
+  exportedName: 'M',
+  memberPath: ['fieldText', 'required'],
+  reason: 'The fixture helper returns an inert schema for an exact pipe call.',
+  returnedPath: ['pipe', { callResult: true }],
+});
+
+const createReviewedStaticMemberArtifact = ({
+  consumerSource,
+  extraConsumerSources = [],
+  ownerSource = 'const zu={fieldText:{evil:()=>({}),nullish:options=>({options}),required:options=>({options})}};export{zu as M};',
+}) => {
+  const root = fixture();
+  createCloudflareArtifact(root);
+  const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest['_static-member-owner-AAAAAAAA.js'] = {
+    file: 'assets/static-member-owner-AAAAAAAA.js',
+    imports: [],
+    name: 'static-member-owner',
+  };
+  manifest['_static-member-consumer-AAAAAAAA.js'] = {
+    file: 'assets/static-member-consumer-AAAAAAAA.js',
+    imports: ['_static-member-owner-AAAAAAAA.js'],
+    name: 'static-member-consumer',
+  };
+  extraConsumerSources.forEach((_source, index) => {
+    manifest[`_static-member-extra-${String(index)}-AAAAAAAA.js`] = {
+      file: `assets/static-member-extra-${String(index)}-AAAAAAAA.js`,
+      imports: ['_static-member-owner-AAAAAAAA.js'],
+      name: `static-member-extra-${String(index)}`,
+    };
+  });
+  writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+  write(
+    root,
+    'dist/server/assets/static-member-owner-AAAAAAAA.js',
+    ownerSource
+  );
+  write(
+    root,
+    'dist/server/assets/static-member-consumer-AAAAAAAA.js',
+    consumerSource
+  );
+  extraConsumerSources.forEach((source, index) =>
+    write(
+      root,
+      `dist/server/assets/static-member-extra-${String(index)}-AAAAAAAA.js`,
+      source
+    )
+  );
+  writeFixtureCloudflareProvenance(root);
+  return root;
+};
+
+const inspectReviewedStaticMemberArtifact = (
+  root,
+  expressionSource,
+  policy = reviewedStaticMemberPipePolicy
+) =>
+  inspectCloudflareReviewedStaticMemberDeferredResultForTesting(
+    root,
+    'assets/static-member-owner-AAAAAAAA.js',
+    'assets/static-member-consumer-AAAAAAAA.js',
+    expressionSource,
+    fixtureCloudflareProvenanceKey,
+    policy
+  );
+
 const emittedStartOwnerClosure = (root) =>
   emittedReviewDigest(() =>
     verifyRuntimeProfile('cloudflare', root, {
@@ -1099,13 +1363,87 @@ const expectStartOwnerSubstitutionRejected = (root, startOwnerClosure) => {
   ).toThrow('must use the reviewed startInstance artifact owner closure');
 };
 
+const reviewedExportMutationPolicy = Object.freeze({
+  expectedConsumerCount: 4,
+  expectedMutationMembers: [
+    'activeTriggerElement',
+    'activeTriggerId',
+    'preventUnmountingOnClose',
+    'preventUnmountingOnClose',
+  ],
+  exportedLocalName: 'setPopupOpenState',
+  exportedName: 'zt',
+  exportedParameterIndex: 0,
+  reason:
+    'The exact fixture export mutates only its fresh receiver parameter through direct calls.',
+});
+
+const reviewedExportMutationOwnerSource =
+  'function setPopupOpenState(store){store.activeTriggerElement=null;store.activeTriggerId=null;store.preventUnmountingOnClose=true;store.preventUnmountingOnClose=false}setPopupOpenState({});export{setPopupOpenState as zt};';
+
+const reviewedExportArtifactOwnerSource =
+  'function setPopupOpenState(store){store.activeTriggerElement=null;store.activeTriggerId=()=>fetch("https://invalid.example");store.preventUnmountingOnClose=true;store.preventUnmountingOnClose=false}export{setPopupOpenState as zt};';
+
+const createReviewedExportArtifactFixture = (
+  consumers,
+  expectedConsumerCount
+) => {
+  const root = fs.realpathSync(fixture());
+  const ownerArtifactFile = 'assets/reviewed-owner.js';
+  write(root, 'dist/server/index.js', 'void 0;');
+  write(
+    root,
+    `dist/server/${ownerArtifactFile}`,
+    reviewedExportArtifactOwnerSource
+  );
+  consumers.forEach(({ file, source }) =>
+    write(root, `dist/server/${file}`, source)
+  );
+  writeJson(root, 'dist/server/.vite/manifest.json', {
+    entry: {
+      file: 'index.js',
+      imports: [],
+      isEntry: true,
+      name: 'entry',
+      src: 'src/entry-server.ts',
+    },
+    owner: {
+      file: ownerArtifactFile,
+      imports: [],
+      name: 'reviewed-owner',
+      src: 'src/reviewed-owner.ts',
+    },
+    ...Object.fromEntries(
+      consumers.map(({ file, importsOwner = false }, index) => [
+        `consumer-${String(index)}`,
+        {
+          file,
+          imports: importsOwner ? ['owner'] : [],
+          name: `consumer-${String(index)}`,
+          src: `src/consumer-${String(index)}.ts`,
+        },
+      ])
+    ),
+  });
+  writeFixtureCloudflareProvenance(root);
+  return {
+    ownerArtifactFile,
+    policy: {
+      ...reviewedExportMutationPolicy,
+      expectedConsumerCount,
+    },
+    root,
+  };
+};
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
+    fixtureAppOwnedModules.delete(directory);
     fs.rmSync(directory, { force: true, recursive: true });
   }
 });
 
-describe('runtime artifact verifier', () => {
+describe('runtime artifact verifier', { timeout: 15_000 }, () => {
   it('preserves parser AST JSON digest semantics without recursion', () => {
     const representative = {
       body: [
@@ -1187,6 +1525,39 @@ describe('runtime artifact verifier', () => {
     ).join(',')}];`;
 
     expect(inspectAstTraversalForTesting(source)).toBe(true);
+  });
+
+  it('bounds immutable AST parent-map construction', () => {
+    expect(() => inspectAstParentMapBoundForTesting(32, 16)).toThrow(
+      'exceeded bounded AST traversal work'
+    );
+  });
+
+  it('keeps cached parsed Program identities path-specific for identical bytes', () => {
+    const root = fixture();
+    const source = 'export const value = 1;';
+    const firstFile = path.join(root, 'first.js');
+    const secondFile = path.join(root, 'second.js');
+    write(root, 'first.js', source);
+    write(root, 'second.js', source);
+
+    expect(
+      inspectParsedModulePathIdentityForTesting(firstFile, secondFile)
+    ).toBe(true);
+  });
+
+  it('retains one large reviewed static-member owner Program per digest', () => {
+    const root = fixture();
+    const ownerFile = path.join(root, 'large-static-member-owner.js');
+    write(
+      root,
+      'large-static-member-owner.js',
+      `const padding=${JSON.stringify('x'.repeat(70_000))};export{padding};`
+    );
+
+    expect(
+      inspectCloudflareReviewedStaticMemberProgramCacheForTesting(ownerFile)
+    ).toBe(true);
   });
 
   it('uses the iterative production visitor for a deeply nested Program', () => {
@@ -1850,6 +2221,565 @@ describe('runtime artifact verifier', () => {
 
     expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
   });
+
+  it('proves the exact direct-call closure of a reviewed exported receiver mutation', () => {
+    expect(
+      inspectCloudflareReviewedExportMutationPlanForTesting(
+        reviewedExportMutationOwnerSource,
+        reviewedExportMutationPolicy
+      )
+    ).toEqual({
+      eligible: true,
+      mutationMembers: expect.arrayContaining(
+        reviewedExportMutationPolicy.expectedMutationMembers
+      ),
+      mutationPaths: [[], [], [], []],
+      summaryComplete: true,
+    });
+
+    expect(
+      inspectCloudflareReviewedExportConsumerProofForTesting(
+        reviewedExportMutationOwnerSource,
+        [
+          'import{zt as mutate}from"./owner.js";const first={};mutate(first);mutate({});',
+          'import{zt as mutate}from"./owner.js";const second={};mutate(second);',
+        ],
+        reviewedExportMutationPolicy
+      )
+    ).toEqual({
+      complete: true,
+      consumerCount: 4,
+      counts: [1, 2, 1],
+      reason: undefined,
+    });
+  });
+
+  it.each([
+    [
+      'an indirect alias',
+      'import{zt as mutate}from"./owner.js";const receiver={};const alias=mutate;alias(receiver);',
+      'consumer-0-calls',
+    ],
+    [
+      'Function.prototype.call',
+      'import{zt as mutate}from"./owner.js";const receiver={};mutate.call(null,receiver);',
+      'consumer-0-calls',
+    ],
+    [
+      'a namespace import',
+      'import*as owner from"./owner.js";owner.zt({});',
+      'consumer-0-imports',
+    ],
+    [
+      'the wrong imported export',
+      'import{other as mutate}from"./owner.js";mutate({});',
+      'consumer-0-imports',
+    ],
+  ])(
+    'rejects %s from a reviewed exported receiver mutation closure',
+    (_label, consumer, reason) => {
+      expect(
+        inspectCloudflareReviewedExportConsumerProofForTesting(
+          reviewedExportMutationOwnerSource,
+          [consumer],
+          reviewedExportMutationPolicy
+        )
+      ).toMatchObject({ complete: false, reason });
+    }
+  );
+
+  it('rejects unreviewed calls beyond the exact exported mutation consumer count', () => {
+    expect(
+      inspectCloudflareReviewedExportConsumerProofForTesting(
+        reviewedExportMutationOwnerSource,
+        [
+          'import{zt as mutate}from"./owner.js";mutate({});mutate({});mutate({});mutate({});',
+        ],
+        reviewedExportMutationPolicy
+      )
+    ).toEqual({
+      complete: false,
+      consumerCount: 5,
+      counts: [1, 4],
+      reason: 'count',
+    });
+  });
+
+  it('audits an unsafe string-literal import even when recognized calls compensate the reviewed count', () => {
+    expect(
+      inspectCloudflareReviewedExportConsumerProofForTesting(
+        reviewedExportMutationOwnerSource,
+        [
+          'import{zt as mutate}from"./owner.js";mutate({});mutate({});mutate({});',
+          'import{"zt" as hidden}from"./owner.js";const shared=makeReceiver();hidden(shared);',
+        ],
+        reviewedExportMutationPolicy
+      )
+    ).toMatchObject({
+      complete: false,
+      diagnostic: {
+        parentType: 'CallExpression',
+      },
+      reason: 'consumer-1-calls',
+    });
+  });
+
+  it('accepts a direct shorthand named import of the reviewed export', () => {
+    expect(
+      inspectCloudflareReviewedExportConsumerProofForTesting(
+        reviewedExportMutationOwnerSource,
+        ['import{zt}from"./owner.js";zt({});zt({});zt({});'],
+        reviewedExportMutationPolicy
+      )
+    ).toEqual({
+      complete: true,
+      consumerCount: 4,
+      counts: [1, 3],
+      reason: undefined,
+    });
+  });
+
+  it.each([
+    [
+      'globalThis.Object.prototype',
+      'globalThis.Object.defineProperty(globalThis.Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'Object.getPrototypeOf alias',
+      'const p=Object.getPrototypeOf({});Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'destructured Object.prototype alias',
+      'const {prototype:p}=Object;Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'array-projected Object.prototype alias',
+      'const p=[Object.prototype][0];Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'array-destructured Object.prototype alias',
+      'const [p]=[Object.prototype];Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'two-step array-projected Object.prototype alias',
+      'const prototypes=[Object.prototype];const p=prototypes[0];Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'conditional Object.prototype alias',
+      'const p=globalThis.pickPrototype?Object.prototype:{};Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'logical Object.prototype alias',
+      'const p=Object.prototype||{};Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'destructuring-assignment Object.prototype alias',
+      'let p;({prototype:p}=Object);Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'default-parameter Object.prototype alias',
+      'function install(p=Object.prototype){Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}})}install();',
+    ],
+    [
+      'for-of Object.prototype alias',
+      'for(const p of [Object.prototype]){Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}})}',
+    ],
+  ])(
+    'rejects a summarized-member setter through %s',
+    (_label, prototypeSetup) => {
+      const consumer = `import{zt as mutate}from"./owner.js";${prototypeSetup}mutate({});mutate({});mutate({});`;
+
+      expect(
+        inspectCloudflareReviewedExportConsumerProofForTesting(
+          reviewedExportMutationOwnerSource,
+          [consumer],
+          reviewedExportMutationPolicy
+        )
+      ).toMatchObject({
+        complete: false,
+        reason: 'consumer-0-object-prototype',
+      });
+    }
+  );
+
+  it.each([
+    [
+      'self.Object.prototype',
+      'self.Object.defineProperty(self.Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'plain-object constructor.prototype',
+      'Object.defineProperty(({}).constructor.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'nested array prototype alias',
+      'const p=[[[Object.prototype]]][0][0][0];Object.defineProperty(p,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'aliased Object.defineProperty',
+      'const define=Object.defineProperty;define(Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'destructured Object.defineProperty',
+      'const {defineProperty:define}=Object;define(Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'Object.defineProperty stored in a static helper object',
+      'const helpers={define:Object.defineProperty};helpers.define(Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'Object.defineProperty.call',
+      'Object.defineProperty.call(Object,Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'Object.defineProperty.apply',
+      'Object.defineProperty.apply(Object,[Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}}]);',
+    ],
+    [
+      'nested Function.prototype.call dispatch',
+      'Function.prototype.call.call(Object.defineProperty,null,Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'nested Function.prototype.apply dispatch',
+      'Function.prototype.apply.call(Object.defineProperty,null,[Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}}]);',
+    ],
+    [
+      'Reflect.apply of Function.prototype.call',
+      'Reflect.apply(Function.prototype.call,Object.defineProperty,[null,Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}}]);',
+    ],
+    [
+      'nested Function.prototype.bind dispatch',
+      'const bind=Function.prototype.bind.bind(Object.defineProperty);const define=bind(Object);define(Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'nested legacy __defineSetter__ dispatch',
+      'Function.prototype.call.call(Object.prototype.__defineSetter__,Object.prototype,"activeTriggerId",function(value){fetch("https://invalid.example")});',
+    ],
+    [
+      'computed unknown descriptor key',
+      'const key=getKey();Object.defineProperty(Object.prototype,key,{set(value){fetch("https://invalid.example")}});',
+    ],
+  ])(
+    'rejects a summarized or unknown descriptor mutation through %s',
+    (_label, descriptorMutation) => {
+      const consumer = `import{zt as mutate}from"./owner.js";${descriptorMutation}mutate({});mutate({});mutate({});`;
+
+      expect(
+        inspectCloudflareReviewedExportConsumerProofForTesting(
+          reviewedExportMutationOwnerSource,
+          [consumer],
+          reviewedExportMutationPolicy
+        )
+      ).toMatchObject({
+        complete: false,
+        reason: 'consumer-0-object-prototype',
+      });
+    }
+  );
+
+  it.each([
+    [
+      'Object.defineProperty',
+      'Object.defineProperty(Object.prototype,"unrelated",{set(value){fetch("https://invalid.example")}});',
+    ],
+    [
+      'Object.defineProperties',
+      'Object.defineProperties(Object.prototype,{another:{value:1},unrelated:{set(value){fetch("https://invalid.example")}}});',
+    ],
+  ])(
+    'allows only unrelated static descriptor keys through %s',
+    (_label, descriptorMutation) => {
+      const consumer = `import{zt as mutate}from"./owner.js";${descriptorMutation}mutate({});mutate({});mutate({});`;
+
+      expect(
+        inspectCloudflareReviewedExportConsumerProofForTesting(
+          reviewedExportMutationOwnerSource,
+          [consumer],
+          reviewedExportMutationPolicy
+        )
+      ).toEqual({
+        complete: true,
+        consumerCount: 4,
+        counts: [1, 3],
+        reason: undefined,
+      });
+    }
+  );
+
+  it.each([
+    [
+      'Reflect.set on self',
+      'Reflect.set(self,"Object",{defineProperty(){}});self.Object.defineProperty(Object.prototype,"unrelated",{set(){}});',
+    ],
+    [
+      'Object.defineProperty on global',
+      'Object.defineProperty(global,"Object",{value:{defineProperty(){}}});global.Object.defineProperty(Object.prototype,"unrelated",{set(){}});',
+    ],
+    [
+      'Object.assign on globalThis',
+      'Object.assign(globalThis,{Object:{defineProperty(){}}});globalThis.Object.defineProperty(Object.prototype,"unrelated",{set(){}});',
+    ],
+    [
+      'globalThis.Object.assign on self',
+      'globalThis.Object.assign(self,{Object:{defineProperty(){}}});self.Object.defineProperty(Object.prototype,"unrelated",{set(){}});',
+    ],
+    [
+      'aliased Reflect.set on global',
+      'const set=Reflect.set;set(global,"Object",{defineProperty(){}});global.Object.defineProperty(Object.prototype,"unrelated",{set(){}});',
+    ],
+    [
+      'Reflect.set.call on self',
+      'Reflect.set.call(Reflect,self,"Object",{defineProperty(){}});self.Object.defineProperty(Object.prototype,"unrelated",{set(){}});',
+    ],
+    [
+      'a top-level replacement observed from a nested function',
+      'globalThis.Object={defineProperty(){}};function install(){globalThis.Object.defineProperty(Object.prototype,"unrelated",{set(){}})}install();',
+    ],
+  ])(
+    'rejects an intrinsic Object replacement through %s',
+    (_label, replacement) => {
+      const consumer = `import{zt as mutate}from"./owner.js";${replacement}mutate({});mutate({});mutate({});`;
+
+      expect(() =>
+        inspectCloudflareReviewedExportConsumerProofForTesting(
+          reviewedExportMutationOwnerSource,
+          [consumer],
+          reviewedExportMutationPolicy
+        )
+      ).toThrow('rejects a replaced intrinsic global Object');
+    }
+  );
+
+  it('keeps a signed literal-named consumer in the reviewed artifact closure and fails its same-receiver read closed', () => {
+    const artifact = createReviewedExportArtifactFixture(
+      [
+        {
+          file: 'assets/literal-consumer.js',
+          importsOwner: true,
+          source:
+            'import{"zt" as hidden}from"./reviewed-owner.js";const receiver={};hidden(receiver);receiver.activeTriggerId();',
+        },
+      ],
+      1
+    );
+
+    expect(
+      inspectCloudflareReviewedExportArtifactProofForTesting(
+        artifact.root,
+        artifact.ownerArtifactFile,
+        artifact.policy.exportedLocalName,
+        fixtureCloudflareProvenanceKey,
+        artifact.policy
+      )
+    ).toEqual({ complete: true, failure: undefined });
+
+    expect(() =>
+      inspectCloudflareReviewedExportArtifactLoadEffectsForTesting(
+        artifact.root,
+        artifact.ownerArtifactFile,
+        'assets/literal-consumer.js',
+        artifact.policy.exportedLocalName,
+        fixtureCloudflareProvenanceKey,
+        artifact.policy
+      )
+    ).toThrow('rejects opaque aggregate member mutations');
+  });
+
+  it('keeps an unrelated literal-import receiver isolated in the signed artifact graph', () => {
+    const artifact = createReviewedExportArtifactFixture(
+      [
+        {
+          file: 'assets/literal-isolated-consumer.js',
+          importsOwner: true,
+          source:
+            'import{"zt" as hidden}from"./reviewed-owner.js";const receiver={},unrelated={activeTriggerId:()=>0};hidden(receiver);unrelated.activeTriggerId();',
+        },
+      ],
+      1
+    );
+
+    expect(
+      inspectCloudflareReviewedExportArtifactLoadEffectsForTesting(
+        artifact.root,
+        artifact.ownerArtifactFile,
+        'assets/literal-isolated-consumer.js',
+        artifact.policy.exportedLocalName,
+        fixtureCloudflareProvenanceKey,
+        artifact.policy
+      )
+    ).toEqual({ complete: true, effects: [], failure: undefined });
+  });
+
+  it('rejects a signed chunk that installs a summarized Object.prototype setter', () => {
+    const artifact = createReviewedExportArtifactFixture(
+      [
+        {
+          file: 'assets/safe-consumer.js',
+          importsOwner: true,
+          source: 'import{zt as mutate}from"./reviewed-owner.js";mutate({});',
+        },
+        {
+          file: 'assets/prototype-setter.js',
+          source:
+            'Object.defineProperty(Object.prototype,"activeTriggerId",{set(value){fetch("https://invalid.example")}});',
+        },
+      ],
+      1
+    );
+
+    expect(
+      inspectCloudflareReviewedExportArtifactProofForTesting(
+        artifact.root,
+        artifact.ownerArtifactFile,
+        artifact.policy.exportedLocalName,
+        fixtureCloudflareProvenanceKey,
+        artifact.policy
+      )
+    ).toEqual({
+      complete: false,
+      failure:
+        'consumer assets/prototype-setter.js may mutate Object.prototype for a summarized member',
+    });
+  });
+
+  it('audits a signed .mjs consumer even when earlier recognized calls compensate the count', () => {
+    const artifact = createReviewedExportArtifactFixture(
+      [
+        {
+          file: 'assets/compensating-consumer.js',
+          importsOwner: true,
+          source:
+            'import{zt as mutate}from"./reviewed-owner.js";mutate({});mutate({});',
+        },
+        {
+          file: 'assets/hidden-consumer.mjs',
+          importsOwner: true,
+          source:
+            'import{"zt" as hidden}from"./reviewed-owner.js";const shared=makeReceiver();hidden(shared);',
+        },
+      ],
+      2
+    );
+
+    expect(
+      inspectCloudflareReviewedExportArtifactProofForTesting(
+        artifact.root,
+        artifact.ownerArtifactFile,
+        artifact.policy.exportedLocalName,
+        fixtureCloudflareProvenanceKey,
+        artifact.policy
+      )
+    ).toEqual({
+      complete: false,
+      failure: 'consumer binding has an unsupported use',
+    });
+  });
+
+  it.each([
+    [
+      'an additional member write',
+      reviewedExportMutationOwnerSource.replace(
+        '}setPopupOpenState({})',
+        ';store.extra=null}setPopupOpenState({})'
+      ),
+    ],
+    [
+      'the wrong receiver parameter',
+      'function setPopupOpenState(store,other){other.activeTriggerElement=null;other.activeTriggerId=null;other.preventUnmountingOnClose=true;other.preventUnmountingOnClose=false}setPopupOpenState({},{});export{setPopupOpenState as zt};',
+    ],
+    [
+      'the wrong export name',
+      reviewedExportMutationOwnerSource.replace(' as zt', ' as other'),
+    ],
+  ])('rejects %s from the reviewed mutation plan', (_label, ownerSource) => {
+    expect(
+      inspectCloudflareReviewedExportMutationPlanForTesting(
+        ownerSource,
+        reviewedExportMutationPolicy
+      )
+    ).toMatchObject({ eligible: false });
+  });
+
+  it('accepts only fresh direct receiver arguments for an imported mutation summary', () => {
+    const states = inspectCloudflareReviewedFreshExportReceiversForTesting(
+      'const direct={};const alias=direct;const factory=make();mutate(direct);mutate({});mutate(alias);mutate(factory);mutate(...values);',
+      'mutate',
+      0
+    );
+
+    expect(states.map(({ eligible }) => eligible)).toEqual([
+      false,
+      true,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it.each([
+    [
+      'a direct setter',
+      'mutate({set activeTriggerId(value){fetch("https://invalid.example")}});',
+      { argumentType: 'ObjectExpression' },
+    ],
+    [
+      'a __proto__ setter',
+      'const proto={set activeTriggerId(value){fetch("https://invalid.example")}};mutate({__proto__:proto});',
+      { argumentType: 'ObjectExpression' },
+    ],
+    [
+      'a pre-call Object.freeze',
+      'const receiver={};Object.freeze(receiver);mutate(receiver);',
+      { receiverUsesAreOrdered: false },
+    ],
+    [
+      'a pre-call Object.defineProperty setter',
+      'const receiver={};Object.defineProperty(receiver,"activeTriggerId",{set(value){fetch("https://invalid.example")}});mutate(receiver);',
+      { receiverUsesAreOrdered: false },
+    ],
+    [
+      'a pre-call Object.setPrototypeOf',
+      'const proto={set activeTriggerId(value){fetch("https://invalid.example")}};const receiver={};Object.setPrototypeOf(receiver,proto);mutate(receiver);',
+      { receiverUsesAreOrdered: false },
+    ],
+  ])(
+    'rejects %s before a reviewed mutation call',
+    (_label, source, details) => {
+      const states = inspectCloudflareReviewedFreshExportReceiversForTesting(
+        source,
+        'mutate',
+        0
+      );
+
+      expect(states).toHaveLength(1);
+      expect(states[0]).toMatchObject({ eligible: false, ...details });
+    }
+  );
+
+  it.each([
+    [
+      'an unrelated receiver read',
+      'function mutate(receiver){receiver.run=()=>fetch("https://invalid.example")}const first={},second={run(){}};mutate(first);second.run();',
+      [],
+    ],
+    [
+      'a same-receiver read',
+      'function mutate(receiver){receiver.run=()=>fetch("https://invalid.example")}const first={};mutate(first);first.run();',
+      ['fetch("https://invalid.example")'],
+    ],
+    [
+      'a same-receiver alias read',
+      'function mutate(receiver){receiver.run=()=>fetch("https://invalid.example")}const first={};mutate(first);const alias=first;alias.run();',
+      ['fetch("https://invalid.example")'],
+    ],
+  ])(
+    'preserves receiver identity for %s',
+    (_label, source, expectedEffects) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual(
+        expectedEffects
+      );
+    }
+  );
 
   it.each([
     [
@@ -3474,6 +4404,64 @@ describe('runtime artifact verifier', () => {
     ).toEqual([]);
   });
 
+  it('distinguishes a symbol-keyed class field from a string callable member', () => {
+    const source =
+      'var kind=Symbol.for("kind");class Value{static [kind]="Value";run(){return 0}}Value.prototype.run=()=>fetch("https://invalid.example");new Value().run();';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('does not trust a reassigned symbol-key alias on a class', () => {
+    const source =
+      'var kind=Symbol.for("kind");kind="run";class Value{static [kind]=()=>fetch("https://invalid.example")}Value.run();';
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'requires statically analyzable computed callable definitions'
+    );
+  });
+
+  it('keeps meta normalization bounded across a self-referential reassigned binding', () => {
+    const source =
+      'function convertBase(str){return str}function parse(str){if(str===str.toUpperCase())str=str.toLowerCase();str=convertBase(str);return str}parse("value");';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a direct proxy factory result',
+      'const make=()=>new Proxy({},{});const value=make();',
+      true,
+    ],
+    [
+      'an aliased proxy factory result',
+      'const make=()=>new Proxy({},{});const proxy=make();const value=proxy;',
+      true,
+    ],
+    [
+      'a nested proxy factory result',
+      'const inner=()=>new Proxy({},{});const make=()=>inner();const value=make();',
+      true,
+    ],
+    [
+      'an ordinary factory result',
+      'const make=()=>({});const value=make();',
+      false,
+    ],
+  ])(
+    'recognizes %s without widening the candidate graph',
+    (_label, source, expected) => {
+      expect(
+        inspectCloudflareDirectLocalProxyFactoryResultForTesting(
+          source,
+          'value'
+        )
+      ).toBe(expected);
+    }
+  );
+
   it.each([
     'new Set({[Symbol.iterator](){fetch("https://invalid.example");return [][Symbol.iterator]()}});',
     'const Collection=Map;const values={*[Symbol.iterator](){fetch("https://invalid.example")}};new Collection(values);',
@@ -3607,6 +4595,81 @@ describe('runtime artifact verifier', () => {
     );
   });
 
+  it.each([
+    [
+      'Object.defineProperty on self',
+      'Object.defineProperty(self,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on global',
+      'Object.defineProperty(global,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on an aliased global',
+      'const root=self;Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on a conditional global alias',
+      'const root=flag?self:globalThis;Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on a logical global alias',
+      'const root=self||globalThis;Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on an array-projected global alias',
+      'const root=[self][0];Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on an object-projected global alias',
+      'const root={value:self}.value;Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on a destructured global alias',
+      'const {value:root}={value:self};Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on an array-destructured global alias',
+      'const [root]=[self];Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on a nested-destructured global alias',
+      'const {outer:{root}}={outer:{root:self}};Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperty on a returned global alias',
+      'function getRoot(){return self}const root=getRoot();Object.defineProperty(root,"Promise",{value:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'an invoked helper replacement',
+      'function replace(){globalThis.Promise={all:()=>({then:()=>fetch("https://invalid.example")})}}replace();Promise.all([]).then();',
+    ],
+    [
+      'Object.defineProperties on the global object',
+      'Object.defineProperties(globalThis,{Promise:{value:{all:()=>({then:()=>fetch("https://invalid.example")})}}});Promise.all([]).then();',
+    ],
+    [
+      'a legacy global getter replacement',
+      'globalThis.__defineGetter__("Promise",()=>({all:()=>({then:()=>fetch("https://invalid.example")})}));Promise.all([]).then();',
+    ],
+    [
+      'an object assignment-pattern global replacement',
+      '({Promise:globalThis.Promise}={Promise:{all:()=>({then:()=>fetch("https://invalid.example")})}});Promise.all([]).then();',
+    ],
+    [
+      'an array assignment-pattern global replacement',
+      '[globalThis.Promise]=[{all:()=>({then:()=>fetch("https://invalid.example")})}];Promise.all([]).then();',
+    ],
+    [
+      'a for-of global replacement',
+      'for(globalThis.Promise of [{all:()=>({then:()=>fetch("https://invalid.example")})}]){}Promise.all([]).then();',
+    ],
+  ])('fails closed after %s', (_label, source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'rejects a replaced intrinsic global'
+    );
+  });
+
   it('does not let an unresolved parameter mutation poison an isolated Promise aggregate', () => {
     const source = `
       export function mutate(value,key){
@@ -3698,13 +4761,23 @@ describe('runtime artifact verifier', () => {
         ...record,
         sha256: '0'.repeat(64),
       })
-    ).toEqual({ opaqueMemberMutationExemptions: [], safeCallExemptions: [] });
+    ).toEqual({
+      exportedAggregateReadOnlySinks: [],
+      exportedStaticMemberDeferredResults: [],
+      opaqueMemberMutationExemptions: [],
+      safeCallExemptions: [],
+    });
     expect(
       inspectCloudflareReviewedClosurePolicyForTesting({
         ...record,
         modules: [{ id: 'src/adversarial.ts', owner: 'non-app' }],
       })
-    ).toEqual({ opaqueMemberMutationExemptions: [], safeCallExemptions: [] });
+    ).toEqual({
+      exportedAggregateReadOnlySinks: [],
+      exportedStaticMemberDeferredResults: [],
+      opaqueMemberMutationExemptions: [],
+      safeCallExemptions: [],
+    });
 
     const prefix = 'function mutate(inst,k,proto){';
     const reviewedSource = `${prefix.padEnd(571, ' ')}inst[k] = proto[k].bind(inst)}const target={_zod:()=>0};mutate(target,getKey(),{_zod(){},other(){}});target._zod();`;
@@ -3721,6 +4794,368 @@ describe('runtime artifact verifier', () => {
       })
     ).toThrow('test source hash must match');
   });
+
+  it('does not share a reviewed closure between Programs with the same analysis label', () => {
+    expect(
+      inspectCloudflareReviewedClosureProgramIsolationForTesting()
+    ).toEqual({ reviewed: true, unrelated: true });
+  });
+
+  it('pins the Base UI aggregate sink to the exact mixed closure', () => {
+    const record = {
+      modules: [
+        { id: 'src/platform/components/button.tsx', owner: 'app' },
+        {
+          id: 'node_modules/.pnpm/@base-ui+react@1.6.0/node_modules/@base-ui/react/internals/useRenderElement.mjs',
+          owner: 'non-app',
+        },
+      ],
+      ownership: 'mixed',
+      sha256:
+        'd52c1344eb1aea2210a9b605a5102d257cb18139dadbd23e85b46c20a3522d6a',
+    };
+
+    expect(
+      inspectCloudflareReviewedClosurePolicyForTesting(record)
+        .exportedAggregateReadOnlySinks
+    ).toEqual([
+      expect.objectContaining({
+        exportedLocalName: 'useRenderElement',
+        exportedName: 'c',
+        exportedParameterIndex: 2,
+        propertyName: 'stateAttributesMapping',
+        reason: expect.any(String),
+      }),
+    ]);
+    expect(
+      inspectCloudflareReviewedClosurePolicyForTesting({
+        ...record,
+        sha256: '0'.repeat(64),
+      }).exportedAggregateReadOnlySinks
+    ).toEqual([]);
+  });
+
+  it('pins static Zod member results to exact mixed ownership', () => {
+    const record = {
+      modules: [
+        {
+          id: 'src/platform/lib/zod/zod-utils.ts',
+          owner: 'app',
+        },
+        {
+          id: 'node_modules/.pnpm/@base-ui+react@1.6.0/node_modules/@base-ui/react/floating-ui-react/hooks/useListNavigation.mjs',
+          owner: 'non-app',
+        },
+        {
+          id: 'node_modules/.pnpm/@base-ui+react@1.6.0/node_modules/@base-ui/react/utils/popups/popupStoreUtils.mjs',
+          owner: 'non-app',
+        },
+      ],
+      ownership: 'mixed',
+      sha256:
+        '19bc864fb883884a0099e49637398e7f7a2165c6c00bbc835481b33aa5207d49',
+    };
+    const policies =
+      inspectCloudflareReviewedClosurePolicyForTesting(
+        record
+      ).exportedStaticMemberDeferredResults;
+
+    expect(policies).toEqual([
+      expect.objectContaining({
+        exportedLocalName: 'zu',
+        exportedName: 'M',
+        memberPath: ['fieldText', 'nullish'],
+        returnedPath: [],
+      }),
+      expect.objectContaining({
+        exportedLocalName: 'zu',
+        exportedName: 'M',
+        memberPath: ['fieldText', 'required'],
+        returnedPath: [],
+      }),
+      expect.objectContaining({
+        exportedLocalName: 'zu',
+        exportedName: 'M',
+        memberPath: ['fieldText', 'required'],
+        returnedPath: ['pipe', { callResult: true }],
+      }),
+    ]);
+    const [appModule, listNavigationModule, popupStoreModule] = record.modules;
+    for (const rejected of [
+      { ...record, sha256: '0'.repeat(64) },
+      {
+        ...record,
+        modules: [
+          { ...appModule, owner: 'non-app' },
+          listNavigationModule,
+          popupStoreModule,
+        ],
+      },
+      {
+        ...record,
+        modules: [
+          appModule,
+          { ...listNavigationModule, owner: 'app' },
+          popupStoreModule,
+        ],
+      },
+    ]) {
+      expect(
+        inspectCloudflareReviewedClosurePolicyForTesting(rejected)
+          .exportedStaticMemberDeferredResults
+      ).toEqual([]);
+    }
+  });
+
+  it.each([
+    [
+      'a nullish helper call',
+      'zu.fieldText.nullish({max:200})',
+      reviewedStaticMemberNullishPolicy,
+    ],
+    [
+      'a required schema piped to an inert schema',
+      'zu.fieldText.required({error:"required"}).pipe(()=>0)',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'a direct required helper call',
+      'zu.fieldText.required({error:"required"})',
+      reviewedStaticMemberRequiredPolicy,
+    ],
+  ])(
+    'accepts %s through its exact static member policy',
+    (_label, call, policy) => {
+      const root = createReviewedStaticMemberArtifact({
+        consumerSource: `import{M as zu}from"./static-member-owner-AAAAAAAA.js";const schema=${call};`,
+      });
+
+      expect(inspectReviewedStaticMemberArtifact(root, call, policy)).toBe(
+        false
+      );
+    }
+  );
+
+  it.each([
+    [
+      'an unreviewed member',
+      'zu.fieldText.evil()',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'an extra returned method',
+      'zu.fieldText.required({}).pipe(()=>0).optional()',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'a missing reviewed pipe suffix',
+      'zu.fieldText.required({})',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'an eager effect in the reviewed root call',
+      'zu.fieldText.required(fetch("https://invalid.example"))',
+      {
+        ...reviewedStaticMemberPipePolicy,
+        returnedPath: [],
+      },
+    ],
+    [
+      'an eager effect in the reviewed pipe call',
+      'zu.fieldText.required({}).pipe(fetch("https://invalid.example"))',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'an effect hidden in a nested unreviewed helper',
+      'zu.fieldText.required({value:zu.fieldText.evil()}).pipe(()=>0)',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'an accessor argument',
+      'zu.fieldText.required({get value(){return 1}}).pipe(()=>0)',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'a proxy argument',
+      'zu.fieldText.required(new Proxy({},{})).pipe(()=>0)',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'an optional reviewed call',
+      'zu.fieldText.required?.({}).pipe(()=>0)',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'a spread reviewed call',
+      'zu.fieldText.required(...[]).pipe(()=>0)',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'an optional reviewed pipe call',
+      'zu.fieldText.required({}).pipe?.(()=>0)',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'a spread reviewed pipe call',
+      'zu.fieldText.required({}).pipe(...[])',
+      reviewedStaticMemberPipePolicy,
+    ],
+    [
+      'a sequence effect before the reviewed receiver',
+      '(fetch("https://invalid.example"),zu.fieldText.required({})).pipe(()=>0)',
+      reviewedStaticMemberPipePolicy,
+    ],
+  ])(
+    'rejects static member policy laundering through %s',
+    (_label, call, policy) => {
+      const root = createReviewedStaticMemberArtifact({
+        consumerSource: `import{M as zu}from"./static-member-owner-AAAAAAAA.js";const schema=${call};`,
+      });
+
+      expect(inspectReviewedStaticMemberArtifact(root, call, policy)).toBe(
+        true
+      );
+    }
+  );
+
+  it.each([
+    [
+      'a signed consumer receiver mutation',
+      [
+        'import{M as zu}from"./static-member-owner-AAAAAAAA.js";zu.fieldText.__defineGetter__("required",()=>()=>({}));',
+      ],
+      undefined,
+    ],
+    [
+      'a signed consumer shallow-copy escape',
+      [
+        'import{M as zu}from"./static-member-owner-AAAAAAAA.js";const copy={...zu};copy.fieldText.required=()=>({});',
+      ],
+      undefined,
+    ],
+    [
+      'a signed consumer Object.assign mutation',
+      [
+        'import{M as zu}from"./static-member-owner-AAAAAAAA.js";Object.assign(zu.fieldText,{required:()=>({})});',
+      ],
+      undefined,
+    ],
+    [
+      'a signed consumer defineProperty mutation',
+      [
+        'import{M as zu}from"./static-member-owner-AAAAAAAA.js";Object.defineProperty(zu.fieldText,"required",{value:()=>({})});',
+      ],
+      undefined,
+    ],
+    [
+      'an owner receiver mutation',
+      [],
+      'const zu={fieldText:{nullish:options=>({options}),required:options=>({options})}};zu.fieldText.required=()=>({});export{zu as M};',
+    ],
+    [
+      'an owner intermediate replacement',
+      [],
+      'const zu={fieldText:{nullish:options=>({options}),required:options=>({options})}};zu.fieldText={required:()=>({})};export{zu as M};',
+    ],
+    [
+      'an owner shallow-copy escape',
+      [],
+      'const zu={fieldText:{nullish:options=>({options}),required:options=>({options})}};const copy={...zu};copy.fieldText.required=()=>({});export{zu as M};',
+    ],
+  ])(
+    'rejects a reviewed static member with %s',
+    (_label, extraConsumerSources, ownerSource) => {
+      const call = 'zu.fieldText.required({}).pipe(()=>0)';
+      const root = createReviewedStaticMemberArtifact({
+        consumerSource: `import{M as zu}from"./static-member-owner-AAAAAAAA.js";const schema=${call};`,
+        extraConsumerSources,
+        ownerSource,
+      });
+
+      expect(inspectReviewedStaticMemberArtifact(root, call)).toBe(true);
+    }
+  );
+
+  it.each([
+    [
+      'an owner accessor',
+      'const zu={fieldText:{get required(){return options=>({options})}}};export{zu as M};',
+    ],
+    [
+      'an owner spread',
+      'const required=options=>({options});const zu={fieldText:{...{required}}};export{zu as M};',
+    ],
+  ])('rejects a static member policy with %s', (_label, ownerSource) => {
+    const call = 'zu.fieldText.required({}).pipe(()=>0)';
+    const root = createReviewedStaticMemberArtifact({
+      consumerSource: `import{M as zu}from"./static-member-owner-AAAAAAAA.js";const schema=${call};`,
+      ownerSource,
+    });
+
+    expect(() => inspectReviewedStaticMemberArtifact(root, call)).toThrow(
+      'must resolve every static member'
+    );
+  });
+
+  it.each([
+    [
+      'an inert expression body',
+      'const make=()=>({ok:true});const value=make()',
+      false,
+    ],
+    [
+      'an effectful expression body',
+      'const make=()=>fetch("https://invalid.example");const value=make()',
+      true,
+    ],
+    [
+      'a block body',
+      'const make=()=>{return {ok:true}};const value=make()',
+      true,
+    ],
+    [
+      'an async expression body',
+      'const make=async()=>({ok:true});const value=make()',
+      true,
+    ],
+    [
+      'a reassigned factory',
+      'let make=()=>({ok:true});make=()=>({ok:false});const value=make()',
+      true,
+    ],
+    [
+      'an accessor result',
+      'const make=()=>({get value(){return 1}});const value=make()',
+      true,
+    ],
+    [
+      'a sequence prefix effect',
+      'const make=()=>(fetch("https://invalid.example"),{});const value=make()',
+      true,
+    ],
+    [
+      'an assignment expression',
+      'const target={};const make=()=>(target.value=1);const value=make()',
+      true,
+    ],
+    [
+      'an update expression',
+      'let count=0;const make=()=>count++;const value=make()',
+      true,
+    ],
+    [
+      'a conditional test effect',
+      'const make=()=>(fetch("https://invalid.example")?{}:{});const value=make()',
+      true,
+    ],
+  ])(
+    'classifies a local expression factory with %s',
+    (_label, source, hazard) => {
+      expect(
+        inspectCloudflareDeferredArgumentHazardForTesting(source, 'value')
+      ).toBe(hazard);
+    }
+  );
 
   it('preserves a reviewed member path through descriptor projections', () => {
     const source =
@@ -5003,6 +6438,14 @@ describe('runtime artifact verifier', () => {
       'const target={run:()=>0};const box=[...[target]];const alias=box[0];alias.run=()=>fetch("https://invalid.example");target.run();',
     ],
     [
+      'named object spread',
+      'const target={run:()=>0};const source={target};const box={...source};const alias=box.target;alias.run=()=>fetch("https://invalid.example");target.run();',
+    ],
+    [
+      'named array spread',
+      'const target={run:()=>0};const source=[target];const box=[...source];const alias=box[0];alias.run=()=>fetch("https://invalid.example");target.run();',
+    ],
+    [
       'Object.assign container',
       'const target={run:()=>0};const box=Object.assign({},{target});const alias=box.target;alias.run=()=>fetch("https://invalid.example");target.run();',
     ],
@@ -5160,6 +6603,93 @@ describe('runtime artifact verifier', () => {
     ).toEqual([]);
   });
 
+  it('keeps React-like irrelevant receiver writes out of intrinsic replacement analysis', () => {
+    const source = `
+      const useStore=(store)=>store.useState("floatingElement");
+      const store={useState:()=>({}),getSnapshot:()=>({})};
+      const floating=useStore(store);
+      const useCallback=(callback)=>callback;
+      const select=useCallback(()=>floating ?? store.getSnapshot());
+      const instance={syncIndex:0};
+      const hook={};
+      instance.syncIndex+=1;
+      hook.store=store;
+      select();
+    `;
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it('keeps an uncertain irrelevant receiver member bounded', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'export function update(candidate){candidate.syncIndex+=1}Object.defineProperty(class {},"name",{value:"Safe"});'
+      )
+    ).toEqual([]);
+  });
+
+  it('still rejects a relevant receiver member resolved to the ambient global', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'function update(candidate){candidate.Object={defineProperty(){}}}update(globalThis);Object.defineProperty(class {},"name",{value:"Unsafe"});'
+      )
+    ).toThrow('rejects a replaced intrinsic global Object');
+  });
+
+  it.each([
+    [
+      'an arrow IIFE',
+      '(()=>{globalThis.Object={defineProperty(){}}})();Object.defineProperty(class {},"name",{value:"Unsafe"});',
+    ],
+    [
+      'a function IIFE',
+      '(function(){globalThis.Object={defineProperty(){}}})();Object.defineProperty(class {},"name",{value:"Unsafe"});',
+    ],
+    [
+      'a transitively invoked nested owner',
+      'function outer(){function replace(){globalThis.Object={defineProperty(){}}}replace()}outer();Object.defineProperty(class {},"name",{value:"Unsafe"});',
+    ],
+  ])(
+    'rejects an intrinsic replacement invoked through %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'rejects a replaced intrinsic global Object'
+      );
+    }
+  );
+
+  it('does not apply a nested intrinsic replacement invoked after the use', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'function outer(){function replace(){globalThis.Object={defineProperty(){}}}replace()}Object.defineProperty(class {},"name",{value:"Safe"});outer();'
+      )
+    ).toEqual([]);
+  });
+
+  it('resolves a constant-computed intrinsic replacement name', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const key="Object";globalThis[key]={defineProperty(){}};Object.defineProperty(class {},"name",{value:"Unsafe"});'
+      )
+    ).toThrow('rejects a replaced intrinsic global Object');
+  });
+
+  it('fails closed for an unresolved computed ambient-global replacement', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'function replace(key){globalThis[key]={defineProperty(){}}}replace(unknownKey);Object.defineProperty(class {},"name",{value:"Unsafe"});'
+      )
+    ).toThrow('rejects a replaced intrinsic global Object');
+  });
+
+  it('fails closed for an unresolved computed replacement through an ambient proxy parameter', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'function replace(target,key){target[key]={defineProperty(){}}}replace(globalThis,unknownKey);Object.defineProperty(class {},"name",{value:"Unsafe"});'
+      )
+    ).toThrow('rejects a replaced intrinsic global Object');
+  });
+
   it('indexes uncertain receiver calls once for pristine collections', () => {
     const constructions = Array.from(
       { length: 512 },
@@ -5212,6 +6742,165 @@ describe('runtime artifact verifier', () => {
         uncertain: true,
       },
     });
+  });
+
+  it('keeps direct fresh spread containers isolated without trusting projected values', () => {
+    const source =
+      'const object={...unknown,open:true};const array=[...unknown];const {projected}={...unknown};const assigned=Object.assign({},unknown);';
+
+    expect(
+      inspectCloudflareReceiverDetailsForTesting(source, [
+        'array',
+        'assigned',
+        'object',
+        'projected',
+      ])
+    ).toEqual({
+      array: {
+        component: expect.any(String),
+        isolated: true,
+        opaqueUncertain: false,
+        uncertain: false,
+      },
+      assigned: {
+        component: expect.any(String),
+        isolated: false,
+        opaqueUncertain: true,
+        uncertain: true,
+      },
+      object: {
+        component: expect.any(String),
+        isolated: true,
+        opaqueUncertain: false,
+        uncertain: false,
+      },
+      projected: {
+        component: expect.any(String),
+        isolated: false,
+        opaqueUncertain: true,
+        uncertain: true,
+      },
+    });
+  });
+
+  it('still observes a mutation and computed read on the same fresh spread container', () => {
+    const source =
+      'const base={};const fresh={...base};const key=globalThis.flag?"run":"stop";fresh[key]=()=>fetch("https://invalid.example");fresh[key]();';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('does not classify values projected from fresh opaque spreads as isolated', () => {
+    const source =
+      'const object={...unknown};const objectValue=object.value;const array=[...unknown];const arrayValue=array[0];';
+
+    expect(
+      inspectCloudflareReceiverDetailsForTesting(source, [
+        'array',
+        'arrayValue',
+        'object',
+        'objectValue',
+      ])
+    ).toEqual({
+      array: {
+        component: expect.any(String),
+        isolated: true,
+        opaqueUncertain: false,
+        uncertain: false,
+      },
+      arrayValue: {
+        component: expect.any(String),
+        isolated: false,
+        opaqueUncertain: false,
+        uncertain: false,
+      },
+      object: {
+        component: expect.any(String),
+        isolated: true,
+        opaqueUncertain: false,
+        uncertain: false,
+      },
+      objectValue: {
+        component: expect.any(String),
+        isolated: false,
+        opaqueUncertain: false,
+        uncertain: false,
+      },
+    });
+  });
+
+  it('keeps an isolated local receiver out of delegated parameter summaries', () => {
+    const source =
+      'const UNINITIALIZED={};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}function createLocal(){return{callback:null,refs:[]}}function read(value){return value.refs.length}function update(value,refs){value.refs=refs;value.callback=()=>value.refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;if(read(local))update(local,refs);return local.callback}';
+
+    expect(
+      inspectCloudflareLoadInternalIsolatedReceiverForTesting(
+        source,
+        'wrapper',
+        'local'
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      'a member store',
+      'const UNINITIALIZED={};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}function createLocal(){return{refs:[]}}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;globalThis.saved=local;update(local,refs);return local.refs}',
+    ],
+    [
+      'an unresolved call',
+      'const UNINITIALIZED={};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}function createLocal(){return{refs:[]}}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;consume(local);update(local,refs);return local.refs}',
+    ],
+    [
+      'a receiver method call',
+      'const UNINITIALIZED={};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}function createLocal(){return{refs:[],run(){}}}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;local.run();update(local,refs);return local.refs}',
+    ],
+    [
+      'a reassignment',
+      'const UNINITIALIZED={};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}function createLocal(){return{refs:[]}}function update(value,refs){value.refs=refs}function wrapper(refs){let local=useRefWithInit(createLocal).current;local={refs:refs};update(local,refs);return local.refs}',
+    ],
+    [
+      'a mixed object wrapper return',
+      'const UNINITIALIZED={},shared={refs:[]};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();if(flag)return ref;return{current:shared}}function createLocal(){return{refs:[]}}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;update(local,refs);return local.refs}',
+    ],
+    [
+      'an aliased wrapper return',
+      'const UNINITIALIZED={};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();const alias=ref;return alias}function createLocal(){return{refs:[]}}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;update(local,refs);return local.refs}',
+    ],
+    [
+      'a conditional wrapper return',
+      'const UNINITIALIZED={},shared={refs:[]};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return flag?ref:{current:shared}}function createLocal(){return{refs:[]}}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;update(local,refs);return local.refs}',
+    ],
+    [
+      'a reassigned wrapper declaration',
+      'const UNINITIALIZED={},shared={refs:[]};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}useRefWithInit=()=>({current:shared});function createLocal(){return{refs:[]}}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;update(local,refs);return local.refs}',
+    ],
+    [
+      'a reassigned wrapper binding',
+      'const UNINITIALIZED={},shared={refs:[]};let useRefWithInit=function(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref};useRefWithInit=()=>({current:shared});function createLocal(){return{refs:[]}}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;update(local,refs);return local.refs}',
+    ],
+    [
+      'a reassigned initializer declaration',
+      'const UNINITIALIZED={},shared={refs:[]};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}function createLocal(){return{refs:[]}}createLocal=()=>shared;function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;update(local,refs);return local.refs}',
+    ],
+    [
+      'a reassigned initializer binding',
+      'const UNINITIALIZED={},shared={refs:[]};function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}let createLocal=()=>({refs:[]});createLocal=()=>shared;function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;update(local,refs);return local.refs}',
+    ],
+    [
+      'a constructor that returns a shared receiver',
+      'const UNINITIALIZED={},shared={refs:[]};class SharedReceiver{constructor(){return shared}}function useRefWithInit(init){const ref={current:UNINITIALIZED};if(ref.current===UNINITIALIZED)ref.current=init();return ref}function createLocal(){return new SharedReceiver()}function update(value,refs){value.refs=refs}function wrapper(refs){const local=useRefWithInit(createLocal).current;update(local,refs);return local.refs}',
+    ],
+  ])('does not isolate a local receiver with %s escape', (_label, source) => {
+    expect(
+      inspectCloudflareLoadInternalIsolatedReceiverForTesting(
+        source,
+        'wrapper',
+        'local'
+      )
+    ).toBe(false);
   });
 
   it('checks indexed uncertain receiver calls against collection sources', () => {
@@ -5587,6 +7276,149 @@ describe('runtime artifact verifier', () => {
     }
   );
 
+  it('preserves exact object extension/transform and preprocess lineages', () => {
+    expect(
+      inspectCloudflareFactoryOriginLineagesForTesting(
+        'import{object}from"./zod.js";const makeSchema=()=>object({a:1}).extend({b:2}).transform(value=>value);',
+        'makeSchema'
+      )
+    ).toEqual([
+      {
+        complete: true,
+        origins: [
+          expect.objectContaining({
+            factoryArgumentCount: 1,
+            importedName: 'object',
+            returnedPath: [
+              'extend',
+              { callResult: true },
+              'transform',
+              { callResult: true },
+            ],
+          }),
+        ],
+      },
+    ]);
+    expect(
+      inspectCloudflareFactoryOriginLineagesForTesting(
+        'import{preprocess}from"./zod.js";const makeSchema=()=>preprocess(value=>value,{parse(){}}).transform(value=>value);',
+        'makeSchema'
+      )
+    ).toEqual([
+      {
+        complete: true,
+        origins: [
+          expect.objectContaining({
+            factoryArgumentCount: 2,
+            importedName: 'preprocess',
+            returnedPath: ['transform', { callResult: true }],
+          }),
+        ],
+      },
+    ]);
+  });
+
+  it.each([
+    ['spread-only use', '', 1, true],
+    ['read-only member use', 'void import_react.forwardRef;', 1, true],
+    [
+      'direct namespace mutation',
+      'import_react.forwardRef=()=>null;',
+      0,
+      false,
+    ],
+    [
+      'aliased namespace mutation',
+      'const alias=import_react;alias.forwardRef=()=>null;',
+      0,
+      false,
+    ],
+  ])(
+    'authenticates a reviewed __toESM namespace aggregate with %s',
+    (_label, use, candidates, readOnly) => {
+      const source = `import{a as __toESM}from"./rolldown-runtime-7_rZTKki.js";import{t as require_react}from"./react-m4gW-Tkn.js";const import_react=__toESM(require_react(),1);${use}const namespace={...import_react};`;
+      const fixtureState = createReviewedReactAnalyzerFixture(source);
+
+      expect(
+        inspectCloudflareReviewedAggregateSpreadsForTesting(
+          source,
+          fixtureState.analysisLabel,
+          fixtureState.artifactRoot,
+          fixtureCloudflareProvenanceKey
+        )
+      ).toEqual([
+        {
+          candidates,
+          lineageComplete: true,
+          localName: 'import_react',
+          origins: [{ argumentsSafe: true, policySafe: true }],
+          readOnly,
+        },
+      ]);
+    }
+  );
+
+  it.each([
+    ['read-only namespace', '', true],
+    ['directly mutated namespace', 'import_react.forwardRef=()=>({});', false],
+    [
+      'aliased mutated namespace',
+      'const reactAlias=import_react;reactAlias.forwardRef=()=>({});',
+      false,
+    ],
+  ])(
+    'classifies a reviewed React forwardRef result from a %s as isolated',
+    (_label, setup, isolated) => {
+      const expressionSource = 'import_react.forwardRef(()=>null)';
+      const source = `import{a as __toESM}from"./rolldown-runtime-7_rZTKki.js";import{t as require_react}from"./react-m4gW-Tkn.js";const import_react=__toESM(require_react(),1);${setup}const Component=${expressionSource};`;
+      const fixtureState = createReviewedReactAnalyzerFixture(source);
+
+      expect(
+        inspectCloudflareKnownIsolatedReceiverExpressionForTesting(
+          source,
+          expressionSource,
+          fixtureState.analysisLabel,
+          fixtureState.artifactRoot,
+          fixtureCloudflareProvenanceKey
+        )
+      ).toEqual([isolated]);
+    }
+  );
+
+  it.each([
+    ['fresh initializer result', 'return {};', '', true],
+    [
+      'mutated React namespace',
+      'return {};',
+      'import_react.useRef=()=>({current:null});',
+      false,
+    ],
+    [
+      'aliased mutated React namespace',
+      'return {};',
+      'const reactAlias=import_react;reactAlias.useRef=()=>({current:null});',
+      false,
+    ],
+    ['shared initializer result', 'return shared;', 'const shared={};', false],
+  ])(
+    'classifies useRefWithInit(createForkRef).current for a %s',
+    (_label, initializerBody, setup, localRefCurrent) => {
+      const expressionSource = 'useRefWithInit(createForkRef).current';
+      const source = `import{a as __toESM}from"./rolldown-runtime-7_rZTKki.js";import{t as require_react}from"./react-m4gW-Tkn.js";const import_react=__toESM(require_react(),1);${setup}function useRefWithInit(init){const ref=import_react.useRef(null);if(ref.current===null)ref.current=init();return ref}function createForkRef(){${initializerBody}}const forkRef=${expressionSource};`;
+      const fixtureState = createReviewedReactAnalyzerFixture(source);
+
+      expect(
+        inspectCloudflareKnownIsolatedExpressionForTesting(
+          source,
+          expressionSource,
+          fixtureState.analysisLabel,
+          fixtureState.artifactRoot,
+          fixtureCloudflareProvenanceKey
+        )
+      ).toEqual([{ localRefCurrent }]);
+    }
+  );
+
   it.each([
     ['node', createNodeArtifact, undefined],
     ['vercel', createVercelArtifact, undefined],
@@ -5611,6 +7443,44 @@ describe('runtime artifact verifier', () => {
       })
     ).toThrow(
       'Cloudflare artifact verification requires a canonical 32-byte base64url build-time provenance key; run pnpm verify:artifact:cloudflare to build, sign, and verify atomically; advanced callers verifying the same signed build may pass cloudflareAppChunkProvenanceKey or START_UI_CLOUDFLARE_PROVENANCE_KEY'
+    );
+  });
+
+  it.each([
+    { legacyCloudflareTelemetryFixtureForTesting: true },
+    Object.create({ legacyCloudflareTelemetryFixtureForTesting: true }),
+  ])(
+    'rejects the legacy fixture option through production verification',
+    (options) => {
+      expect(() =>
+        verifyRuntimeProfileImplementation('cloudflare', fixture(), options)
+      ).toThrow(
+        'legacy Cloudflare telemetry fixtures are unavailable through production verification'
+      );
+    }
+  );
+
+  it('rejects legacy fixture verification outside an active Vitest test', () => {
+    const verifierUrl = pathToFileURL(
+      path.resolve(process.cwd(), 'scripts/verify-runtime-profile.mjs')
+    ).href;
+    const program = `import { verifyLegacyCloudflareTelemetryFixtureForTesting } from ${JSON.stringify(verifierUrl)};
+try {
+  verifyLegacyCloudflareTelemetryFixtureForTesting('cloudflare');
+} catch (error) {
+  process.stdout.write(String(error?.message));
+}`;
+
+    expect(
+      execFileSync(
+        process.execPath,
+        ['--input-type=module', '--eval', program],
+        {
+          encoding: 'utf8',
+        }
+      )
+    ).toContain(
+      'legacy Cloudflare telemetry fixture verification is available only inside an active Vitest test'
     );
   });
 
@@ -5792,7 +7662,7 @@ describe('runtime artifact verifier', () => {
 
     try {
       expect(() =>
-        verifyRuntimeProfileImplementation('cloudflare', root, {
+        verifyRuntimeProfile('cloudflare', root, {
           cloudflareAppChunkProvenanceKey: fixtureCloudflareProvenanceKey,
           cloudflareTanStackOwnerDigests: fixtureTanStackOwnerDigests,
           expectedAppSlug: 'acme-app',
@@ -10920,6 +12790,22 @@ describe('runtime artifact verifier', () => {
     );
   });
 
+  it('keeps the production Cloudflare kernel behind the inert top-level gate', () => {
+    const source = [
+      'import"./auth-fixture.js";',
+      'import"./telemetry-fixture.js";',
+      'import"./client-database-fixture.js";',
+      'import"./client-environment-fixture.js";',
+      'import"./runtime-fixture.js";',
+      'import"./backend-fixture.js";',
+      'fetch("https://invalid.example");',
+    ].join('');
+
+    expect(() =>
+      inspectCloudflareProductionKernelStaticShapeForTesting(source)
+    ).toThrow('must contain only inert top-level declarations');
+  });
+
   it('rejects a local decoy application factory in the guarded loader', () => {
     const root = fixture();
     createCloudflareArtifact(root);
@@ -12700,7 +14586,7 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow(
-      /must not (?:escape to an unresolved runtime consumer|execute fetch, eval, or worker effects while loading)/u
+      /(?:rejects a replaced intrinsic global|must not (?:escape to an unresolved runtime consumer|execute fetch, eval, or worker effects while loading))/u
     );
   });
 
@@ -12740,7 +14626,7 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow(
-      /must not (?:escape to an unresolved runtime consumer|execute fetch, eval, or worker effects while loading)/u
+      /(?:rejects a replaced intrinsic global|must not (?:escape to an unresolved runtime consumer|execute fetch, eval, or worker effects while loading))/u
     );
   });
 
@@ -12829,7 +14715,7 @@ describe('runtime artifact verifier', () => {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow(
-      /(?:must use the reviewed startInstance artifact owner closure|must not execute fetch, eval, or worker effects while loading)/u
+      /(?:must use the reviewed startInstance artifact owner closure|must not execute fetch, eval, or worker effects while loading|rejects a replaced intrinsic global Boolean)/u
     );
   });
 
@@ -14170,6 +16056,283 @@ describe('runtime artifact verifier', () => {
     ).not.toThrow();
   });
 
+  it('accepts an aggregate only through the exact reviewed read-only sink', () => {
+    const root = createReviewedAggregateSinkArtifact({
+      consumerSource:
+        'import{Ar as selectors}from"./aggregate-owner-AAAAAAAA.js";import{c as useRenderElement}from"./aggregate-sink-AAAAAAAA.js";useRenderElement(null,null,{stateAttributesMapping:selectors});const copy={...selectors};',
+      ownerSource:
+        'import{c as useRenderElement}from"./aggregate-sink-AAAAAAAA.js";const selectors={ready:true};useRenderElement(null,null,{stateAttributesMapping:selectors});export{selectors as Ar};',
+    });
+
+    expect(inspectReviewedAggregateSinkArtifact(root)).toEqual([1]);
+  });
+
+  it.each([
+    ['an alternate property', 'useRenderElement(null,null,{danger:selectors})'],
+    [
+      'a computed property',
+      'useRenderElement(null,null,{["stateAttributesMapping"]:selectors})',
+    ],
+    [
+      'a duplicate property',
+      'useRenderElement(null,null,{stateAttributesMapping:selectors,stateAttributesMapping:selectors})',
+    ],
+    [
+      'an intermediate options object',
+      'const options={stateAttributesMapping:selectors};useRenderElement(null,null,options)',
+    ],
+    [
+      'a second leaking property',
+      'useRenderElement(null,null,{stateAttributesMapping:selectors,leak:selectors})',
+    ],
+    [
+      'an escaped container property',
+      'const consume=value=>value;const box={value:selectors};consume(box)',
+    ],
+    [
+      'a shadowed sink parameter',
+      'function relay(useRenderElement){useRenderElement(null,null,{stateAttributesMapping:selectors})}relay(()=>null)',
+    ],
+    [
+      'a reassigned sink alias',
+      'let sink=useRenderElement;sink=()=>null;sink(null,null,{stateAttributesMapping:selectors})',
+    ],
+    ['a local re-export', 'export{selectors}'],
+    ['a direct aggregate mutation', 'Object.assign(selectors,{ready:false})'],
+  ])('rejects aggregate laundering through %s', (_label, use) => {
+    const root = createReviewedAggregateSinkArtifact({
+      consumerSource: `import{Ar as selectors}from"./aggregate-owner-AAAAAAAA.js";import{c as useRenderElement}from"./aggregate-sink-AAAAAAAA.js";${use};const copy={...selectors};`,
+      ownerSource:
+        'import{c as useRenderElement}from"./aggregate-sink-AAAAAAAA.js";const selectors={ready:true};useRenderElement(null,null,{stateAttributesMapping:selectors});export{selectors as Ar};',
+    });
+
+    expect(inspectReviewedAggregateSinkArtifact(root)).toEqual([0]);
+  });
+
+  it('rejects an escaped default aggregate import', () => {
+    const root = createReviewedAggregateSinkArtifact({
+      consumerSource:
+        'import selectors from"./aggregate-owner-AAAAAAAA.js";const consume=value=>value;consume(selectors);const copy={...selectors};',
+      ownerSource:
+        'import{c as useRenderElement}from"./aggregate-sink-AAAAAAAA.js";const selectors={ready:true};useRenderElement(null,null,{stateAttributesMapping:selectors});export{selectors as default};',
+    });
+
+    expect(inspectReviewedAggregateSinkArtifact(root)).toEqual([0]);
+  });
+
+  it('rejects an aggregate member call that can mutate its receiver', () => {
+    const root = createReviewedAggregateSinkArtifact({
+      consumerSource:
+        'import{Ar as selectors}from"./aggregate-owner-AAAAAAAA.js";const copy={...selectors};',
+      ownerSource:
+        'const selectors={ready(){this.evil=()=>fetch("https://invalid.example")}};selectors.ready();export{selectors as Ar};',
+    });
+
+    expect(inspectReviewedAggregateSinkArtifact(root)).toEqual([0]);
+  });
+
+  it('resolves an authenticated enum-style imported member to its primitive value', () => {
+    const root = createImportedStaticPrimitiveArtifact({
+      consumerSource:
+        'import{c as CommonTriggerDataAttributes}from"./primitive-owner-AAAAAAAA.js";var TooltipTriggerDataAttributes=function(TooltipTriggerDataAttributes){TooltipTriggerDataAttributes[TooltipTriggerDataAttributes["popupOpen"]=CommonTriggerDataAttributes.popupOpen]="popupOpen";return TooltipTriggerDataAttributes}({});',
+      ownerSource:
+        'var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";CommonTriggerDataAttributes["pressed"]="data-pressed";return CommonTriggerDataAttributes}({});export{CommonTriggerDataAttributes as c};',
+    });
+
+    expect(
+      inspectImportedStaticPrimitiveArtifact(
+        root,
+        'CommonTriggerDataAttributes.popupOpen'
+      )
+    ).toEqual([['data-popup-open']]);
+  });
+
+  it.each([
+    [
+      'a shared receiver',
+      'const shared={};var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}(shared);export{CommonTriggerDataAttributes as c};',
+      [],
+    ],
+    [
+      'an unresolved factory result',
+      'const CommonTriggerDataAttributes=createUnknown();export{CommonTriggerDataAttributes as c};',
+      [],
+    ],
+    [
+      'an accessor member',
+      'const CommonTriggerDataAttributes={get popupOpen(){return "data-popup-open"}};export{CommonTriggerDataAttributes as c};',
+      [],
+    ],
+    [
+      'a nonempty receiver literal',
+      'var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}({existing:true});export{CommonTriggerDataAttributes as c};',
+      [],
+    ],
+    [
+      'a named function expression',
+      'var CommonTriggerDataAttributes=function initialize(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}({});export{CommonTriggerDataAttributes as c};',
+      [],
+    ],
+    [
+      'a reassigned receiver parameter',
+      'var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes=globalThis;CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}({});export{CommonTriggerDataAttributes as c};',
+      [],
+    ],
+    [
+      'an alternate return value',
+      'var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return {popupOpen:"other"}}({});export{CommonTriggerDataAttributes as c};',
+      [],
+    ],
+    [
+      'a prior Object prototype setter',
+      'Object.defineProperty(Object.prototype,"popupOpen",{set(){fetch("https://invalid.example")}});var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}({});export{CommonTriggerDataAttributes as c};',
+      [],
+    ],
+  ])('rejects imported primitive proof through %s', (_label, ownerSource) => {
+    const root = createImportedStaticPrimitiveArtifact({
+      consumerSource:
+        'import{c as CommonTriggerDataAttributes}from"./primitive-owner-AAAAAAAA.js";const value=CommonTriggerDataAttributes.popupOpen;',
+      ownerSource,
+    });
+
+    expect(
+      inspectImportedStaticPrimitiveArtifact(
+        root,
+        'CommonTriggerDataAttributes.popupOpen'
+      )
+    ).toEqual([[]]);
+  });
+
+  it('rejects imported primitive proof when another signed consumer mutates the export', () => {
+    const root = createImportedStaticPrimitiveArtifact({
+      consumerSource:
+        'import{c as CommonTriggerDataAttributes}from"./primitive-owner-AAAAAAAA.js";const value=CommonTriggerDataAttributes.popupOpen;',
+      extraConsumerSources: [
+        'import{c as CommonTriggerDataAttributes}from"./primitive-owner-AAAAAAAA.js";CommonTriggerDataAttributes.popupOpen="changed";',
+      ],
+      ownerSource:
+        'var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}({});export{CommonTriggerDataAttributes as c};',
+    });
+
+    expect(
+      inspectImportedStaticPrimitiveArtifact(
+        root,
+        'CommonTriggerDataAttributes.popupOpen'
+      )
+    ).toEqual([[]]);
+  });
+
+  it('does not resolve a shadowed imported aggregate binding', () => {
+    const root = createImportedStaticPrimitiveArtifact({
+      consumerSource:
+        'import{c as CommonTriggerDataAttributes}from"./primitive-owner-AAAAAAAA.js";const value=(function(CommonTriggerDataAttributes){return CommonTriggerDataAttributes.popupOpen})({popupOpen:"hostile"});',
+      ownerSource:
+        'var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}({});export{CommonTriggerDataAttributes as c};',
+    });
+
+    expect(
+      inspectImportedStaticPrimitiveArtifact(
+        root,
+        'CommonTriggerDataAttributes.popupOpen'
+      )
+    ).toEqual([[]]);
+  });
+
+  it('does not resolve an imported aggregate member invoked as a method', () => {
+    const root = createImportedStaticPrimitiveArtifact({
+      consumerSource:
+        'import{c as CommonTriggerDataAttributes}from"./primitive-owner-AAAAAAAA.js";CommonTriggerDataAttributes.popupOpen();',
+      ownerSource:
+        'var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}({});export{CommonTriggerDataAttributes as c};',
+    });
+
+    expect(
+      inspectImportedStaticPrimitiveArtifact(
+        root,
+        'CommonTriggerDataAttributes.popupOpen'
+      )
+    ).toEqual([[]]);
+  });
+
+  it('resolves an authenticated imported Symbol.for property key', () => {
+    const root = createImportedStaticPrimitiveArtifact({
+      consumerSource:
+        'import{c as TSS_SERVER_FUNCTION}from"./primitive-owner-AAAAAAAA.js";const metadata={[TSS_SERVER_FUNCTION]:true};',
+      ownerSource:
+        'var TSS_SERVER_FUNCTION=Symbol.for("TSS_SERVER_FUNCTION");export{TSS_SERVER_FUNCTION as c};',
+    });
+
+    expect(
+      inspectCloudflareStaticPropertyKeysForTesting(
+        root,
+        'assets/primitive-consumer-AAAAAAAA.js',
+        '[TSS_SERVER_FUNCTION]:true',
+        fixtureCloudflareProvenanceKey,
+        { includeSafety: true }
+      )
+    ).toEqual([
+      {
+        key: '\0symbol-for:"TSS_SERVER_FUNCTION"',
+        safe: true,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      'a unique Symbol call',
+      'var TSS_SERVER_FUNCTION=Symbol("TSS_SERVER_FUNCTION");export{TSS_SERVER_FUNCTION as c};',
+    ],
+    [
+      'a reassigned owner binding',
+      'var TSS_SERVER_FUNCTION=Symbol.for("TSS_SERVER_FUNCTION");TSS_SERVER_FUNCTION=Symbol.for("changed");export{TSS_SERVER_FUNCTION as c};',
+    ],
+    [
+      'a shadowed Symbol intrinsic',
+      'const Symbol={for:()=>"not-a-symbol"};var TSS_SERVER_FUNCTION=Symbol.for("TSS_SERVER_FUNCTION");export{TSS_SERVER_FUNCTION as c};',
+    ],
+    [
+      'a string-returning factory',
+      'var TSS_SERVER_FUNCTION=createKey("TSS_SERVER_FUNCTION");export{TSS_SERVER_FUNCTION as c};',
+    ],
+  ])(
+    'rejects imported static symbol proof through %s',
+    (_label, ownerSource) => {
+      const root = createImportedStaticPrimitiveArtifact({
+        consumerSource:
+          'import{c as TSS_SERVER_FUNCTION}from"./primitive-owner-AAAAAAAA.js";const metadata={[TSS_SERVER_FUNCTION]:true};',
+        ownerSource,
+      });
+
+      expect(
+        inspectCloudflareStaticPropertyKeysForTesting(
+          root,
+          'assets/primitive-consumer-AAAAAAAA.js',
+          '[TSS_SERVER_FUNCTION]:true',
+          fixtureCloudflareProvenanceKey
+        )
+      ).toEqual([undefined]);
+    }
+  );
+
+  it('does not resolve a shadowed imported Symbol.for binding', () => {
+    const root = createImportedStaticPrimitiveArtifact({
+      consumerSource:
+        'import{c as TSS_SERVER_FUNCTION}from"./primitive-owner-AAAAAAAA.js";const metadata=(function(TSS_SERVER_FUNCTION){return {[TSS_SERVER_FUNCTION]:true}})("hostile");',
+      ownerSource:
+        'var TSS_SERVER_FUNCTION=Symbol.for("TSS_SERVER_FUNCTION");export{TSS_SERVER_FUNCTION as c};',
+    });
+
+    expect(
+      inspectCloudflareStaticPropertyKeysForTesting(
+        root,
+        'assets/primitive-consumer-AAAAAAAA.js',
+        '[TSS_SERVER_FUNCTION]:true',
+        fixtureCloudflareProvenanceKey
+      )
+    ).toEqual([undefined]);
+  });
+
   it.each([
     [
       'an imported class constructor effect',
@@ -15139,8 +17302,8 @@ describe('runtime artifact verifier', () => {
     manifest['src/start.ts'].dynamicImports = ['tanstack-start-manifest:v'];
     writeJson(root, 'dist/server/.vite/manifest.json', manifest);
 
-    expect(subprocessReviewDigest(root, 'en_US.UTF-8')).toBe(
-      subprocessReviewDigest(root, 'tr_TR.UTF-8')
+    expect(ambientLocaleReviewDigest(root, 'en_US.UTF-8')).toBe(
+      ambientLocaleReviewDigest(root, 'tr_TR.UTF-8')
     );
   });
 
@@ -16017,7 +18180,7 @@ describe('runtime artifact verifier', () => {
       prepareSymlink(root, external);
 
       expect(() =>
-        verifyRuntimeProfileImplementation('cloudflare', root, {
+        verifyRuntimeProfile('cloudflare', root, {
           cloudflareAppChunkProvenanceKey: fixtureCloudflareProvenanceKey,
           cloudflareTanStackOwnerDigests: fixtureTanStackOwnerDigests,
           expectedAppSlug: 'acme-app',
@@ -16039,7 +18202,7 @@ describe('runtime artifact verifier', () => {
       writeFixtureCloudflareProvenance(root);
 
       expect(() =>
-        verifyRuntimeProfileImplementation('cloudflare', root, {
+        verifyRuntimeProfile('cloudflare', root, {
           cloudflareAppChunkProvenanceKey: fixtureCloudflareProvenanceKey,
           cloudflareTanStackOwnerDigests: fixtureTanStackOwnerDigests,
           expectedAppSlug: 'acme-app',
