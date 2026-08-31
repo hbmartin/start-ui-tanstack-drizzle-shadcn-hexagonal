@@ -1079,6 +1079,192 @@ const createCloudflareArtifact = (root) => {
   fs.mkdirSync(path.join(root, 'dist/client'));
 };
 
+const cloudflareV5EntrySource =
+  'var {initializeCloudflareTelemetryRequestScope,runWithCloudflareTelemetry}=await import("./assets/telemetry-request-scope-fixture.js");' +
+  'initializeCloudflareTelemetryRequestScope();' +
+  'var Sentry=await import("./assets/esm-fixture.js");' +
+  'var {initializeCloudflareSentryApplication,runWithCloudflareSentry}=await import("./assets/sentry-request-fixture.js");' +
+  'var {application,sentryRequestIsolationReady}=await initializeCloudflareSentryApplication(Sentry,async()=>{const kernel=await import("./assets/backend-kernel-fixture.js");kernel.requireRuntimeDatabaseClient();kernel.validateServerBuildConfig("cloudflare");const {createApplicationServerEntry}=await import("./assets/create-application-server-entry-fixture.js");return createApplicationServerEntry("cloudflare")});' +
+  'var {tracing}=await import("cloudflare:workers");' +
+  'var {runWithCloudflareDatabase}=await import("./assets/database-request-fixture.js");' +
+  'var {configureCloudflareRequestTelemetry}=await import("./assets/request-telemetry-fixture.js");' +
+  'var {scheduleCloudflareRequestFlush}=await import("./assets/request-lifecycle-fixture.js");' +
+  'const fetchCloudflareApplication=({context,handle,request,requireSentryOwner,sentryOptions})=>sentryOptions?runWithCloudflareSentry({api:Sentry,handle,request,requireSentryOwner,requestOptions:{captureErrors:false,context,options:sentryOptions,request}}):handle();' +
+  'var worker_entry_default={async fetch(request,environment,context){const {requireSentryOwner,sentryOptions,telemetry}=configureCloudflareRequestTelemetry({environment,request,sentry:Sentry,sentryRequestIsolationReady,tracing});const handleApplication=()=>application.fetch(request,{context:void 0});const handleDatabase=()=>runWithCloudflareDatabase({binding:environment.START_UI_DATABASE,handle:handleApplication,request});try{return await runWithCloudflareTelemetry(telemetry,()=>fetchCloudflareApplication({context,handle:handleDatabase,request,requireSentryOwner,sentryOptions}))}finally{scheduleCloudflareRequestFlush(request,telemetry,(completion)=>context.waitUntil(completion))}}};' +
+  'export{worker_entry_default as default};';
+
+const createCloudflareV5Artifact = (root) => {
+  createCloudflareArtifact(root);
+  const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest['virtual:cloudflare/worker-entry'].dynamicImports = [
+    'src/runtime/cloudflare/telemetry-request-scope.ts',
+    'node_modules/.pnpm/@sentry+cloudflare@10.62.0/node_modules/@sentry/cloudflare/build/esm/index.js',
+    'src/runtime/cloudflare/sentry-request.ts',
+    'src/modules/kernel/backend.ts',
+    'src/runtime/create-application-server-entry.ts',
+    'src/runtime/cloudflare/database-request.ts',
+    'src/runtime/cloudflare/request-telemetry.ts',
+    'src/runtime/cloudflare/request-lifecycle.ts',
+  ];
+  manifest['src/modules/kernel/backend.ts'].imports = [
+    '_auth-fixture.js',
+    '_telemetry-fixture.js',
+    '_client-database-fixture.js',
+    '_client-environment-fixture.js',
+    '_runtime-fixture.js',
+    '_backend-build-config-fixture.js',
+    '_book-fixture.js',
+  ];
+  manifest['_client-database-fixture.js'] = {
+    file: 'assets/client-database-fixture.js',
+    imports: [],
+    name: 'client-database',
+  };
+  manifest['_client-environment-fixture.js'] = {
+    file: 'assets/client-environment-fixture.js',
+    imports: [],
+    name: 'client-environment',
+  };
+  manifest['_backend-request-config-fixture.js'] = {
+    file: 'assets/backend-request-config-fixture.js',
+    imports: [],
+    name: 'backend-request-config',
+  };
+  manifest['src/runtime/cloudflare/telemetry-request-scope.ts'] = {
+    file: 'assets/telemetry-request-scope-fixture.js',
+    imports: ['_telemetry-fixture.js'],
+    isDynamicEntry: true,
+    name: 'telemetry-request-scope',
+    src: 'src/runtime/cloudflare/telemetry-request-scope.ts',
+  };
+  manifest['src/runtime/cloudflare/request-telemetry.ts'].imports = [
+    '_telemetry-fixture.js',
+    '_sanitize-log-fields-fixture.js',
+    '_backend-request-config-fixture.js',
+    'src/runtime/cloudflare/telemetry-adapter.ts',
+  ];
+  writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+
+  write(root, 'dist/server/index.js', cloudflareV5EntrySource);
+  write(
+    root,
+    'dist/server/assets/backend-kernel-fixture.js',
+    'import"./auth-fixture.js";import"./telemetry-fixture.js";import{requireRuntimeDatabaseClient}from"./client-database-fixture.js";import"./client-environment-fixture.js";import"./runtime-fixture.js";import{validateServerBuildConfig}from"./backend-build-config-fixture.js";import"./book-fixture.js";export{requireRuntimeDatabaseClient,validateServerBuildConfig};'
+  );
+  write(
+    root,
+    'dist/server/assets/client-database-fixture.js',
+    'const requireRuntimeDatabaseClient=()=>{};export{requireRuntimeDatabaseClient};'
+  );
+  write(root, 'dist/server/assets/client-environment-fixture.js');
+  write(
+    root,
+    'dist/server/assets/backend-request-config-fixture.js',
+    'const parseRequestTelemetryConfig=()=>({});const assertRequiredTelemetrySignals=()=>{};const createTelemetrySignalReadiness=()=>({});const isTelemetrySignalRequired=()=>false;export{assertRequiredTelemetrySignals,createTelemetrySignalReadiness,isTelemetrySignalRequired,parseRequestTelemetryConfig};'
+  );
+  write(
+    root,
+    'dist/server/assets/telemetry-request-scope-fixture.js',
+    'import{installTelemetryScopeResolver}from"./telemetry-fixture.js";import{AsyncLocalStorage}from"node:async_hooks";const requestTelemetryStorage=new AsyncLocalStorage();const initializeCloudflareTelemetryRequestScope=()=>{installTelemetryScopeResolver(()=>requestTelemetryStorage.getStore())};const runWithCloudflareTelemetry=(telemetry,handle)=>requestTelemetryStorage.run(telemetry,handle);export{initializeCloudflareTelemetryRequestScope,runWithCloudflareTelemetry};'
+  );
+  write(
+    root,
+    'dist/server/assets/telemetry-adapter-fixture.js',
+    'import"./telemetry-fixture.js";import{writeStructuredConsoleLog}from"./structured-console-fixture.js";const createCloudflareSentryOptions=()=>({});const createCloudflareTelemetryAdapter=()=>({});const isCloudflareAnalyticsEngine=()=>true;const isCloudflareTracing=()=>true;export{createCloudflareSentryOptions,createCloudflareTelemetryAdapter,isCloudflareAnalyticsEngine,isCloudflareTracing};'
+  );
+  write(
+    root,
+    'dist/server/assets/request-telemetry-fixture.js',
+    'import{createNoOpTelemetry,reportTelemetryFailure}from"./telemetry-fixture.js";import{sanitizeLogFields}from"./sanitize-log-fields-fixture.js";import{assertRequiredTelemetrySignals,createTelemetrySignalReadiness,isTelemetrySignalRequired,parseRequestTelemetryConfig}from"./backend-request-config-fixture.js";import{createCloudflareSentryOptions,createCloudflareTelemetryAdapter,isCloudflareAnalyticsEngine,isCloudflareTracing}from"./telemetry-adapter-fixture.js";const configureCloudflareRequestTelemetry=({environment,request,sentry,sentryRequestIsolationReady,tracing})=>{const config=parseRequestTelemetryConfig(environment);const fallback=createNoOpTelemetry();const analyticsReady=isCloudflareAnalyticsEngine(environment.START_UI_TELEMETRY_METRICS);const tracingReady=isCloudflareTracing(tracing);const telemetry=createCloudflareTelemetryAdapter({});const sentryOptions=createCloudflareSentryOptions(sentry,request,environment);const readiness=createTelemetrySignalReadiness({exceptions:sentryRequestIsolationReady,logs:true,metrics:analyticsReady,traces:tracingReady});assertRequiredTelemetrySignals({config,readiness});const requireSentryOwner=isTelemetrySignalRequired(config,"exceptions");void fallback;void sanitizeLogFields;void reportTelemetryFailure;return{requireSentryOwner,sentryOptions,telemetry}};export{configureCloudflareRequestTelemetry};'
+  );
+  write(
+    root,
+    'dist/server/assets/request-lifecycle-fixture.js',
+    'import{reportTelemetryFailure}from"./telemetry-fixture.js";import{forceFlushRequestTelemetry}from"./request-completion-fixture.js";const scheduleCloudflareRequestFlush=(request,telemetry,waitUntil)=>{const flush=forceFlushRequestTelemetry(request,telemetry).then(()=>void 0);try{waitUntil(flush)}catch(failure){reportTelemetryFailure("otel.cloudflare.wait_until",failure)}};export{scheduleCloudflareRequestFlush};'
+  );
+  const sentryPath = path.join(
+    root,
+    'dist/server/assets/sentry-request-fixture.js'
+  );
+  write(
+    root,
+    'dist/server/assets/sentry-request-fixture.js',
+    fs
+      .readFileSync(sentryPath, 'utf8')
+      .replace(
+        'async({api,handle,request,requestOptions})=>',
+        'async({api,handle,request,requestOptions,requireSentryOwner})=>'
+      )
+      .replace(
+        'reportTelemetryFailure("sentry.cloudflare.request",failure)}if(applicationOutcome',
+        'reportTelemetryFailure("sentry.cloudflare.request",failure);if(requireSentryOwner&&applicationWork===void 0)throw failure}if(applicationOutcome'
+      )
+  );
+  write(
+    root,
+    'dist/server/assets/telemetry-fixture.js',
+    'const createNoOpTelemetry=()=>({});const installTelemetryScopeResolver=()=>{};const reportTelemetryFailure=()=>{};const telemetryProxy={};export{createNoOpTelemetry,installTelemetryScopeResolver,reportTelemetryFailure,telemetryProxy};'
+  );
+};
+
+const verifyCloudflareV5Fixture = (root) => {
+  writeFixtureCloudflareProvenance(root);
+  return verifyRuntimeProfileImplementation('cloudflare', root, {
+    cloudflareAppChunkProvenanceKey: fixtureCloudflareProvenanceKey,
+    cloudflareTanStackOwnerDigests: fixtureTanStackOwnerDigests,
+    expectedAppSlug: 'acme-app',
+  });
+};
+
+const replaceCloudflareV5FixtureSource = (
+  root,
+  relativePath,
+  search,
+  replacement
+) => {
+  const fixturePath = path.join(root, relativePath);
+  const source = fs.readFileSync(fixturePath, 'utf8');
+  if (!source.includes(search)) {
+    throw new Error(`Cloudflare v5 fixture source is missing ${search}`);
+  }
+  write(root, relativePath, source.replace(search, replacement));
+};
+
+const replaceEveryCloudflareV5FixtureSource = (
+  root,
+  relativePath,
+  search,
+  replacement
+) => {
+  const fixturePath = path.join(root, relativePath);
+  const source = fs.readFileSync(fixturePath, 'utf8');
+  if (!source.includes(search)) {
+    throw new Error(`Cloudflare v5 fixture source is missing ${search}`);
+  }
+  write(root, relativePath, source.replaceAll(search, replacement));
+};
+
+const mutateCloudflareV5FixtureManifest = (root, mutate) => {
+  const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  mutate(manifest);
+  writeJson(root, 'dist/server/.vite/manifest.json', manifest);
+};
+
+const cloudflareV5VerificationFailure = (root) => {
+  let failure;
+  try {
+    verifyCloudflareV5Fixture(root);
+  } catch (error) {
+    failure = error;
+  }
+  if (!(failure instanceof Error)) {
+    throw new Error('Expected Cloudflare v5 artifact verification to fail');
+  }
+  return failure;
+};
+
 const addCloudflareSinkModule = (root, source) => {
   const manifestPath = path.join(root, 'dist/server/.vite/manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -3969,17 +4155,21 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
     expect(effects[0]).toContain('Object.defineProperty');
   });
 
-  it.each([
-    'const source={};Object.defineProperties(source,{effect:{enumerable:true,get(){fetch("https://invalid.example");return 1}}});const target={...source};',
-    'const source={},descriptor={enumerable:true,get(){fetch("https://invalid.example");return 1}};Object.defineProperties(source,{effect:descriptor});const {effect}=source;',
-  ])(
-    'rejects accessor-bearing defineProperties during installation (%s)',
-    (source) => {
-      const effects = inspectCloudflareLoadEffectsForTesting(source);
-      expect(effects).toHaveLength(1);
-      expect(effects[0]).toContain('Object.defineProperties');
-    }
-  );
+  it('fails closed before spreading an accessor-bearing defineProperties source', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const source={};Object.defineProperties(source,{effect:{enumerable:true,get(){fetch("https://invalid.example");return 1}}});const target={...source};'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('rejects accessor-bearing defineProperties during destructuring', () => {
+    const effects = inspectCloudflareLoadEffectsForTesting(
+      'const source={},descriptor={enumerable:true,get(){fetch("https://invalid.example");return 1}};Object.defineProperties(source,{effect:descriptor});const {effect}=source;'
+    );
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toContain('Object.defineProperties');
+  });
 
   it.each([
     'const source={get effect(){fetch("https://invalid.example");return 1}};Object.values(source);',
@@ -7333,6 +7523,30 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
       0,
       false,
     ],
+    [
+      'an array-pattern member write',
+      '[import_react.forwardRef]=[()=>null];',
+      0,
+      false,
+    ],
+    [
+      'a nested object-pattern member write',
+      '({value:{callback:import_react.forwardRef=()=>null}}={value:{}});',
+      0,
+      false,
+    ],
+    [
+      'an object-rest member write',
+      '({...import_react.forwardRef}={changed:true});',
+      0,
+      false,
+    ],
+    [
+      'a for-of pattern member write',
+      'for({callback:import_react.forwardRef}of[{callback:()=>null}]){}',
+      0,
+      false,
+    ],
   ])(
     'authenticates a reviewed __toESM namespace aggregate with %s',
     (_label, use, candidates, readOnly) => {
@@ -7430,6 +7644,359 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
       create(root);
 
       expect(verifyRuntimeProfile(profile, root, options)).toBe(profile);
+    }
+  );
+
+  it('accepts the signed Cloudflare v5 owner contract through production verification', () => {
+    const root = fixture();
+    createCloudflareV5Artifact(root);
+
+    expect(verifyCloudflareV5Fixture(root)).toBe('cloudflare');
+  });
+
+  it.each([
+    [
+      'a decoy request-scope adapter',
+      'runWithCloudflareTelemetry(telemetry,()=>',
+      'runWithCloudflareTelemetry(sentryOptions,()=>',
+      'must run application work in the captured telemetry scope',
+    ],
+    [
+      'a decoy request-flush adapter',
+      'scheduleCloudflareRequestFlush(request,telemetry,',
+      'scheduleCloudflareRequestFlush(request,sentryOptions,',
+      'must flush its captured telemetry adapter',
+    ],
+    [
+      'a missing required-exception owner binding',
+      'const {requireSentryOwner,sentryOptions,telemetry}=',
+      'const {sentryOptions,telemetry}=',
+      'must keep exact request telemetry owners immutable',
+    ],
+    [
+      'an untrusted request-telemetry input',
+      'sentryRequestIsolationReady,tracing});',
+      'sentryRequestIsolationReady,tracing:void 0});',
+      'request telemetry configurator must receive exact trusted inputs',
+    ],
+    [
+      'a missing Sentry exception-owner input',
+      '({context,handle,request,requireSentryOwner,sentryOptions})=>',
+      '({context,handle,request,sentryOptions})=>',
+      'Sentry owner must accept exact active request inputs',
+    ],
+    [
+      'a decoy forwarded Sentry exception owner',
+      'runWithCloudflareSentry({api:Sentry,handle,request,requireSentryOwner,requestOptions:',
+      'runWithCloudflareSentry({api:Sentry,handle,request,requireSentryOwner:false,requestOptions:',
+      'must forward required exception ownership',
+    ],
+  ])(
+    'rejects Cloudflare v5 entry composition with %s',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareV5Artifact(root);
+      replaceCloudflareV5FixtureSource(
+        root,
+        'dist/server/index.js',
+        search,
+        replacement
+      );
+
+      expect(() => verifyCloudflareV5Fixture(root)).toThrow(error);
+    }
+  );
+
+  it.each([
+    [
+      'a missing captured telemetry parameter',
+      '(request,telemetry,waitUntil)=>',
+      '(request,waitUntil)=>',
+      'request flush owner must accept its captured telemetry adapter',
+    ],
+    [
+      'a decoy captured telemetry argument',
+      'forceFlushRequestTelemetry(request,telemetry)',
+      'forceFlushRequestTelemetry(request,createNoOpTelemetry())',
+      'request flush owner must flush the captured request adapter exactly once',
+    ],
+    [
+      'a mutable global telemetry lookup',
+      'const flush=forceFlushRequestTelemetry(request,telemetry)',
+      'void getTelemetry;const flush=forceFlushRequestTelemetry(request,telemetry)',
+      'request flush owner must not resolve mutable global telemetry',
+    ],
+  ])(
+    'rejects a Cloudflare v5 lifecycle owner with %s',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareV5Artifact(root);
+      replaceCloudflareV5FixtureSource(
+        root,
+        'dist/server/assets/request-lifecycle-fixture.js',
+        search,
+        replacement
+      );
+
+      const failure = cloudflareV5VerificationFailure(root);
+      expect(failure.message).toContain(
+        'Cloudflare v5 request lifecycle owner verification failed:'
+      );
+      expect(failure.message).toContain(error);
+    }
+  );
+
+  it('rejects a Cloudflare v5 request-scope chunk that loses its storage owner', () => {
+    const root = fixture();
+    createCloudflareV5Artifact(root);
+    replaceCloudflareV5FixtureSource(
+      root,
+      'dist/server/assets/telemetry-request-scope-fixture.js',
+      'requestTelemetryStorage.run(telemetry,handle)',
+      'decoyStorage.run(telemetry,handle)'
+    );
+
+    const failure = cloudflareV5VerificationFailure(root);
+    expect(failure.message).toContain(
+      'Cloudflare v5 telemetry scope owner verification failed:'
+    );
+    expect(failure.message).toContain('requestTelemetryStorage');
+  });
+
+  it('rejects a Cloudflare v5 Sentry chunk that loses its required-exception owner', () => {
+    const root = fixture();
+    createCloudflareV5Artifact(root);
+    replaceEveryCloudflareV5FixtureSource(
+      root,
+      'dist/server/assets/sentry-request-fixture.js',
+      'requireSentryOwner',
+      'exceptionOwner'
+    );
+
+    const failure = cloudflareV5VerificationFailure(root);
+    expect(failure.message).toContain(
+      'Cloudflare v5 Sentry owner verification failed:'
+    );
+    expect(failure.message).toContain('requireSentryOwner');
+  });
+
+  it.each([
+    [
+      'request telemetry configuration',
+      'dist/server/assets/backend-request-config-fixture.js',
+      'Cloudflare v5 request telemetry owner verification failed:',
+    ],
+    [
+      'database client',
+      'dist/server/assets/client-fixture.js',
+      'Cloudflare v5 database owner verification failed:',
+    ],
+  ])(
+    'rejects a signed Cloudflare v5 %s dependency with a load effect',
+    (_label, relativePath, stage) => {
+      const root = fixture();
+      createCloudflareV5Artifact(root);
+      const fixturePath = path.join(root, relativePath);
+      write(
+        root,
+        relativePath,
+        `fetch("https://invalid.example");${fs.readFileSync(fixturePath, 'utf8')}`
+      );
+
+      const failure = cloudflareV5VerificationFailure(root);
+      expect(failure.message).toContain(stage);
+      expect(failure.message).toContain(
+        'must not execute fetch, eval, or worker effects while loading'
+      );
+    }
+  );
+
+  it('rejects a signed Cloudflare v5 owner whose AST and manifest import different chunks', () => {
+    const root = fixture();
+    createCloudflareV5Artifact(root);
+    replaceCloudflareV5FixtureSource(
+      root,
+      'dist/server/assets/request-telemetry-fixture.js',
+      './backend-request-config-fixture.js',
+      './backend-decoy-fixture.js'
+    );
+    write(root, 'dist/server/assets/backend-decoy-fixture.js');
+
+    const failure = cloudflareV5VerificationFailure(root);
+    expect(failure.message).toContain(
+      'Cloudflare v5 request telemetry owner verification failed:'
+    );
+    expect(failure.message).toContain(
+      'must preserve its exact Vite static import graph'
+    );
+  });
+
+  it.each([
+    [
+      'an extra manifest edge',
+      (manifest) => {
+        manifest['_backend-extra-fixture.js'] = {
+          file: 'assets/backend-extra-fixture.js',
+          imports: [],
+          name: 'backend-extra',
+        };
+        manifest['src/runtime/cloudflare/request-telemetry.ts'].imports.push(
+          '_backend-extra-fixture.js'
+        );
+      },
+      (root) => write(root, 'dist/server/assets/backend-extra-fixture.js'),
+    ],
+    [
+      'a missing manifest edge',
+      (manifest) => {
+        manifest['src/runtime/cloudflare/request-telemetry.ts'].imports =
+          manifest[
+            'src/runtime/cloudflare/request-telemetry.ts'
+          ].imports.filter(
+            (key) => key !== '_backend-request-config-fixture.js'
+          );
+      },
+      () => {},
+    ],
+  ])(
+    'rejects a signed Cloudflare v5 request owner with %s',
+    (_label, mutateManifest, prepareArtifact) => {
+      const root = fixture();
+      createCloudflareV5Artifact(root);
+      mutateCloudflareV5FixtureManifest(root, mutateManifest);
+      prepareArtifact(root);
+
+      const failure = cloudflareV5VerificationFailure(root);
+      expect(failure.message).toContain(
+        'Cloudflare v5 request telemetry owner verification failed:'
+      );
+      expect(failure.message).toContain(
+        'must preserve its exact Vite static import graph'
+      );
+    }
+  );
+
+  it('rejects an absent allowed-family import in a signed Cloudflare v5 request owner', () => {
+    const root = fixture();
+    createCloudflareV5Artifact(root);
+    replaceCloudflareV5FixtureSource(
+      root,
+      'dist/server/assets/request-telemetry-fixture.js',
+      './backend-request-config-fixture.js',
+      './backend-absent-fixture.js'
+    );
+
+    const failure = cloudflareV5VerificationFailure(root);
+    expect(failure.message).toContain(
+      'Cloudflare v5 request telemetry owner verification failed:'
+    );
+    expect(failure.message).toContain('backend-absent-fixture.js');
+  });
+
+  it.each([
+    [
+      'no request-scope installation',
+      'initializeCloudflareTelemetryRequestScope();',
+      'void 0;',
+      'must install its telemetry request scope exactly once',
+    ],
+    [
+      'duplicate request-scope installation',
+      'initializeCloudflareTelemetryRequestScope();',
+      'initializeCloudflareTelemetryRequestScope();initializeCloudflareTelemetryRequestScope();',
+      'must install its telemetry request scope exactly once',
+    ],
+    [
+      'delayed request-scope installation',
+      'initializeCloudflareTelemetryRequestScope();var Sentry=await import("./assets/esm-fixture.js");',
+      'var Sentry=await import("./assets/esm-fixture.js");initializeCloudflareTelemetryRequestScope();',
+      'must install telemetry scope immediately after importing its owner',
+    ],
+  ])(
+    'rejects Cloudflare v5 entry composition with %s',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareV5Artifact(root);
+      replaceCloudflareV5FixtureSource(
+        root,
+        'dist/server/index.js',
+        search,
+        replacement
+      );
+
+      const failure = cloudflareV5VerificationFailure(root);
+      expect(failure.message).toContain(
+        'Cloudflare v5 telemetry scope owner verification failed:'
+      );
+      expect(failure.message).toContain(error);
+    }
+  );
+
+  it.each([
+    [
+      'a global telemetry mutation',
+      'return{requireSentryOwner,sentryOptions,telemetry}',
+      'setTelemetry(telemetry);return{requireSentryOwner,sentryOptions,telemetry}',
+      'must return request telemetry without mutating or reading a global adapter',
+    ],
+    [
+      'a missing required-signal assertion',
+      'assertRequiredTelemetrySignals({config,readiness});',
+      'void readiness;',
+      'configureCloudflareRequestTelemetry must call assertRequiredTelemetrySignals',
+    ],
+  ])(
+    'rejects a Cloudflare v5 request telemetry owner with %s',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareV5Artifact(root);
+      replaceCloudflareV5FixtureSource(
+        root,
+        'dist/server/assets/request-telemetry-fixture.js',
+        search,
+        replacement
+      );
+
+      const failure = cloudflareV5VerificationFailure(root);
+      expect(failure.message).toContain(
+        'Cloudflare v5 request telemetry owner verification failed:'
+      );
+      expect(failure.message).toContain(error);
+    }
+  );
+
+  it.each([
+    [
+      'cross-request telemetry retention',
+      'export{worker_entry_default as default};',
+      'var lastKnownNativeTelemetry;export{worker_entry_default as default};',
+      'must not retain telemetry across Worker requests',
+    ],
+    [
+      'runtime owners out of dependency order',
+      'var {tracing}=await import("cloudflare:workers");var {runWithCloudflareDatabase}=await import("./assets/database-request-fixture.js");',
+      'var {runWithCloudflareDatabase}=await import("./assets/database-request-fixture.js");var {tracing}=await import("cloudflare:workers");',
+      'must initialize Cloudflare runtime owners in dependency order',
+    ],
+    [
+      'an extra module-scope statement',
+      'export{worker_entry_default as default};',
+      'const extraOwner=true;export{worker_entry_default as default};',
+      'must contain only its bounded Cloudflare v5 module ownership sequence',
+    ],
+  ])(
+    'rejects Cloudflare v5 entry composition with %s',
+    (_label, search, replacement, error) => {
+      const root = fixture();
+      createCloudflareV5Artifact(root);
+      replaceCloudflareV5FixtureSource(
+        root,
+        'dist/server/index.js',
+        search,
+        replacement
+      );
+
+      expect(() => verifyCloudflareV5Fixture(root)).toThrow(error);
     }
   );
 
@@ -7882,6 +8449,23 @@ try {
     'const runner={};Object.defineProperty(runner,"run",{value:()=>fetch("https://invalid.example")});',
     'function* dormant(){fetch("https://invalid.example")}dormant();',
     'const left=()=>undefined,right=()=>fetch("https://invalid.example");(left||right)();',
+    'class Factory{run(){fetch("https://invalid.example")}}const target=new Factory();void target;',
+    'function Factory(){this.run=()=>fetch("https://invalid.example")}const target=new Factory();void target;',
+    'function Factory(){return{run:()=>undefined}}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-function-constructor.invalid.example");right.run();',
+    'function Factory(){this.run=()=>undefined;return this}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-this-constructor.invalid.example");right.run();',
+    'class Factory{constructor(){return{run:()=>undefined}}}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-class-constructor.invalid.example");right.run();',
+    'const Factory=new Proxy(function(){},{construct(){return{run:()=>undefined}}}),left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-proxy-constructor.invalid.example");right.run();',
+    'function Factory(){const value={run:()=>undefined};return value}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-local-object-constructor.invalid.example");right.run();',
+    'function Factory(){let value={run:()=>undefined};value={run:()=>undefined};return value}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://reassigned-fresh-local-object.invalid.example");right.run();',
+    'function Factory({value}){return value}const left=new Factory({value:{run:()=>undefined}}),right=new Factory({value:{run:()=>undefined}});left.run=()=>fetch("https://fresh-object-parameter.invalid.example");right.run();',
+    'function Factory([value]){return value}const leftArgument=[{run:()=>undefined}],rightArgument=[{run:()=>undefined}],left=new Factory(leftArgument),right=new Factory(rightArgument);left.run=()=>fetch("https://fresh-array-aggregate-constructor.invalid.example");right.run();',
+    'function Factory(){return arguments[0]}const left=new Factory({run:()=>undefined}),right=new Factory({run:()=>undefined});left.run=()=>fetch("https://fresh-arguments-constructor.invalid.example");right.run();',
+    'const Factory=new Proxy(function(){},{construct(_target,args){return args[0]}}),left=new Factory({run:()=>undefined}),right=new Factory({run:()=>undefined});left.run=()=>fetch("https://fresh-proxy-arguments-constructor.invalid.example");right.run();',
+    'function Factory(){function value(){}return value}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-local-function-constructor.invalid.example");right.run();',
+    'class Factory{constructor(){const value={run:()=>undefined};return value}}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-class-local-constructor.invalid.example");right.run();',
+    'const Factory=new Proxy(function(){},{construct(){const value={run:()=>undefined};return value}}),left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-proxy-local-constructor.invalid.example");right.run();',
+    'function make(){return{run:()=>undefined}}function Factory(){return make()}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-factory-constructor.invalid.example");right.run();',
+    'function Factory(){return{run:()=>undefined}}function make(){return new Factory()}const left=make(),right=make();left.run=()=>fetch("https://wrapped-fresh-constructor.invalid.example");right.run();',
   ])('does not activate a dormant or shadowed load effect (%s)', (prefix) => {
     const root = fixture();
     createCloudflareArtifact(root);
@@ -7983,6 +8567,40 @@ try {
     'const source={get effect(){fetch("https://invalid.example");return 1}},run=({effect})=>1;run(source);',
     'const factory=strategy=>arg=>strategy(arg),ignore=arg=>undefined,invoke=arg=>arg();factory(ignore)(()=>undefined);factory(invoke)(()=>fetch("https://invalid.example"));',
     'const factory=strategy=>arg=>strategy(arg),ignore=arg=>undefined,invoke=arg=>arg();factory(invoke)(()=>fetch("https://invalid.example"));factory(ignore)(()=>undefined);',
+    'const target={run:()=>undefined},source=[...[{},{}]],box=[...source,target];box[2].run=()=>fetch("https://nested-spread-offset.invalid.example");target.run();',
+    'const target={run:()=>undefined},source=[...[,,]],box=[...source,target];box[2].run=()=>fetch("https://nested-hole-offset.invalid.example");target.run();',
+    'const target={run:()=>undefined},source=flag?[{}]:[{},{}],box=[...source,target];box[1].run=()=>fetch("https://variable-spread-offset.invalid.example");target.run();',
+    'const target={run:()=>undefined},source=flag?[{},{}]:[{}],box=[...source,target];box[1].run=()=>fetch("https://reversed-spread-offset.invalid.example");target.run();',
+    'function Factory(){return globalThis}const target=new Factory();target.fetch("https://function-constructor-return.invalid.example");',
+    'const shared=globalThis;class Factory{constructor(){return shared}}const target=new Factory();target.fetch("https://class-constructor-return.invalid.example");',
+    'const Factory=new Proxy(function(){},{construct(){return globalThis}});const target=new Factory();target.fetch("https://proxy-constructor-return.invalid.example");',
+    'const shared={run:()=>undefined};function Factory(){return shared}const target=new Factory();target.run=()=>fetch("https://function-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Factory(){const value=shared;return value}const target=new Factory();target.run=()=>fetch("https://local-shared-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Factory(value){return value}const target=new Factory(shared);target.run=()=>fetch("https://parameter-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Factory({value}){return value}const target=new Factory({value:shared});target.run=()=>fetch("https://object-parameter-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Factory([value]){return value}const target=new Factory([shared]);target.run=()=>fetch("https://array-parameter-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},argument={value:shared};function Factory({value}){return value}const target=new Factory(argument);target.run=()=>fetch("https://object-aggregate-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},argument=[shared];function Factory([value]){return value}const target=new Factory(argument);target.run=()=>fetch("https://array-aggregate-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},container={argument:{value:shared}};function Factory({value}){return value}const target=new Factory(container.argument);target.run=()=>fetch("https://member-aggregate-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Factory({value}){return value}const target=new Factory({...{value:shared}});target.run=()=>fetch("https://spread-aggregate-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},key="value",argument={[key]:shared};function Factory({value}){return value}const target=new Factory(argument);target.run=()=>fetch("https://computed-aggregate-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},key="value",argument={[key]:shared},Factory=new Proxy(function(){},{construct(_target,[{value}]){return value}}),target=new Factory(argument);target.run=()=>fetch("https://proxy-computed-aggregate-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},argument=globalThis.flag?[shared]:[{run:()=>undefined}];function Factory([value]){return value}const target=new Factory(argument);target.run=()=>fetch("https://branched-array-aggregate-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Factory(){return arguments[0]}const target=new Factory(shared);target.run=()=>fetch("https://arguments-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Factory(value){return value}const target=new Factory(...[shared]);target.run=()=>fetch("https://spread-arguments-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Factory(value=shared){return value}const target=new Factory();target.run=()=>fetch("https://default-parameter-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};class Factory{constructor(){return shared}}const target=new Factory();target.run=()=>fetch("https://class-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},Factory=new Proxy(function(){},{construct(){return shared}});const target=new Factory();target.run=()=>fetch("https://proxy-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},Factory=new Proxy(function(){},{construct(_target,[value]){return value}}),target=new Factory(shared);target.run=()=>fetch("https://proxy-tuple-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},Factory=new Proxy(function(){},{construct(_target,args){return args[0]}}),target=new Factory(shared);target.run=()=>fetch("https://proxy-arguments-constructor-alias.invalid.example");shared.run();',
+    'const Factory=new Proxy(function Target(){},{construct(target){return target}}),left=new Factory(),right=new Factory();left.run=()=>fetch("https://proxy-target-constructor-alias.invalid.example");right.run();',
+    'const flag=true,shared={run:()=>undefined};function Factory(){return flag?shared:{}}const target=new Factory();target.run=()=>fetch("https://conditional-constructor-alias.invalid.example");shared.run();',
+    'const flag=true,shared={run:()=>undefined};function Factory(){return flag&&shared}const target=new Factory();target.run=()=>fetch("https://logical-constructor-alias.invalid.example");shared.run();',
+    'const flag=true,left={run:()=>undefined},right={run:()=>undefined};function Factory(){return flag?left:right}const target=new Factory();target.run=()=>fetch("https://branched-constructor-alias.invalid.example");left.run();',
+    'let alias;const shared={run:()=>undefined};function Factory(){return alias=shared}const target=new Factory();target.run=()=>fetch("https://assigned-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Target(){return shared}const Factory=new Proxy(Target,{}),target=new Factory();target.run=()=>fetch("https://missing-proxy-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Target(){return shared}const Factory=new Proxy(Target,{construct:undefined}),target=new Factory();target.run=()=>fetch("https://undefined-proxy-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined};function Target(){return shared}const Factory=new Proxy(Target,{construct(target,args,newTarget){return Reflect.construct(target,args,newTarget)}}),instance=new Factory();instance.run=()=>fetch("https://transparent-proxy-constructor-alias.invalid.example");shared.run();',
   ])('rejects a statically reachable aliased load effect (%s)', (prefix) => {
     const root = fixture();
     createCloudflareArtifact(root);
@@ -7998,6 +8616,130 @@ try {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow('must not execute fetch, eval, or worker effects while loading');
+  });
+
+  it('fails closed when an unresolved array spread precedes a receiver alias', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>undefined},source=getValues(),box=[...source,target];box[0].run=()=>fetch("https://opaque-spread-offset.invalid.example");target.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('fails closed for a constructor-return array pattern over a custom iterable', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const shared={run:()=>undefined},argument={[Symbol.iterator]:function*(){yield shared}};function Factory([value]){return value}const target=new Factory(argument);target.run=()=>fetch("https://iterable-constructor-alias.invalid.example");shared.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it.each([
+    'const shared={run:()=>undefined},argument={get value(){return shared}};function Factory({value}){return value}const target=new Factory(argument);target.run=()=>fetch("https://accessor-constructor-alias.invalid.example");shared.run();',
+    'const shared={run:()=>undefined},argument={get value(){return shared}},Factory=new Proxy(function(){},{construct(_target,[{value}]){return value}}),target=new Factory(argument);target.run=()=>fetch("https://proxy-accessor-constructor-alias.invalid.example");shared.run();',
+  ])(
+    'fails closed for a constructor-return accessor projection (%s)',
+    (source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'accessor properties in aggregate spreads'
+      );
+    }
+  );
+
+  it.each([
+    'source.push({});',
+    'source[1]=target;',
+    'source[Symbol.iterator]=function*(){yield target};',
+    'function mutate(){source.push({})}mutate();',
+    'function mutate(){source[1]=target}mutate();',
+    '(()=>source.push({}))();',
+    'function identity(){return source}identity().push({});',
+    'function mutate(){source.push({})}mutate.call(null);',
+    'function mutate(){source.push({})}mutate.apply(null,[]);',
+    'function mutate(){source.push({})}(flag?mutate:()=>{})();',
+    'function mutate(){source.push({})}Reflect.apply(mutate,null,[]);',
+    'function mutate(){source.push({})}mutate.bind(null)();',
+    'function mutate(){source.push({})}[mutate][0]();',
+    'function mutate(){source.push({})}(flag&&mutate)();',
+    'function mutate(){source.push({})}(maybe??mutate)();',
+    'Array.prototype.slice=()=>{source.push({});return []};source.slice();',
+  ])('fails closed after an array spread source mutation (%s)', (mutation) => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        `const target={run:()=>undefined},source=[{}];${mutation}const box=[...source,target];box[2].run=()=>fetch("https://mutated-spread.invalid.example");target.run();`
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it.each([
+    'const [first,source]=[[{}],[{}]];',
+    'const {first,source}={first:[{}],source:[{}]};',
+  ])(
+    'keeps sibling destructured spread-binding caches distinct (%s)',
+    (declaration) => {
+      expect(() =>
+        inspectCloudflareLoadEffectsForTesting(
+          `const target={run:()=>undefined};${declaration}function mutate(){Reflect.apply(Array.prototype.push,source,[{}])}mutate();const decoy=[...first],box=[...source,target];void decoy;box[2].run=()=>fetch("https://sibling-spread-cache.invalid.example");target.run();`
+        )
+      ).toThrow('requires statically analyzable aggregate spreads');
+    }
+  );
+
+  it('fails closed after an object spread source mutation', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>undefined},source={safe:{}},alias=source;alias.key=target;const box={...source};box.key.run=()=>fetch("https://mutated-object-spread.invalid.example");target.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it.each([
+    'class Mutator{constructor(){source.push({})}}new Mutator();',
+    'class Mutator{get run(){source.push({});return 1}}const mutator=new Mutator();void mutator.run;',
+    'class Mutator{set run(value){source.push(value)}}const mutator=new Mutator();mutator.run={};',
+  ])(
+    'fails closed after an executed owner mutates an array spread source (%s)',
+    (mutation) => {
+      expect(() =>
+        inspectCloudflareLoadEffectsForTesting(
+          `const target={run:()=>undefined},source=[{}];${mutation}const box=[...source,target];box[2].run=()=>fetch("https://executed-owner-spread.invalid.example");target.run();`
+        )
+      ).toThrow('requires statically analyzable aggregate spreads');
+    }
+  );
+
+  it.each([
+    'const source=[{}],length=source.length,box=[...source];void length;void box;',
+    'const source={a:1},a=source.a,box={...source};void a;void box;',
+    'const source=[{}],frozen=Object.freeze(source),box=[...source];void frozen;void box;',
+  ])(
+    'allows a read-only operation before an aggregate spread (%s)',
+    (source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it('fails closed when variable-length receiver offsets exceed their bound', () => {
+    const spreads = Array.from({ length: 513 }, () => '...source').join(',');
+    const source = `const target={run:()=>undefined},source=flag?[]:[{}],box=[${spreads},target];box[64].run=()=>fetch("https://bounded-spread-offset.invalid.example");target.run();`;
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'Cloudflare load-effect analysis exceeded bounded candidate work'
+    );
+  });
+
+  it('bounds ordinary receiver children after variable spread extents', () => {
+    const choices = Array.from(
+      { length: 9 },
+      (_, index) => `s${index}=flag?[]:[${','.repeat(2 ** index)}]`
+    ).join(',');
+    const spreads = Array.from({ length: 9 }, (_, index) => `...s${index}`);
+    const ordinary = Array.from({ length: 129 }, () => '{}');
+    const source = `const target={run:()=>undefined},${choices},box=[${[...spreads, ...ordinary, 'target'].join(',')}];box[0].run=()=>fetch("https://bounded-children.invalid.example");target.run();`;
+
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'Cloudflare load-effect analysis exceeded bounded candidate work'
+    );
   });
 
   it('keeps safe aggregate spread siblings dormant', () => {
@@ -16222,6 +16964,45 @@ try {
     ).toEqual([[]]);
   });
 
+  it.each([
+    [
+      'an array-pattern member write',
+      '[CommonTriggerDataAttributes.popupOpen]=["changed"]',
+    ],
+    [
+      'a nested object-pattern default member write',
+      '({value:{key:CommonTriggerDataAttributes.popupOpen="changed"}}={value:{}})',
+    ],
+    [
+      'an array-rest member write',
+      '[...CommonTriggerDataAttributes.popupOpen]=["changed"]',
+    ],
+    [
+      'a for-in pattern member write',
+      'for([CommonTriggerDataAttributes.popupOpen]in{changed:true}){}',
+    ],
+  ])(
+    'rejects imported primitive proof when another signed consumer performs %s',
+    (_label, mutation) => {
+      const root = createImportedStaticPrimitiveArtifact({
+        consumerSource:
+          'import{c as CommonTriggerDataAttributes}from"./primitive-owner-AAAAAAAA.js";const value=CommonTriggerDataAttributes.popupOpen;',
+        extraConsumerSources: [
+          `import{c as CommonTriggerDataAttributes}from"./primitive-owner-AAAAAAAA.js";${mutation};`,
+        ],
+        ownerSource:
+          'var CommonTriggerDataAttributes=function(CommonTriggerDataAttributes){CommonTriggerDataAttributes["popupOpen"]="data-popup-open";return CommonTriggerDataAttributes}({});export{CommonTriggerDataAttributes as c};',
+      });
+
+      expect(
+        inspectImportedStaticPrimitiveArtifact(
+          root,
+          'CommonTriggerDataAttributes.popupOpen'
+        )
+      ).toEqual([[]]);
+    }
+  );
+
   it('does not resolve a shadowed imported aggregate binding', () => {
     const root = createImportedStaticPrimitiveArtifact({
       consumerSource:
@@ -16294,6 +17075,22 @@ try {
     [
       'a string-returning factory',
       'var TSS_SERVER_FUNCTION=createKey("TSS_SERVER_FUNCTION");export{TSS_SERVER_FUNCTION as c};',
+    ],
+    [
+      'an object-pattern binding write',
+      'var TSS_SERVER_FUNCTION=Symbol.for("TSS_SERVER_FUNCTION");({key:TSS_SERVER_FUNCTION}={key:"changed"});export{TSS_SERVER_FUNCTION as c};',
+    ],
+    [
+      'an array-pattern default binding write',
+      'var TSS_SERVER_FUNCTION=Symbol.for("TSS_SERVER_FUNCTION");[TSS_SERVER_FUNCTION="changed"]=[];export{TSS_SERVER_FUNCTION as c};',
+    ],
+    [
+      'an object-rest binding write',
+      'var TSS_SERVER_FUNCTION=Symbol.for("TSS_SERVER_FUNCTION");({...TSS_SERVER_FUNCTION}={changed:true});export{TSS_SERVER_FUNCTION as c};',
+    ],
+    [
+      'a for-of pattern binding write',
+      'var TSS_SERVER_FUNCTION=Symbol.for("TSS_SERVER_FUNCTION");for([TSS_SERVER_FUNCTION]of[["changed"]]){}export{TSS_SERVER_FUNCTION as c};',
     ],
   ])(
     'rejects imported static symbol proof through %s',
