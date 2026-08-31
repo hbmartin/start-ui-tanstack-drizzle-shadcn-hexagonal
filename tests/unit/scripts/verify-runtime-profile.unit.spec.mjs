@@ -5087,7 +5087,7 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
       ],
       ownership: 'mixed',
       sha256:
-        '19bc864fb883884a0099e49637398e7f7a2165c6c00bbc835481b33aa5207d49',
+        '13a9ba7c7a9f31f705778621b8544b03c5b1584ca0d8509d7a0826e6dd450907',
     };
     const policies =
       inspectCloudflareReviewedClosurePolicyForTesting(
