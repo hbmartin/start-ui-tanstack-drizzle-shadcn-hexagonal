@@ -45,6 +45,7 @@ import {
   inspectCloudflareReviewedExportConsumerProofForTesting,
   inspectCloudflareReviewedExportMutationPlanForTesting,
   inspectCloudflareReviewedFreshExportReceiversForTesting,
+  inspectCloudflareReviewedMutationRelocationForTesting,
   inspectCloudflareReviewedPolicyValidationForTesting,
   inspectCloudflareReviewedOriginDirectAliasProofForTesting,
   inspectCloudflareReviewedStaticMemberDeferredResultForTesting,
@@ -52,6 +53,7 @@ import {
   inspectCloudflareProvisionalReceiverDetailsForTesting,
   inspectCloudflareProductionKernelStaticShapeForTesting,
   inspectCloudflareReceiverDetailsForTesting,
+  inspectCloudflareSpreadStabilityCacheForTesting,
   inspectCloudflareReviewedReceiverMutationsForTesting,
   inspectCloudflareReviewedSingletonReceiverRootsForTesting,
   inspectCloudflareFactoryOriginLineagesForTesting,
@@ -4985,6 +4987,48 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
     ).toThrow('test source hash must match');
   });
 
+  it.each([
+    [
+      'the emitted schemas chunk',
+      'b2e3828594675b9262c546998aa09ba14d1c0a98d9cb1c38f7eb6ebd04c8ea06',
+      5370,
+      5391,
+    ],
+    [
+      'the alternate reviewed Zod chunk',
+      'b58b76143de945661f801945b38db191e2fbe55ecd29e98f6d30fd9d54cec758',
+      5262,
+      5283,
+    ],
+  ])(
+    'pins constructed-local clone suppression to %s',
+    (_label, sha256, mutationStart, mutationEnd) => {
+      const policy = inspectCloudflareReviewedClosurePolicyForTesting({
+        modules: [
+          {
+            id: 'node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js',
+            owner: 'non-app',
+          },
+        ],
+        ownership: 'non-app',
+        sha256,
+      });
+      expect(
+        policy.opaqueMemberMutationExemptions.filter(
+          ({ suppressOpaqueConstructedLocalMutation }) =>
+            suppressOpaqueConstructedLocalMutation === true
+        )
+      ).toEqual([
+        expect.objectContaining({
+          expectedMutationSource: 'cl._zod.parent = inst',
+          mutationEnd,
+          mutationStart,
+          mutationType: 'AssignmentExpression',
+        }),
+      ]);
+    }
+  );
+
   it('does not share a reviewed closure between Programs with the same analysis label', () => {
     expect(
       inspectCloudflareReviewedClosureProgramIsolationForTesting()
@@ -5377,6 +5421,34 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
     ).toEqual([]);
   });
 
+  it('preserves a concrete alias created by a reviewed constructed-local mutation', () => {
+    const source =
+      'function C(){}function clone(inst){const cl=new C();cl._zod={};cl._zod.parent=inst;return cl}const shared={run:()=>undefined},copy=clone(shared);shared.run=()=>fetch("https://constructed-reverse.invalid.example");copy._zod.parent.run();';
+    const expectedMutationSource = 'cl._zod.parent=inst';
+    const mutationStart = source.indexOf(expectedMutationSource);
+    const mutationEnd = mutationStart + expectedMutationSource.length;
+    const reviewedClosure = {
+      opaqueMemberMutationExemptions: [
+        {
+          expectedMutationSource,
+          mutationEnd,
+          mutationStart,
+          mutationType: 'AssignmentExpression',
+          reason:
+            'The exact local clone link suppresses only unrelated opaque propagation.',
+          suppressOpaqueConstructedLocalMutation: true,
+        },
+      ],
+    };
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContainEqual(
+      expect.stringContaining('fetch(')
+    );
+    expect(
+      inspectCloudflareReviewedLoadEffectsForTesting(source, reviewedClosure)
+    ).toContainEqual(expect.stringContaining('fetch('));
+  });
+
   it('validates reviewed exemption sources, ranges, and uniqueness', () => {
     const source = 'const target={};target.run=()=>0;target.run();';
     const mutationStart = source.indexOf('target.run=');
@@ -5427,6 +5499,43 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
         ],
       })
     ).toThrow('must not define unknown policy fields');
+  });
+
+  it('relocates an authenticated mutation exemption only by unique source', () => {
+    const reviewedSource = 'const target={};target.run=()=>0;';
+    const mutationStart = reviewedSource.indexOf('target.run=');
+    const mutationEnd = reviewedSource.indexOf(';', mutationStart);
+    const reviewedClosure = {
+      opaqueMemberMutationExemptions: [
+        {
+          expectedMutationSource: reviewedSource.slice(
+            mutationStart,
+            mutationEnd
+          ),
+          mutationEnd,
+          mutationStart,
+          mutationType: 'AssignmentExpression',
+          reason:
+            'The authenticated mutation may relocate once in a bundled closure.',
+          suppressOpaqueMutation: true,
+        },
+      ],
+    };
+
+    expect(
+      inspectCloudflareReviewedMutationRelocationForTesting(
+        reviewedSource,
+        `const prefix=0;${reviewedSource}`,
+        reviewedClosure
+      )
+    ).toEqual([true]);
+    expect(
+      inspectCloudflareReviewedMutationRelocationForTesting(
+        reviewedSource,
+        `const prefix=0;${reviewedSource}${reviewedSource}`,
+        reviewedClosure
+      )
+    ).toEqual([false, false]);
   });
 
   it('resolves a projected parameter receiver in each call-site scope', () => {
@@ -6592,6 +6701,38 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
   ])('orders a mutation performed by an active %s', (_label, source) => {
     expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
       'fetch("https://invalid.example")'
+    );
+  });
+
+  it.each([
+    [
+      'prototype method',
+      'function outer(){class C{run(){fetch("https://invalid.example")}}return new C()}outer().run();',
+    ],
+    [
+      'constructor-assigned member',
+      'function outer(){class C{constructor(){this.run=()=>fetch("https://invalid.example")}}return new C()}outer().run();',
+    ],
+    [
+      'post-construction member alias',
+      'function clone(inst){class C{}const cl=new C();cl.parent=inst;return cl}const source={run:()=>fetch("https://invalid.example")};clone(source).parent.run();',
+    ],
+    [
+      'factory-forwarded constructor',
+      'function make(C){return new C()}function outer(){class C{run(){fetch("https://invalid.example")}}return make(C)}outer().run();',
+    ],
+  ])('recovers a factory-returned local class %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://invalid.example")'
+    );
+  });
+
+  it('specializes a constructor-returned nested factory alias', () => {
+    const source =
+      'function C(value){value._zod={};return value}function clone(inst){const target={run:()=>undefined};const cl=new C(target);cl._zod.parent=inst;return cl}const shared={run:()=>undefined},copy=clone(shared);shared.run=()=>fetch("https://constructor-parameter.invalid.example");copy._zod.parent.run();';
+
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContain(
+      'fetch("https://constructor-parameter.invalid.example")'
     );
   });
 
@@ -8616,6 +8757,495 @@ try {
         expectedAppSlug: 'acme-app',
       })
     ).toThrow('must not execute fetch, eval, or worker effects while loading');
+  });
+
+  it.each([
+    [
+      'an implicit derived plain-function constructor',
+      'const shared={run:()=>undefined};function Base(){return shared}class Factory extends Base{}const target=new Factory();target.run=()=>fetch("https://derived-constructor.invalid.example");shared.run();',
+    ],
+    [
+      'an explicit derived plain-function constructor argument',
+      'const shared={run:()=>undefined};function Base(value){return value}class Factory extends Base{constructor(value){super(value)}}const target=new Factory(shared);target.run=()=>fetch("https://derived-argument.invalid.example");shared.run();',
+    ],
+    [
+      'an explicit derived plain-function constructor remapping',
+      'const shared={run:()=>undefined};function Base(value){return value}class Factory extends Base{constructor(){super(shared)}}const target=new Factory();target.run=()=>fetch("https://derived-remapping.invalid.example");shared.run();',
+    ],
+    [
+      'an implicit derived Proxy constructor',
+      'const shared={run:()=>undefined},Base=new Proxy(function(){},{construct(){return shared}});class Factory extends Base{}const target=new Factory();target.run=()=>fetch("https://derived-proxy.invalid.example");shared.run();',
+    ],
+    [
+      'an explicit derived Proxy constructor remapping',
+      'const shared={run:()=>undefined},Base=new Proxy(function(){},{construct(_target,args){return args[0]}});class Factory extends Base{constructor(){super(shared)}}const target=new Factory();target.run=()=>fetch("https://derived-proxy-remapping.invalid.example");shared.run();',
+    ],
+    [
+      'an intermediate derived constructor remapping',
+      'const shared={run:()=>undefined};function Base(value){return value}class Middle extends Base{constructor(){super(shared)}}class Factory extends Middle{}const target=new Factory();target.run=()=>fetch("https://intermediate-derived-remapping.invalid.example");shared.run();',
+    ],
+    [
+      'multiple explicit super branches targeting the same class',
+      'const shared={run:()=>undefined},fresh={run:()=>undefined},flag=1>2;class Base{constructor(value){return value}}class Factory extends Base{constructor(){if(flag){super(fresh)}else{super(shared)}}}const target=new Factory();target.run=()=>fetch("https://branched-derived-remapping.invalid.example");shared.run();',
+    ],
+    [
+      'multiple intermediate super branches targeting the same class',
+      'const shared={run:()=>undefined},fresh={run:()=>undefined},flag=1>2;class Base{constructor(value){return value}}class Middle extends Base{constructor(){if(flag){super(fresh)}else{super(shared)}}}class Factory extends Middle{}const target=new Factory();target.run=()=>fetch("https://branched-intermediate-remapping.invalid.example");shared.run();',
+    ],
+    [
+      'a lexical-arrow super invocation',
+      'const shared={run:()=>undefined};function Base(value){return value}class Factory extends Base{constructor(){const initialize=()=>super(shared);initialize()}}const target=new Factory();target.run=()=>fetch("https://lexical-arrow-super.invalid.example");shared.run();',
+    ],
+    [
+      'nested transparent Proxy constructor delegation',
+      'const shared={run:()=>undefined};function Direct(value){return value}const Inner=new Proxy(Direct,{}),Base=new Proxy(Inner,{});class Factory extends Base{constructor(){super(shared)}}const target=new Factory();target.run=()=>fetch("https://nested-proxy-constructor.invalid.example");shared.run();',
+    ],
+    [
+      'a Proxy trap remapping through Reflect.construct',
+      'const shared={run:()=>undefined};function Direct(value){return value}const Base=new Proxy(Direct,{construct(target,_args,newTarget){return Reflect.construct(target,[shared],newTarget)}});class Factory extends Base{}const target=new Factory();target.run=()=>fetch("https://reflect-proxy-constructor.invalid.example");shared.run();',
+    ],
+    [
+      'a Proxy argument projection remapping through Reflect.construct',
+      'const shared={run:()=>undefined},fresh={run:()=>undefined};function Direct(value){return value}const Base=new Proxy(Direct,{construct(target,args,newTarget){return Reflect.construct(target,[args[1]],newTarget)}});class Factory extends Base{}const target=new Factory(fresh,shared);target.run=()=>fetch("https://reflect-projected-proxy-constructor.invalid.example");shared.run();',
+    ],
+    [
+      'an aliased Proxy argument remapping through Reflect.construct',
+      'const shared={run:()=>undefined},fresh={run:()=>undefined};function Direct(value){return value}const Base=new Proxy(Direct,{construct(target,args,newTarget){const value=args[1];return Reflect.construct(target,[value],newTarget)}});class Factory extends Base{}const target=new Factory(fresh,shared);target.run=()=>fetch("https://reflect-aliased-proxy-constructor.invalid.example");shared.run();',
+    ],
+    [
+      'implicit Proxy arguments remapping through Reflect.construct',
+      'const shared={run:()=>undefined},fresh={run:()=>undefined};function Direct(value){return value}const Base=new Proxy(Direct,{construct(){return Reflect.construct(arguments[0],[arguments[1][1]],arguments[2])}});class Factory extends Base{}const target=new Factory(fresh,shared);target.run=()=>fetch("https://reflect-implicit-proxy-constructor.invalid.example");shared.run();',
+    ],
+    [
+      'a mixed Proxy and plain-function constructor callee',
+      'const shared={run:()=>undefined};function Direct(){return shared}const Proxied=new Proxy(function(){},{construct(){return{}}}),flag=1<2,Factory=flag?Proxied:Direct,target=new Factory();target.run=()=>fetch("https://mixed-constructor.invalid.example");shared.run();',
+    ],
+    [
+      'a mixed plain-function and Proxy constructor callee',
+      'const shared={run:()=>undefined};function Direct(){return{}}const Proxied=new Proxy(function(){},{construct(){return shared}}),flag=1<2,Factory=flag?Proxied:Direct,target=new Factory();target.run=()=>fetch("https://mixed-proxy-constructor.invalid.example");shared.run();',
+    ],
+    [
+      'an unresolved derived constructor shared across instances',
+      'class Factory extends ExternalBase{}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://opaque-derived.invalid.example");right.run();',
+    ],
+    [
+      'a known or unresolved constructor shared across instances',
+      'class Fresh{constructor(){return{run:()=>undefined}}}const flag=1<2,Factory=flag?Fresh:External,left=new Factory(),right=new Factory();left.run=()=>fetch("https://opaque-constructor-alternative.invalid.example");right.run();',
+    ],
+    [
+      'a known or unresolved derived base shared across instances',
+      'class KnownFresh{constructor(){return{run:()=>undefined}}}const flag=1<2,Base=flag?KnownFresh:External;class Factory extends Base{}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://opaque-base-alternative.invalid.example");right.run();',
+    ],
+    [
+      'an unresolved Proxy construct trap shared across instances',
+      'class Fresh{constructor(){return{run:()=>undefined}}}const Base=new Proxy(Fresh,{construct:ExternalTrap});class Factory extends Base{}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://opaque-proxy-trap.invalid.example");right.run();',
+    ],
+  ])('retains constructor provenance through %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([
+      expect.stringContaining('fetch('),
+    ]);
+  });
+
+  it('fails closed without overflowing cyclic Proxy constructor analysis', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const shared={run:()=>undefined};let Factory;Factory=new Proxy(Factory,{});const left=new Factory(),right=new Factory();left.run=()=>fetch("https://cyclic-proxy-constructor.invalid.example");right.run();'
+      )
+    ).toContainEqual(expect.stringContaining('fetch('));
+  });
+
+  it.each([
+    [
+      'a self-returning function constructor',
+      'function Factory(){return new Factory()}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://self-returning-function-constructor.invalid.example");right.run();',
+    ],
+    [
+      'a self-returning class constructor',
+      'class Factory{constructor(){return new Factory()}}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://self-returning-class-constructor.invalid.example");right.run();',
+    ],
+    [
+      'mutually recursive constructors',
+      'function Left(){return new Right()}function Right(){return new Left()}const left=new Left(),right=new Left();left.run=()=>fetch("https://mutual-constructor-cycle.invalid.example");right.run();',
+    ],
+  ])('fails closed without overflowing %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContainEqual(
+      expect.stringContaining('fetch(')
+    );
+  });
+
+  it.each([
+    [
+      'transparent proxies over one shared target',
+      'const shared={run:()=>undefined};const left=new Proxy(shared,{}),right=new Proxy(shared,{});left.run=()=>fetch("https://proxy-shared-target.invalid.example");right.run();',
+    ],
+    [
+      'nested transparent proxies over one shared target',
+      'const shared={run:()=>undefined};const left=new Proxy(new Proxy(shared,{}),{}),right=new Proxy(new Proxy(shared,{}),{});left.run=()=>fetch("https://nested-proxy-shared-target.invalid.example");right.run();',
+    ],
+  ])('tracks receiver aliases through %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContainEqual(
+      expect.stringContaining('fetch(')
+    );
+  });
+
+  it.each([
+    [
+      'a plain-function base returning fresh objects',
+      'function Base(){return{run:()=>undefined}}class Factory extends Base{}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-derived.invalid.example");right.run();',
+    ],
+    [
+      'a Proxy base returning fresh objects',
+      'const Base=new Proxy(function(){},{construct(){return{run:()=>undefined}}});class Factory extends Base{}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-derived-proxy.invalid.example");right.run();',
+    ],
+    [
+      'mixed constructors returning fresh objects',
+      'function Direct(){return{run:()=>undefined}}const Proxied=new Proxy(function(){},{construct(){return{run:()=>undefined}}}),flag=1<2,Factory=flag?Proxied:Direct,left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-mixed.invalid.example");right.run();',
+    ],
+    [
+      'an explicit super mapping that excludes a shared decoy',
+      'const shared={run:()=>undefined},fresh={run:()=>undefined};function Base(value){return value}class Factory extends Base{constructor(){super(fresh)}}const target=new Factory();target.run=()=>fetch("https://fresh-explicit-mapping.invalid.example");shared.run();',
+    ],
+    [
+      'an unreachable explicit super mapping that excludes a shared decoy',
+      'const shared={run:()=>undefined},fresh={run:()=>undefined};class Base{constructor(value){return value}}class Factory extends Base{constructor(){if(true){super(fresh)}else{super(shared)}}}const target=new Factory();target.run=()=>fetch("https://fresh-unreachable-explicit-mapping.invalid.example");shared.run();',
+    ],
+    [
+      'nested Proxy alternatives returning fresh objects',
+      'const flag=1<2;function Base(){return{run:()=>undefined}}const Inner=new Proxy(Base,{}),Outer=new Proxy(Inner,{}),Factory=flag?Outer:Inner,left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-nested-proxy-alternative.invalid.example");right.run();',
+    ],
+    [
+      'an unreachable self-returning function constructor branch',
+      'function Factory(){if(false)return new Factory();return{run:()=>undefined}}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-unreachable-function-cycle.invalid.example");right.run();',
+    ],
+    [
+      'an unreachable self-returning class constructor branch',
+      'class Factory{constructor(){if(false)return new Factory();return{run:()=>undefined}}}const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-unreachable-class-cycle.invalid.example");right.run();',
+    ],
+    [
+      'an unreachable self-returning Proxy constructor branch',
+      'let Factory;function Direct(){return{run:()=>undefined}}Factory=new Proxy(Direct,{construct(){if(false)return new Factory();return{run:()=>undefined}}});const left=new Factory(),right=new Factory();left.run=()=>fetch("https://fresh-unreachable-proxy-cycle.invalid.example");right.run();',
+    ],
+  ])(
+    'keeps distinct construction results isolated for %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it('fails closed after a loop-carried aggregate spread mutation', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://loop-carried-spread.invalid.example");source.push({});void value}target.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('fails closed after a do-while test mutates a prior aggregate spread', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>undefined},source=[{}];let index=0;do{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://do-while-spread.invalid.example")}while((source.push({}),index++<1));target.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('fails closed when an increment setter mutates a later spread source', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>undefined},source=[{}],obj={get x(){return 0},set x(_value){source.push({})}};obj.x++;const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://increment-setter-spread.invalid.example");target.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('fails closed for loop-carried spread mutation across a called helper', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://loop-helper-spread.invalid.example")}for(const value of [0,1]){build();source.push({});void value}target.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it('fails closed for loop-carried spread mutation in an array callback', () => {
+    expect(() =>
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>undefined},source=[{}];[0,1].forEach((value)=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://array-callback-spread.invalid.example");source.push({});void value});target.run();'
+      )
+    ).toThrow('requires statically analyzable aggregate spreads');
+  });
+
+  it.each([
+    [
+      'an identifier alias',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://alias-loop.invalid.example")}const wrapper=build;for(const value of [0,1]){wrapper();source.push({});void value}target.run();',
+    ],
+    [
+      'a bound alias',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://bound-loop.invalid.example")}const wrapper=build.bind(null);for(const value of [0,1]){wrapper();source.push({});void value}target.run();',
+    ],
+    [
+      'an object member',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://member-loop.invalid.example")}const api={build};for(const value of [0,1]){api.build();source.push({});void value}target.run();',
+    ],
+    [
+      'a transitive array callback',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://transitive-callback-loop.invalid.example")}function wrapper(){build()}[0,1].forEach(()=>{wrapper();source.push({})});target.run();',
+    ],
+    [
+      'a callback parameter specialization',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://parameter-callback-loop.invalid.example")}function each(fn){[0,1].forEach(()=>{fn();source.push({})})}each(build);target.run();',
+    ],
+  ])(
+    'fails closed for loop-carried spread mutation through %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'requires statically analyzable aggregate spreads'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'a direct callback parameter',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://direct-parameter-callback.invalid.example");source.push({})}function each(fn){[0,1].forEach(fn)}each(build);target.run();',
+    ],
+    [
+      'a returned closure',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://returned-closure.invalid.example")}function wrap(fn){return()=>fn()}const wrapper=wrap(build);for(const value of [0,1]){wrapper();source.push({});void value}target.run();',
+    ],
+    [
+      'a factory-returned array callback',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://factory-returned-callback.invalid.example");source.push({})}function wrap(fn){return()=>fn()}const wrapper=wrap(build);[0,1].forEach(wrapper);target.run();',
+    ],
+    [
+      'an object-destructured alias',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://object-destructured.invalid.example")}const {build:wrapper}={build};for(const value of [0,1]){wrapper();source.push({});void value}target.run();',
+    ],
+    [
+      'an array-destructured alias',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://array-destructured.invalid.example")}const [wrapper]=[build];for(const value of [0,1]){wrapper();source.push({});void value}target.run();',
+    ],
+    [
+      'Array.prototype.forEach.call',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://foreach-call.invalid.example");source.push({})}Array.prototype.forEach.call([0,1],build);target.run();',
+    ],
+    [
+      'an extracted forEach.call',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://extracted-foreach-call.invalid.example");source.push({})}const each=Array.prototype.forEach;each.call([0,1],build);target.run();',
+    ],
+    [
+      'a bound forEach callback',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://bound-foreach.invalid.example");source.push({})}[0,1].forEach.bind([0,1],build)();target.run();',
+    ],
+    [
+      'Array.prototype.reduce',
+      'const target={run:()=>undefined},source=[{}];function build(acc){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://reduce.invalid.example");source.push({});return acc}[0,1].reduce(build,0);target.run();',
+    ],
+    [
+      'Array.prototype.reduceRight',
+      'const target={run:()=>undefined},source=[{}];function build(acc){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://reduce-right.invalid.example");source.push({});return acc}[0,1].reduceRight(build,0);target.run();',
+    ],
+    [
+      'Array.prototype.sort',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://sort.invalid.example");source.push({});return 0}[3,2,1].sort(build);target.run();',
+    ],
+    [
+      'Array.from mapping',
+      'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://array-from.invalid.example");source.push({});return 0}Array.from([0,1],build);target.run();',
+    ],
+  ])('fails closed through %s', (_label, source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'requires statically analyzable aggregate spreads'
+    );
+  });
+
+  it.each(['[0]', '[]'])(
+    'does not use literal callback cardinality after forEach is replaced (%s)',
+    (receiver) => {
+      expect(() =>
+        inspectCloudflareLoadEffectsForTesting(
+          `const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://overridden-foreach.invalid.example");source.push({})}Array.prototype.forEach=function(fn){fn();fn()};${receiver}.forEach(build);target.run();`
+        )
+      ).toThrow('requires statically analyzable aggregate spreads');
+    }
+  );
+
+  it.each([
+    [
+      'a sparse for-of source',
+      'const target={run:()=>undefined},source=[{}];for(const value of [,,]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://sparse-loop.invalid.example");source.push({});void value}target.run();',
+    ],
+    [
+      'a mutated for-of source',
+      'const target={run:()=>undefined},source=[{}],values=[0];values.push(1);for(const value of values){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://mutated-loop.invalid.example");source.push({});void value}target.run();',
+    ],
+    [
+      'a mutated array-callback receiver',
+      'const target={run:()=>undefined},source=[{}],values=[0];values.push(1);values.forEach(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://mutated-callback.invalid.example");source.push({})});target.run();',
+    ],
+    [
+      'a forEach callback return',
+      'const target={run:()=>undefined},source=[{}];[0,1].forEach(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://foreach-return.invalid.example");source.push({});return});target.run();',
+    ],
+    [
+      'a some callback return',
+      'const target={run:()=>undefined},source=[{}];[0,1].some(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://some-return.invalid.example");source.push({});return false});target.run();',
+    ],
+    [
+      'an every callback return',
+      'const target={run:()=>undefined},source=[{}];[0,1].every(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://every-return.invalid.example");source.push({});return true});target.run();',
+    ],
+    [
+      'a find callback return',
+      'const target={run:()=>undefined},source=[{}];[0,1].find(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://find-return.invalid.example");source.push({});return false});target.run();',
+    ],
+    [
+      'a continue path before a later break',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://continue-loop.invalid.example");source.push({});if(true)continue;break;void value}target.run();',
+    ],
+  ])(
+    'fails closed for a repeating spread mutation through %s',
+    (_label, source) => {
+      expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+        'requires statically analyzable aggregate spreads'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'a switch continue to the outer loop',
+      'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://switch-continue.invalid.example");source.push({});switch(0){case 0:continue outer}break;void value}target.run();',
+    ],
+    [
+      'a nested-loop continue to the outer loop',
+      'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://nested-continue.invalid.example");source.push({});for(const inner of [0]){void inner;continue outer}break;void value}target.run();',
+    ],
+    [
+      'a try/finally continue path',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://finally-continue.invalid.example");source.push({});try{continue}finally{}break;void value}target.run();',
+    ],
+    [
+      'an unreachable outer break after an inner break',
+      'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://unreachable-outer-break.invalid.example");source.push({});for(const inner of [0]){break;break outer;void inner}void value}target.run();',
+    ],
+    [
+      'a switch fallthrough after a labeled-block break',
+      'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://switch-labeled-break.invalid.example");source.push({});switch(0){case 0:label:break;case 1:break outer}void value}target.run();',
+    ],
+  ])('fails closed through %s', (_label, source) => {
+    expect(() => inspectCloudflareLoadEffectsForTesting(source)).toThrow(
+      'requires statically analyzable aggregate spreads'
+    );
+  });
+
+  it.each([
+    [
+      'a statically false loop',
+      'const target={run:()=>undefined},source=[{}];while(false){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://false-loop.invalid.example");source.push({})}target.run();',
+    ],
+    [
+      'an unreachable mutation after break',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://post-break-loop.invalid.example");break;source.push({});void value}target.run();',
+    ],
+    [
+      'a mutation before an unconditional break',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://single-iteration-loop.invalid.example");source.push({});break;void value}target.run();',
+    ],
+  ])('keeps a non-repeating spread mutation safe for %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'sparse forEach',
+      'const target={run:()=>undefined},source=[{}];[,,].forEach(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://sparse-foreach.invalid.example");source.push({})});target.run();',
+    ],
+    [
+      'sparse map',
+      'const target={run:()=>undefined},source=[{}];[,,].map(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://sparse-map.invalid.example");source.push({})});target.run();',
+    ],
+    [
+      'sparse filter',
+      'const target={run:()=>undefined},source=[{}];[,,].filter(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://sparse-filter.invalid.example");source.push({});return true});target.run();',
+    ],
+    [
+      'some that stops immediately',
+      'const target={run:()=>undefined},source=[{}];[0,1].some(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-some.invalid.example");source.push({});return true});target.run();',
+    ],
+    [
+      'every that stops immediately',
+      'const target={run:()=>undefined},source=[{}];[0,1].every(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-every.invalid.example");source.push({});return false});target.run();',
+    ],
+    [
+      'find that stops immediately',
+      'const target={run:()=>undefined},source=[{}];[0,1].find(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-find.invalid.example");source.push({});return true});target.run();',
+    ],
+    [
+      'findIndex that stops immediately',
+      'const target={run:()=>undefined},source=[{}];[0,1].findIndex(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-find-index.invalid.example");source.push({});return true});target.run();',
+    ],
+    [
+      'findLast that stops immediately',
+      'const target={run:()=>undefined},source=[{}];[0,1].findLast(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-find-last.invalid.example");source.push({});return true});target.run();',
+    ],
+    [
+      'findLastIndex that stops immediately',
+      'const target={run:()=>undefined},source=[{}];[0,1].findLastIndex(()=>{const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://stopping-find-last-index.invalid.example");source.push({});return true});target.run();',
+    ],
+  ])(
+    'keeps a statically non-repeating callback safe for %s',
+    (_label, source) => {
+      expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+    }
+  );
+
+  it.each([
+    [
+      'a switch break to the outer loop',
+      'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://switch-break.invalid.example");source.push({});switch(0){case 0:break outer}void value}target.run();',
+    ],
+    [
+      'a nested-loop break to the outer loop',
+      'const target={run:()=>undefined},source=[{}];outer:for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://nested-break.invalid.example");source.push({});for(const inner of [0]){void inner;break outer}void value}target.run();',
+    ],
+    [
+      'a finally block that breaks the loop',
+      'const target={run:()=>undefined},source=[{}];for(const value of [0,1]){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://finally-break.invalid.example");try{source.push({})}finally{break}void value}target.run();',
+    ],
+  ])('keeps one-iteration structured control safe for %s', (_label, source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toEqual([]);
+  });
+
+  it.each([
+    'function run(){label:{break label;}fetch("https://reachable-after-label.invalid.example")}run();',
+    'function run(){label:{if(true)break label;}fetch("https://reachable-after-conditional-label.invalid.example")}run();',
+  ])('keeps execution after a labeled break reachable (%s)', (source) => {
+    expect(inspectCloudflareLoadEffectsForTesting(source)).toContainEqual(
+      expect.stringContaining('fetch(')
+    );
+  });
+
+  it('ignores a projected spread invocation after an unconditional break', () => {
+    expect(
+      inspectCloudflareLoadEffectsForTesting(
+        'const target={run:()=>undefined},source=[{}];function build(){const box=[...source,target];if(box[2])box[2].run=()=>fetch("https://unreachable-helper.invalid.example")}for(const value of [0,1]){source.push({});break;build();void value}target.run();'
+      )
+    ).toEqual([]);
+  });
+
+  it('invalidates spread stability when accessor resolution changes', () => {
+    expect(
+      inspectCloudflareSpreadStabilityCacheForTesting(
+        'const source=[{}],obj={get x(){return 0},set x(value){source.push(value)}};void obj.x;const box=[...source];void box;'
+      )
+    ).toEqual({
+      after: false,
+      before: true,
+      cacheKeyChanged: true,
+      cachePreservedDuringTransient: true,
+      duringMutationProgramBuild: true,
+      transientCacheability: [false, false, false],
+      transientRecomputed: true,
+    });
   });
 
   it('fails closed when an unresolved array spread precedes a receiver alias', () => {
