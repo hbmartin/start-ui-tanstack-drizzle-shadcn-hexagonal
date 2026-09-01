@@ -384,6 +384,12 @@ describe('Fallow guardrails', () => {
       'audit-infrastructure',
     ]);
     expect(
+      report.boundaries.zones.find(({ name }) => name === 'modules/audit')
+    ).toMatchObject({ file_count: expect.any(Number) });
+    expect(
+      report.boundaries.zones.find(({ name }) => name === 'modules/profile')
+    ).toMatchObject({ file_count: expect.any(Number) });
+    expect(
       report.boundaries.zones
         .filter((zone) => zone.name !== 'router')
         .every((zone) => zone.file_count > 0)

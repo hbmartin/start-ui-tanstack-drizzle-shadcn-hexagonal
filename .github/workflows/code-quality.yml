@@ -134,7 +134,7 @@ jobs:
         run: pnpm quality:fallow
 
       - name: Gate changed-code regressions
-        run: pnpm quality:audit --format github-annotations
+        run: pnpm quality:audit --format compact
 
       - name: Ensure static checks did not mutate files
         run: git diff --exit-code -- .

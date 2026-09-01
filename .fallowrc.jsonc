@@ -177,7 +177,6 @@
   "audit": {
     "gate": "new-only",
     "css": false,
-    "deadCodeBaseline": "fallow-baselines/dead-code.json",
     "healthBaseline": "fallow-baselines/health.json",
     "dupesBaseline": "fallow-baselines/dupes.json",
   },
@@ -364,6 +363,14 @@
       {
         "name": "server-functions",
         "patterns": ["src/modules/*/transport/server-functions/**"],
+      },
+      {
+        "name": "modules/audit",
+        "patterns": ["src/modules/audit/**"],
+      },
+      {
+        "name": "modules/profile",
+        "patterns": ["src/modules/profile/**"],
       },
       {
         "name": "modules",
