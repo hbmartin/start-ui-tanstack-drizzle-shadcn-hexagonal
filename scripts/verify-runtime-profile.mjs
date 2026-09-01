@@ -44157,7 +44157,7 @@ const cloudflareTanStackOwnerDigests = Object.freeze({
   // 59-module provenance set as the preceding router closure. The only
   // semantic owner delta is RootDocument's typed language-presentation lookup.
   routerLocalClosure:
-    '428251121ec83a42213899cd872a665ce28587843abeab5bdbb69f0f9d67c421',
+    'aeb2821b43d491e8d5c1a1f8f1c82ef895c8ca14c2d97f48a155d4d62ac2f81f',
   serverClosure:
     '9ae59e0b6fed6b31842a1cc68e867041025ff20022f3356eaf5157b5c8b113ef',
   serverEdgeClosure:
@@ -44166,7 +44166,7 @@ const cloudflareTanStackOwnerDigests = Object.freeze({
   // 13-module logical provenance set as the preceding start closure. Its
   // emitted-identity substitutions add no owner, edge, or start.ts mutation.
   startOwnerClosure:
-    '8132a8027f31bc465bf13821ebeb6e01620961541fdcf6ca001e4c9aad4f6e05',
+    '4d6fe17a1927ededcb2695098ca75ad48a179cae999b4c1999955f5fbedf95e2',
 });
 const ignoredAstDigestKeys = new Set(['end', 'loc', 'raw', 'start']);
 const normalizeAstDigestValue = (key, value) => {
