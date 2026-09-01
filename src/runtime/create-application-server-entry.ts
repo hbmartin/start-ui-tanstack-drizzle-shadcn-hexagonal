@@ -19,6 +19,20 @@ export type RuntimeRequestLifecycle = {
 
 export type RuntimeRequestScope = <T>(operation: () => T) => T;
 
+type SynchronousInvocation<T> =
+  | { type: 'returned'; value: T }
+  | { type: 'threw'; failure: unknown };
+
+const captureSynchronousInvocation = <T>(
+  operation: () => T
+): SynchronousInvocation<T> => {
+  try {
+    return { type: 'returned', value: operation() };
+  } catch (failure) {
+    return { type: 'threw', failure };
+  }
+};
+
 /**
  * Import-safe universal bootstrap. Instrumentation is evaluated before the
  * telemetry provider and TanStack handler, and the deployment entrypoint
@@ -76,12 +90,13 @@ export const createApplicationServerEntry = async (
         applicationResult ??= handleRequest();
         return applicationResult;
       };
-      try {
-        return requestScope(runApplicationOnce); // NOSONAR -- only synchronous request-scope setup failures are handled here.
-      } catch (failure) {
-        reportTelemetryFailure('sentry.request_scope', failure);
-        return applicationResult ?? runApplicationOnce();
-      }
+      const scopeInvocation = captureSynchronousInvocation(() =>
+        requestScope(runApplicationOnce)
+      );
+      if (scopeInvocation.type === 'returned') return scopeInvocation.value;
+
+      reportTelemetryFailure('sentry.request_scope', scopeInvocation.failure);
+      return applicationResult ?? runApplicationOnce();
     },
   };
 

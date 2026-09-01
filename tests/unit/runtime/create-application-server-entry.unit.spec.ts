@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runtimeProfiles } from '@/platform/runtime/runtime-profile';
+import type { RuntimeRequestScope } from '@/runtime/create-application-server-entry';
 
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(async () => new Response('ok')),
@@ -67,6 +68,96 @@ describe('application server entry runtime profile', () => {
     expect(mocks.reportTelemetryFailure).not.toHaveBeenCalledWith(
       'sentry.request_scope',
       expect.anything()
+    );
+  });
+
+  it('reports a synchronous request-scope setup failure and still serves the request', async () => {
+    const scopeFailure = new Error('request scope failed');
+    const scopeEntered = vi.fn();
+    const requestScope: RuntimeRequestScope = <T>(_operation: () => T): T => {
+      scopeEntered();
+      throw scopeFailure;
+    };
+    const { createApplicationServerEntry } =
+      await import('@/runtime/create-application-server-entry');
+    const entry = await createApplicationServerEntry(
+      'node',
+      undefined,
+      requestScope
+    );
+
+    const response = await entry.fetch(new Request('https://app.example/'), {
+      context: undefined as never,
+    });
+
+    expect(await response.text()).toBe('ok');
+    expect(scopeEntered).toHaveBeenCalledOnce();
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledWith(
+      'sentry.request_scope',
+      scopeFailure
+    );
+  });
+
+  it('does not run the application twice when the request scope throws after invoking it', async () => {
+    const scopeFailure = new Error('request scope teardown failed');
+    const scopeEntered = vi.fn();
+    const requestScope: RuntimeRequestScope = <T>(operation: () => T): T => {
+      scopeEntered();
+      operation();
+      throw scopeFailure;
+    };
+    const { createApplicationServerEntry } =
+      await import('@/runtime/create-application-server-entry');
+    const entry = await createApplicationServerEntry(
+      'node',
+      undefined,
+      requestScope
+    );
+
+    const response = await entry.fetch(new Request('https://app.example/'), {
+      context: undefined as never,
+    });
+
+    expect(await response.text()).toBe('ok');
+    expect(scopeEntered).toHaveBeenCalledOnce();
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledOnce();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledWith(
+      'sentry.request_scope',
+      scopeFailure
+    );
+  });
+
+  it('preserves an application rejection when the request scope throws after invocation', async () => {
+    const applicationFailure = new Error('application failed');
+    const scopeFailure = new Error('request scope teardown failed');
+    mocks.fetch.mockRejectedValueOnce(applicationFailure);
+    const scopeEntered = vi.fn();
+    const requestScope: RuntimeRequestScope = <T>(operation: () => T): T => {
+      scopeEntered();
+      operation();
+      throw scopeFailure;
+    };
+    const { createApplicationServerEntry } =
+      await import('@/runtime/create-application-server-entry');
+    const entry = await createApplicationServerEntry(
+      'node',
+      undefined,
+      requestScope
+    );
+
+    await expect(
+      entry.fetch(new Request('https://app.example/'), {
+        context: undefined as never,
+      })
+    ).rejects.toBe(applicationFailure);
+    expect(scopeEntered).toHaveBeenCalledOnce();
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledOnce();
+    expect(mocks.reportTelemetryFailure).toHaveBeenCalledWith(
+      'sentry.request_scope',
+      scopeFailure
     );
   });
 });
