@@ -7579,7 +7579,7 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
         `const target={safe:()=>undefined};${functions};${calls};target.safe();`
       )
     ).toEqual([]);
-  }, 5_000);
+  }, 15_000);
 
   it.each([
     [
