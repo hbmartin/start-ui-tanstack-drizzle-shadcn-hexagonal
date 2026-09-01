@@ -5,6 +5,20 @@
         "count": 1
       }
     },
+    "scripts/check-jittest-report.mjs": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "crap_critical": {
+        "count": 4
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 1
+      }
+    },
     "scripts/check-license-compliance.mjs": {
       "crap_high": {
         "count": 2
@@ -21,9 +35,6 @@
     "scripts/check-risk-register.mjs": {
       "complexity_high": {
         "count": 1
-      },
-      "crap_high": {
-        "count": 1
       }
     },
     "scripts/check-tanstack-security.mjs": {
@@ -36,34 +47,42 @@
         "count": 1
       }
     },
-    "scripts/refresh-security-audit.mjs": {
+    "scripts/jittest-child-env-preload.mjs": {
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/composition/email.ts": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/composition/telemetry/transport.ts": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts": {
-      "crap_moderate": {
+    "scripts/verify-node-runtime.mjs": {
+      "crap_critical": {
         "count": 2
-      }
-    },
-    "src/modules/auth/presentation/page-login.tsx": {
+      },
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/modules/auth/transport/tanstack/server-context.ts": {
+    "scripts/verify-runtime-artifact-build.mjs": {
+      "crap_high": {
+        "count": 3
+      }
+    },
+    "scripts/verify-runtime-profile.mjs": {
+      "complexity_critical": {
+        "count": 8
+      },
+      "complexity_high": {
+        "count": 19
+      },
+      "complexity_moderate": {
+        "count": 23
+      },
+      "crap_critical": {
+        "count": 23
+      },
+      "crap_high": {
+        "count": 22
+      },
       "crap_moderate": {
-        "count": 2
+        "count": 28
       }
     },
     "src/modules/book/application/use-cases/create-book.ts": {
@@ -76,57 +95,26 @@
         "count": 1
       }
     },
-    "src/modules/book/infrastructure/drizzle/book-repository-drizzle.ts": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/book/presentation/manager/page-book-update.tsx": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
     "src/modules/email/infrastructure/drizzle/email-status-repository-drizzle.ts": {
       "complexity_high": {
-        "count": 2
+        "count": 1
       },
-      "crap_high": {
-        "count": 2
+      "complexity_moderate": {
+        "count": 1
       }
     },
     "src/modules/email/infrastructure/resend/email-gateway-resend.tsx": {
-      "complexity_critical": {
-        "count": 1
-      },
-      "crap_critical": {
+      "complexity_high": {
         "count": 1
       }
     },
-    "src/modules/email/infrastructure/smtp/email-gateway-smtp.tsx": {
-      "crap_moderate": {
-        "count": 2
-      }
-    },
-    "src/modules/email/transport/http/resend-webhook-handlers.ts": {
-      "crap_moderate": {
-        "count": 2
-      }
-    },
-    "src/modules/genre/infrastructure/drizzle/genre-repository-drizzle.ts": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/kernel/infrastructure/config/email.ts": {
-      "crap_moderate": {
+    "src/modules/kernel/infrastructure/config/telemetry.ts": {
+      "complexity_moderate": {
         "count": 1
       }
     },
     "src/platform/components/ui/calendar.tsx": {
       "complexity_moderate": {
-        "count": 1
-      },
-      "crap_moderate": {
         "count": 1
       }
     },
@@ -146,38 +134,22 @@
       }
     },
     "src/platform/lib/redaction/sanitize-log-fields.ts": {
-      "complexity_high": {
-        "count": 1
-      },
-      "crap_high": {
+      "complexity_moderate": {
         "count": 1
       }
     },
-    "src/platform/lib/temporal/date-time.ts": {
-      "crap_high": {
-        "count": 1
-      },
-      "crap_moderate": {
+    "src/runtime/cloudflare/request-telemetry.ts": {
+      "complexity_moderate": {
         "count": 1
       }
     },
-    "src/routes/__root.tsx": {
-      "crap_moderate": {
+    "src/runtime/node/telemetry.ts": {
+      "complexity_moderate": {
         "count": 1
       }
     },
-    "tests/architecture/modular-monolith.unit.spec.ts": {
-      "crap_high": {
-        "count": 1
-      }
-    },
-    "tests/security/github-actions-supply-chain.unit.spec.ts": {
-      "crap_moderate": {
-        "count": 3
-      }
-    },
-    "tests/unit/scripts/verify-runtime-profile.unit.spec.mjs": {
-      "crap_moderate": {
+    "src/runtime/vercel/telemetry.ts": {
+      "complexity_moderate": {
         "count": 1
       }
     },
@@ -190,6 +162,50 @@
   "identity_finding_counts": {
     "scripts/affected-tests.ts\u0000findAffectedTests": {
       "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/check-jittest-report.mjs\u0000evaluateReport": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/check-jittest-report.mjs\u0000parseArguments": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/check-jittest-report.mjs\u0000parseDate": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/check-jittest-report.mjs\u0000parseDay": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/check-jittest-report.mjs\u0000runCli": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/check-jittest-report.mjs\u0000validateConfig": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/check-jittest-report.mjs\u0000validateTriage": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
         "count": 1
       }
     },
@@ -216,9 +232,6 @@
     "scripts/check-risk-register.mjs\u0000validateSecuritySnapshot": {
       "complexity_high": {
         "count": 1
-      },
-      "crap_high": {
-        "count": 1
       }
     },
     "scripts/check-tanstack-security.mjs\u0000compareVersions": {
@@ -231,43 +244,417 @@
         "count": 1
       }
     },
-    "scripts/refresh-security-audit.mjs\u0000main": {
+    "scripts/jittest-child-env-preload.mjs\u0000scrubbedExecFile": {
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/composition/email.ts\u0000buildEmailServices": {
+    "scripts/verify-node-runtime.mjs\u0000cleanupNodeVerificationOnSignal": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-node-runtime.mjs\u0000handleSignal": {
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/composition/telemetry/transport.ts\u0000readBoundedBody": {
+    "scripts/verify-node-runtime.mjs\u0000verifyNodeRuntime": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-artifact-build.mjs\u0000completeArtifactSignalShutdown": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-artifact-build.mjs\u0000terminateAll": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-artifact-build.mjs\u0000verifyRuntimeArtifactBuild": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000<arrow>": {
+      "complexity_high": {
+        "count": 1
+      },
+      "complexity_moderate": {
+        "count": 4
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 5
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000AssignmentExpression": {
+      "crap_high": {
+        "count": 1
+      },
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts\u0000list": {
+    "scripts/verify-runtime-profile.mjs\u0000CallExpression": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 2
+      },
+      "crap_high": {
+        "count": 2
+      },
+      "crap_moderate": {
+        "count": 7
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000Identifier": {
+      "complexity_critical": {
+        "count": 3
+      },
+      "crap_critical": {
+        "count": 14
+      },
+      "crap_high": {
+        "count": 3
+      },
+      "crap_moderate": {
+        "count": 5
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000MemberExpression": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000SpreadElement": {
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts\u0000listSessions": {
+    "scripts/verify-runtime-profile.mjs\u0000ThisExpression": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000UnaryExpression": {
+      "crap_moderate": {
+        "count": 2
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000UpdateExpression": {
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/modules/auth/presentation/page-login.tsx\u0000onSubmit": {
+    "scripts/verify-runtime-profile.mjs\u0000VariableDeclarator": {
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/modules/auth/transport/tanstack/server-context.ts\u0000<arrow>": {
+    "scripts/verify-runtime-profile.mjs\u0000aliasBindingIsClosed": {
       "crap_moderate": {
         "count": 1
       }
     },
-    "src/modules/auth/transport/tanstack/server-context.ts\u0000handleError": {
+    "scripts/verify-runtime-profile.mjs\u0000assertVercelRequestLifecycleOwner": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000calculateCloudflareClosedFreshObjectIifePrimitiveMembers": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000calculateCloudflareImportedStaticPrimitiveMemberCandidates": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000calculateStaticallyUnreachableCloudflareNode": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareBoundIdentifierCandidates": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareCalculateAggregateSpreadTargets": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareClassConstructorChainState": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareConstructorReturnAliasSources": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareDeferredArgumentHazardTargets": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareDeferredImportedFactoryResult": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareDeferredResultCallChain": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareDirectArrayCallbackMetaExecutions": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareDirectSequenceAssignmentPrecedes": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareImportedOriginOwner": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareImportedStaticMemberOwner": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareKnownIsolatedLocalRefCurrentResult": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareLoopBackEdgeMayReach": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareMayTargetAmbientGlobalProxy": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareProxyGetTrapCandidates": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReceiverIdentityKey": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareRecordImportedOriginDirectFacts": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareRecordMemberMutation": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareRecordOpaqueImportedArgumentReturnedInvocations": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReflectiveToJSONCandidateIsSafe": {
       "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedAggregateSinkCall": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedAggregateSpreadOriginArgumentsAreSafe": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedExportConsumerProof": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedHazardousDataInvocationIsSafe": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedHazardousDelegationIsSafe": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedHazardousOpaqueResultIsSafe": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedOriginDirectAliasProof": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedReadExemptionMatches": {
+      "complexity_critical": {
+        "count": 1
+      },
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedTemporalDescriptorCallIsSafe": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedTemporalDescriptorHelpers": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareReviewedTemporalPropertyDefinitionIsSafe": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareStatementDefinitelyTerminates": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareStaticMutationMembers": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareStaticValue": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000cloudflareStructuralRepeatedCallbackValue": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000eligible": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000importedCloudflareFactoryResultInvocation": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000isStaticallyUnreachableCloudflareNode": {
+      "complexity_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000originsAreExactReviewedResults": {
+      "crap_critical": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000readIsolatedArtifactOwnerAnalysis": {
+      "crap_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000recordCloudflareProxyIteratorDiscovery": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000recordCloudflareResolvedCallSite": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000recordTarget": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000resolveCloudflareLexicalTargetCandidates": {
+      "complexity_moderate": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000targetIsCovered": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000unshadowedObjectAssignTarget": {
+      "complexity_high": {
+        "count": 1
+      },
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "scripts/verify-runtime-profile.mjs\u0000writeStackSafeJson": {
+      "complexity_high": {
         "count": 1
       }
     },
@@ -281,75 +668,28 @@
         "count": 1
       }
     },
-    "src/modules/book/infrastructure/drizzle/book-repository-drizzle.ts\u0000list": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/book/presentation/manager/page-book-update.tsx\u0000bookDefaultValues": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
     "src/modules/email/infrastructure/drizzle/email-status-repository-drizzle.ts\u0000toDomain": {
-      "complexity_high": {
-        "count": 1
-      },
-      "crap_high": {
+      "complexity_moderate": {
         "count": 1
       }
     },
     "src/modules/email/infrastructure/drizzle/email-status-repository-drizzle.ts\u0000upsertStatusByExternalIdWithDb": {
       "complexity_high": {
         "count": 1
-      },
-      "crap_high": {
-        "count": 1
       }
     },
     "src/modules/email/infrastructure/resend/email-gateway-resend.tsx\u0000sendEmail": {
-      "complexity_critical": {
-        "count": 1
-      },
-      "crap_critical": {
+      "complexity_high": {
         "count": 1
       }
     },
-    "src/modules/email/infrastructure/smtp/email-gateway-smtp.tsx\u0000sendEmail": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/email/infrastructure/smtp/email-gateway-smtp.tsx\u0000sendSmtpMessage": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/email/transport/http/resend-webhook-handlers.ts\u0000readBoundedTextBody": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/email/transport/http/resend-webhook-handlers.ts\u0000receive": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/genre/infrastructure/drizzle/genre-repository-drizzle.ts\u0000list": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "src/modules/kernel/infrastructure/config/email.ts\u0000<arrow>": {
-      "crap_moderate": {
+    "src/modules/kernel/infrastructure/config/telemetry.ts\u0000parseTelemetryConfig": {
+      "complexity_moderate": {
         "count": 1
       }
     },
     "src/platform/components/ui/calendar.tsx\u0000Calendar": {
       "complexity_moderate": {
-        "count": 1
-      },
-      "crap_moderate": {
         "count": 1
       }
     },
@@ -369,50 +709,22 @@
       }
     },
     "src/platform/lib/redaction/sanitize-log-fields.ts\u0000sanitizeLogValue": {
-      "complexity_high": {
-        "count": 1
-      },
-      "crap_high": {
+      "complexity_moderate": {
         "count": 1
       }
     },
-    "src/platform/lib/temporal/date-time.ts\u0000<arrow>": {
-      "crap_high": {
+    "src/runtime/cloudflare/request-telemetry.ts\u0000configureCloudflareRequestTelemetry": {
+      "complexity_moderate": {
         "count": 1
       }
     },
-    "src/platform/lib/temporal/date-time.ts\u0000compileDateFormat": {
-      "crap_moderate": {
+    "src/runtime/node/telemetry.ts\u0000initNodeTelemetry": {
+      "complexity_moderate": {
         "count": 1
       }
     },
-    "src/routes/__root.tsx\u0000RootDocument": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "tests/architecture/modular-monolith.unit.spec.ts\u0000getStaticString": {
-      "crap_high": {
-        "count": 1
-      }
-    },
-    "tests/security/github-actions-supply-chain.unit.spec.ts\u0000<arrow>": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "tests/security/github-actions-supply-chain.unit.spec.ts\u0000dockerRunImageFromCommand": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "tests/security/github-actions-supply-chain.unit.spec.ts\u0000tokenizeShellCommand": {
-      "crap_moderate": {
-        "count": 1
-      }
-    },
-    "tests/unit/scripts/verify-runtime-profile.unit.spec.mjs\u0000fixtureCloudflareChunk": {
-      "crap_moderate": {
+    "src/runtime/vercel/telemetry.ts\u0000initVercelTelemetry": {
+      "complexity_moderate": {
         "count": 1
       }
     },
@@ -430,8 +742,11 @@
   "runtime_coverage_findings": [],
   "target_keys": [
     "src/platform/http/get-client-ip.ts:high impact",
-    "src/platform/hooks/use-clipboard.ts:high impact",
+    "scripts/runtime-verification-child.mjs:high impact",
     "src/composition/telemetry/provider-cleanup.ts:high impact",
-    "src/platform/env/runtime.ts:high impact"
+    "src/platform/hooks/use-clipboard.ts:high impact",
+    "src/platform/env/runtime.ts:high impact",
+    "scripts/verify-runtime-profile.mjs:complexity",
+    "scripts/check-jittest-report.mjs:complexity"
   ]
 }
