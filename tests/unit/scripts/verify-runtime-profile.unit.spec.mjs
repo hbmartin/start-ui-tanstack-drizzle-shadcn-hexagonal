@@ -13562,6 +13562,51 @@ try {
     [
       'Node',
       createNodeArtifact,
+      '.output/node/server/_ssr/ssr.mjs',
+      '.output/node/server/_ssr/decoy.mjs',
+      'node',
+      'Node',
+    ],
+    [
+      'Vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
+      '.vercel/output/functions/__server.func/_ssr/decoy.mjs',
+      'vercel',
+      'Vercel',
+    ],
+  ])(
+    'rejects a %s application result replaced by a named default re-export',
+    (_label, createArtifact, file, decoy, profile, profileLabel) => {
+      const root = fixture();
+      createArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs
+          .readFileSync(filePath, 'utf8')
+          .replace(
+            'export{server_entry_default as default};',
+            'export{server_entry_default as default}from"./decoy.mjs";'
+          )
+      );
+      write(
+        root,
+        decoy,
+        'export const server_entry_default={fetch:()=>new Response("owned")};'
+      );
+
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(
+        `must immediately export one immutable ${profileLabel} application result`
+      );
+    }
+  );
+
+  it.each([
+    [
+      'Node',
+      createNodeArtifact,
       '.output/node/server/_ssr/telemetry-owner.mjs',
       'node',
       'const runWithNodeSentryRequestIsolation=(operation)=>withIsolationScope(operation)',
