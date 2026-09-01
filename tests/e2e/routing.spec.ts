@@ -25,7 +25,10 @@ test.describe('Protected route navigation', { tag: '@demo' }, () => {
     await page.login({ email: ADMIN_EMAIL });
 
     await expect(page).toHaveURL(/\/manager\/books\?searchTerm=Hobbit$/);
-    await expect(page.getByTestId('layout-manager')).toBeVisible();
+    await expect(page.getByTestId('layout-manager')).toHaveAttribute(
+      'data-hydrated',
+      'true'
+    );
     await expect(page.getByRole('link', { name: 'The Hobbit' })).toBeVisible();
     await expect(page.getByText('1 results for "Hobbit"')).toBeVisible();
   });
@@ -44,6 +47,10 @@ test.describe('Protected route navigation as manager', () => {
 
       const bookLink = page.getByRole('link', { name: 'The Hobbit' });
       await expect(bookLink).toBeVisible();
+      await expect(page.getByTestId('layout-manager')).toHaveAttribute(
+        'data-hydrated',
+        'true'
+      );
       const href = await bookLink.getAttribute('href');
       expect(href).toMatch(/^\/manager\/books\/[^/]+\/?$/);
 
@@ -69,11 +76,18 @@ test.describe('Protected route navigation as manager', () => {
       await expect(
         page.getByText('J.R.R. Tolkien', { exact: true })
       ).toBeVisible();
+      await expect(page.getByTestId('layout-manager')).toHaveAttribute(
+        'data-hydrated',
+        'true'
+      );
 
       await page.reload({ waitUntil: 'commit' });
 
       await expect(page).toHaveURL(new RegExp(`${deepLink}/?$`));
-      await expect(page.getByTestId('layout-manager')).toBeVisible();
+      await expect(page.getByTestId('layout-manager')).toHaveAttribute(
+        'data-hydrated',
+        'true'
+      );
       await expect(page.getByText('The Hobbit - J.R.R. Tolkien')).toBeVisible();
     }
   );
@@ -98,11 +112,19 @@ test.describe('Protected route navigation as manager', () => {
     await expect(
       page.getByText(`1 results for "${ADMIN_EMAIL}"`)
     ).toBeVisible();
+    await expect(page.getByTestId('layout-manager')).toHaveAttribute(
+      'data-hydrated',
+      'true'
+    );
 
     await page.reload({ waitUntil: 'commit' });
 
     await expect(page).toHaveURL(
       new RegExp(`/manager/users\\?searchTerm=${escapedEncodedEmail}$`)
+    );
+    await expect(page.getByTestId('layout-manager')).toHaveAttribute(
+      'data-hydrated',
+      'true'
     );
     await expect(
       page.getByPlaceholder(t.components.searchInput.placeholder)

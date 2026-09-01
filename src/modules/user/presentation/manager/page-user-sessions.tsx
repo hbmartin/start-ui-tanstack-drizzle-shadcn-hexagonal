@@ -9,8 +9,6 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
-import { formatRelativeDate } from '@/platform/lib/temporal/date-time';
-
 import { Button } from '@/platform/components/ui/button';
 import {
   DataList,
@@ -21,6 +19,7 @@ import {
   DataListRow,
   DataListText,
 } from '@/platform/components/ui/datalist';
+import { useRelativeDateFormatter } from '@/platform/hooks/use-relative-date-formatter';
 
 import {
   useAuthSession,
@@ -87,6 +86,7 @@ const UserSessionsError = (props: { retryAction: () => void }) => (
 
 const UserSessions = (props: { scopeKey: ScopeKey; userId: UserId }) => {
   const { i18n, t } = useTranslation(['user']);
+  const formatRelativeDate = useRelativeDateFormatter(i18n.language);
   const sessionsQuery = useSuspenseInfiniteQuery(
     userQueries.getUserSessionsInfinite({
       scopeKey: props.scopeKey,
@@ -129,18 +129,14 @@ const UserSessions = (props: { scopeKey: ScopeKey; userId: UserId }) => {
               <DataListCell>
                 <DataListText className="text-muted-foreground">
                   {t('user:manager.detail.sessionUpdated', {
-                    time: formatRelativeDate(item.updatedAt, {
-                      locale: i18n.language,
-                    }),
+                    time: formatRelativeDate(item.updatedAt),
                   })}
                 </DataListText>
               </DataListCell>
               <DataListCell>
                 <DataListText className="text-muted-foreground">
                   {t('user:manager.detail.sessionExpires', {
-                    time: formatRelativeDate(item.expiresAt, {
-                      locale: i18n.language,
-                    }),
+                    time: formatRelativeDate(item.expiresAt),
                   })}
                 </DataListText>
               </DataListCell>

@@ -31,6 +31,10 @@ export const openManagerUsersSearch = async (page: Page, email: string) => {
   await page.goto(`/manager/users?searchTerm=${encodeURIComponent(email)}`, {
     waitUntil: 'commit',
   });
+  await expect(page.getByTestId('layout-manager')).toHaveAttribute(
+    'data-hydrated',
+    'true'
+  );
   await expect(page.getByText(email, { exact: true })).toBeVisible();
 };
 
