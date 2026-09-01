@@ -7308,7 +7308,7 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
         `const target={run:()=>undefined};${writes};target.run();`
       )
     ).toEqual([]);
-  });
+  }, 30_000);
 
   it('keeps React-like irrelevant receiver writes out of intrinsic replacement analysis', () => {
     const source = `

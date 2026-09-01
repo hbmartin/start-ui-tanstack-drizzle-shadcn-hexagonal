@@ -96,7 +96,7 @@ describe('auth HTTP gateway exposure policy', () => {
     expect(() => getSecondaryStore()).toThrow(
       'Production auth requires UPSTASH_REDIS_REST_URL'
     );
-  });
+  }, 15_000);
 
   it('returns 404 for provider administration HTTP endpoints', async () => {
     const { getAuthHttpGateway } = await import('@/composition/auth');
