@@ -182,6 +182,12 @@ export default defineConfig(({ command, mode }) => {
       },
     },
     oxc: { target: 'esnext' },
+    optimizeDeps: {
+      // TanStack's transformed route graph reaches these dependencies after
+      // Vite's static cold-start scan. Pre-bundle them before the first browser
+      // request so discovering them cannot invalidate shared optimizer chunks.
+      include: ['remeda', 'seroval'],
+    },
     server: {
       port: env.VITE_PORT ? Number(env.VITE_PORT) : 3000,
       strictPort: true,

@@ -6,6 +6,7 @@ import {
   AVAILABLE_LANGUAGES,
   LanguageKey,
 } from '@/platform/lib/i18n/constants';
+import { useHydrated } from '@/platform/hooks/use-hydrated';
 import { cn } from '@/platform/lib/tailwind/utils';
 
 import {
@@ -19,6 +20,7 @@ import {
 export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
   const { i18n, t } = useTranslation(['common']);
   const [isPending, startLanguageTransition] = useTransition();
+  const hydrated = useHydrated();
 
   const changeLanguage = (language: LanguageKey) => {
     if (language === i18n.language || isPending) return;
@@ -31,11 +33,12 @@ export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
   return (
     <Select
       value={i18n.language}
-      disabled={isPending}
+      disabled={!hydrated || isPending}
       onValueChange={(value) => changeLanguage(value as LanguageKey)}
     >
       <SelectTrigger
         aria-label={t('common:languages.label')}
+        data-hydrated={hydrated ? 'true' : 'false'}
         className={cn(
           'w-auto border-0 bg-transparent px-0 shadow-none dark:bg-transparent',
           props.iconOnly &&

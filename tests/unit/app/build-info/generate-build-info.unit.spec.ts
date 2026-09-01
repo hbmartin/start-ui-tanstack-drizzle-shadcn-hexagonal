@@ -26,14 +26,20 @@ const isolatedChildEnvironment = (
 ) => {
   const environment: Record<string, string | undefined> = {
     ...process.env,
-    ...overrides,
     GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_SYSTEM: os.devNull,
   };
-  for (const key of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE']) {
+  for (const key of [
+    'CF_PAGES_COMMIT_SHA',
+    'GITHUB_SHA',
+    'GIT_DIR',
+    'GIT_INDEX_FILE',
+    'GIT_WORK_TREE',
+    'VERCEL_GIT_COMMIT_SHA',
+  ]) {
     delete environment[key];
   }
-  return environment;
+  return { ...environment, ...overrides };
 };
 
 describe('build info generation', () => {

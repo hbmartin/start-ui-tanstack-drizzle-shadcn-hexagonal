@@ -16,11 +16,15 @@ test('switches the hydrated document between LTR and RTL', async ({ page }) => {
   await page.to('/login');
   await expectDocumentDirection(page, 'en', 'ltr');
 
-  await page.getByRole('combobox', { name: 'Language' }).click();
+  const languageSelect = page.getByRole('combobox', { name: 'Language' });
+  await expect(languageSelect).toHaveAttribute('data-hydrated', 'true');
+  await languageSelect.click();
   await page.getByRole('option').filter({ hasText: 'Arabic' }).click();
   await expectDocumentDirection(page, 'ar', 'rtl');
 
-  await page.getByRole('combobox', { name: 'لغة' }).click();
+  const arabicLanguageSelect = page.getByRole('combobox', { name: 'لغة' });
+  await expect(arabicLanguageSelect).toHaveAttribute('data-hydrated', 'true');
+  await arabicLanguageSelect.click();
   await page.getByRole('option').filter({ hasText: 'English' }).click();
   await expectDocumentDirection(page, 'en', 'ltr');
 });
