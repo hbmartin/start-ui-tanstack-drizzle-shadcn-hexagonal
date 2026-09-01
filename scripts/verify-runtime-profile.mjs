@@ -167,6 +167,9 @@ const viteManifestEntries = (manifest, manifestFile) => {
 
 const parsedModuleCache = new Map();
 const parsedModuleSourcesByProgram = new WeakMap();
+const parsedModulePathsByProgram = new WeakMap();
+const cloudflareReviewedModuleRegionMatchCache = new WeakMap();
+const cloudflareReviewedOwnerExportCache = new Map();
 const authenticatedCloudflareModuleSources = new Map();
 const verifiedCloudflareMetadataSources = new Map();
 const cloudflareImportedAggregateTargetCache = new Map();
@@ -227,6 +230,7 @@ const parseModuleSource = (filePath, source) => {
     `${filePath} must be parseable before checking server entry ownership`
   );
   parsedModuleSourcesByProgram.set(parsed.program, source);
+  parsedModulePathsByProgram.set(parsed.program, filePath);
   return { program: parsed.program, source };
 };
 
@@ -40949,8 +40953,23 @@ const reviewedCloudflareMixedClosures = Object.freeze([
   }),
   Object.freeze({
     appModuleSuffixes: ['src/platform/lib/zod/zod-utils.ts'],
-    astSha256:
-      '113bca7c39c2e7085d06181156bb2418fa8120b287d997f708fda0d0ba77db8d',
+    authenticatedModuleRegion: {
+      astSha256:
+        '9b63b65ad8f4f548d3605369e793d7da1bf1760fdd19b15ae155dc27ba22e5e1',
+      exportedLocalName: 'zu',
+      exportedName: 'M',
+      importedBinding: {
+        importedName: 'w',
+        localName: 'string',
+        ownerExportedName: 'w',
+        ownerSha256: [
+          'b2e3828594675b9262c546998aa09ba14d1c0a98d9cb1c38f7eb6ebd04c8ea06',
+          'b58b76143de945661f801945b38db191e2fbe55ecd29e98f6d30fd9d54cec758',
+        ],
+        sourceStem: 'schemas',
+      },
+      moduleSuffix: 'src/platform/lib/zod/zod-utils.ts',
+    },
     exportedStaticMemberDeferredResults: [
       {
         exportedLocalName: 'zu',
@@ -41008,21 +41027,6 @@ const reviewedCloudflareMixedClosures = Object.freeze([
     moduleSuffixes: [
       '/@base-ui/react/floating-ui-react/hooks/useListNavigation.mjs',
       '/@base-ui/react/utils/popups/popupStoreUtils.mjs',
-    ],
-    normalizedStaticImports: [
-      {
-        bindings: [
-          ['n', 'getEnvClient'],
-          ['t', 'envClient'],
-        ],
-        normalizedSource: './client-[runtime-config].js',
-        sourceStem: 'client',
-      },
-      {
-        bindings: [['t', 'createSsrRpc']],
-        normalizedSource: './createSsrRpc-[runtime-config].js',
-        sourceStem: 'createSsrRpc',
-      },
     ],
   }),
 ]);
@@ -41140,6 +41144,248 @@ export const inspectCloudflareReviewedStructuralProgramDigestForTesting = (
     normalizedStaticImports
   );
 
+const cloudflareReviewedModuleRegion = (source, moduleSuffix) => {
+  const matches = [...source.matchAll(/^\/\/#region ([^\r\n]+)$/gmu)].filter(
+    (match) => match[1].trim().endsWith(moduleSuffix)
+  );
+  if (matches.length !== 1) return undefined;
+  const [match] = matches;
+  const markerEnd = match.index + match[0].length;
+  const bodyStart = source.indexOf('\n', markerEnd) + 1;
+  const bodyEnd = source.indexOf('//#endregion', bodyStart);
+  if (
+    bodyStart <= markerEnd ||
+    bodyEnd < bodyStart ||
+    source.slice(bodyStart, bodyEnd).includes('//#region ')
+  ) {
+    return undefined;
+  }
+  return {
+    bodyEnd,
+    bodySource: source.slice(bodyStart, bodyEnd),
+    bodyStart,
+  };
+};
+
+const reviewedModuleRegionPolicyFields = Object.freeze([
+  'astSha256',
+  'exportedLocalName',
+  'exportedName',
+  'importedBinding',
+  'moduleSuffix',
+]);
+const reviewedModuleRegionImportFields = Object.freeze([
+  'importedName',
+  'localName',
+  'ownerExportedName',
+  'ownerSha256',
+  'sourceStem',
+]);
+const cloudflareReviewedRecordHasExactFields = (record, fields) =>
+  isObjectRecord(record) &&
+  Object.keys(record).length === fields.length &&
+  fields.every((field) => Object.hasOwn(record, field));
+const cloudflareReviewedRecordHasNonEmptyStrings = (record, fields) =>
+  fields.every(
+    (field) => typeof record[field] === 'string' && record[field].length > 0
+  );
+const cloudflareReviewedSha256 = (value) =>
+  typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+const cloudflareReviewedUniqueSha256List = (values) =>
+  Array.isArray(values) &&
+  values.length > 0 &&
+  new Set(values).size === values.length &&
+  values.every(cloudflareReviewedSha256);
+
+const cloudflareReviewedModuleRegionPolicyIsValid = (policy) => {
+  if (
+    !cloudflareReviewedRecordHasExactFields(
+      policy,
+      reviewedModuleRegionPolicyFields
+    )
+  ) {
+    return false;
+  }
+  if (
+    !cloudflareReviewedRecordHasNonEmptyStrings(policy, [
+      'exportedLocalName',
+      'exportedName',
+      'moduleSuffix',
+    ]) ||
+    !cloudflareReviewedSha256(policy.astSha256)
+  ) {
+    return false;
+  }
+  const importedBinding = policy.importedBinding;
+  if (
+    !cloudflareReviewedRecordHasExactFields(
+      importedBinding,
+      reviewedModuleRegionImportFields
+    )
+  ) {
+    return false;
+  }
+  return (
+    cloudflareReviewedRecordHasNonEmptyStrings(importedBinding, [
+      'importedName',
+      'localName',
+      'ownerExportedName',
+      'sourceStem',
+    ]) && cloudflareReviewedUniqueSha256List(importedBinding.ownerSha256)
+  );
+};
+
+const cloudflareReviewedImportedOwnerForProgram = (program, source) => {
+  const programPath = parsedModulePathsByProgram.get(program);
+  if (
+    typeof programPath !== 'string' ||
+    !path.isAbsolute(programPath) ||
+    !source.startsWith('./')
+  ) {
+    return undefined;
+  }
+  const ownerPath = path.resolve(path.dirname(programPath), source);
+  return authenticatedCloudflareModuleSources.get(ownerPath);
+};
+
+const cloudflareReviewedOwnerHasExport = (owner, exportedName) => {
+  const cached = cloudflareReviewedOwnerExportCache.get(owner.sha256);
+  if (cached) {
+    return cached.source === owner.source && cached.exports.has(exportedName);
+  }
+  if (
+    createHash('sha256').update(owner.source).digest('hex') !== owner.sha256
+  ) {
+    return false;
+  }
+  const parsedOwner = parseSync(
+    'reviewed-region-import-owner.js',
+    owner.source,
+    { sourceType: 'module' }
+  );
+  if (parsedOwner.errors.length > 0) return false;
+  const exports = new Set(
+    parsedOwner.program.body
+      .flatMap(moduleExportEntries)
+      .map(([candidate]) => candidate)
+  );
+  cloudflareReviewedOwnerExportCache.set(owner.sha256, {
+    exports,
+    source: owner.source,
+  });
+  return exports.has(exportedName);
+};
+
+const cloudflareReviewedModuleRegionMatchesUncached = (
+  program,
+  policy,
+  resolveImportedOwner = (source) =>
+    cloudflareReviewedImportedOwnerForProgram(program, source)
+) => {
+  if (!cloudflareReviewedModuleRegionPolicyIsValid(policy)) return false;
+  const source = parsedModuleSourcesByProgram.get(program);
+  if (typeof source !== 'string') return false;
+  const region = cloudflareReviewedModuleRegion(source, policy.moduleSuffix);
+  if (!region) return false;
+  const parsedRegion = parseSync(
+    `${policy.moduleSuffix}.reviewed-region.js`,
+    region.bodySource,
+    { sourceType: 'module' }
+  );
+  if (
+    parsedRegion.errors.length > 0 ||
+    astDigest(parsedRegion.program) !== policy.astSha256
+  ) {
+    return false;
+  }
+  const localDeclarations = program.body
+    .filter(
+      (statement) =>
+        nodeType(statement) === 'VariableDeclaration' &&
+        statement.start >= region.bodyStart &&
+        statement.end <= region.bodyEnd
+    )
+    .flatMap((statement) =>
+      statement.declarations.flatMap(({ id }) => bindingNames(id))
+    )
+    .filter((name) => name === policy.exportedLocalName);
+  if (localDeclarations.length !== 1) return false;
+  const matchingExports = program.body
+    .flatMap(moduleExportEntries)
+    .filter(([, localName]) => localName === policy.exportedLocalName);
+  if (
+    matchingExports.length !== 1 ||
+    matchingExports[0][0] !== policy.exportedName
+  ) {
+    return false;
+  }
+  const importedBinding = policy.importedBinding;
+  const matchingImports = program.body.flatMap((statement) => {
+    const importSource = literalString(statement.source);
+    if (
+      nodeType(statement) !== 'ImportDeclaration' ||
+      typeof importSource !== 'string' ||
+      !cloudflareReviewedHashedChunkSource(
+        importSource,
+        importedBinding.sourceStem
+      )
+    ) {
+      return [];
+    }
+    return cloudflareReviewedImportBindings(statement)
+      .filter(
+        ([importedName, localName]) =>
+          importedName === importedBinding.importedName &&
+          localName === importedBinding.localName
+      )
+      .map(() => importSource);
+  });
+  if (matchingImports.length !== 1) return false;
+  const owner = resolveImportedOwner(matchingImports[0]);
+  if (
+    !owner ||
+    !importedBinding.ownerSha256.includes(owner.sha256) ||
+    !cloudflareReviewedOwnerHasExport(owner, importedBinding.ownerExportedName)
+  ) {
+    return false;
+  }
+  return true;
+};
+
+const cloudflareReviewedModuleRegionMatches = (
+  program,
+  policy,
+  resolveImportedOwner
+) => {
+  const cached = cloudflareReviewedModuleRegionMatchCache.get(program);
+  if (cached?.has(policy)) return cached.get(policy);
+  const result = cloudflareReviewedModuleRegionMatchesUncached(
+    program,
+    policy,
+    resolveImportedOwner
+  );
+  const matches = cached ?? new WeakMap();
+  matches.set(policy, result);
+  if (!cached) cloudflareReviewedModuleRegionMatchCache.set(program, matches);
+  return result;
+};
+
+export const inspectCloudflareReviewedModuleRegionForTesting = (
+  source,
+  ownerSource,
+  policy
+) => {
+  const program = parseModuleSource(
+    '/reviewed-region/assets/input-AAAAAAAA.js',
+    source
+  ).program;
+  const owner = {
+    sha256: createHash('sha256').update(ownerSource).digest('hex'),
+    source: ownerSource,
+  };
+  return cloudflareReviewedModuleRegionMatches(program, policy, () => owner);
+};
+
 const cloudflareReviewedMixedClosureOwnsRequiredModules = (
   record,
   { appModuleSuffixes = [], moduleSuffixes }
@@ -41164,6 +41410,12 @@ const cloudflareReviewedMixedClosureAuthenticatesProgram = (
   reviewedClosure
 ) =>
   reviewedClosure.sha256 === record.sha256 ||
+  (reviewedClosure.authenticatedModuleRegion !== undefined &&
+    program !== undefined &&
+    cloudflareReviewedModuleRegionMatches(
+      program,
+      reviewedClosure.authenticatedModuleRegion
+    )) ||
   (typeof reviewedClosure.astSha256 === 'string' &&
     program !== undefined &&
     cloudflareReviewedStructuralProgramDigest(
@@ -41296,6 +41548,13 @@ const assertCloudflareReviewedOwnerModule = (
   );
 };
 
+const cloudflareReviewedClosureRequiresOwnerAuthentication = (
+  reviewedClosure
+) =>
+  [reviewedClosure.astSha256, reviewedClosure.authenticatedModuleRegion].some(
+    (value) => value !== undefined
+  );
+
 const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
   const source = parsedModuleSourcesByProgram.get(program);
   assert(
@@ -41307,6 +41566,18 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
       reviewedClosure.exactInvocationPoliciesOnly === true,
     'Reviewed Cloudflare exact-invocation policy mode must be enabled explicitly'
   );
+  if (reviewedClosure.authenticatedModuleRegion !== undefined) {
+    assert(
+      reviewedClosure.sha256 === undefined &&
+        reviewedClosure.astSha256 === undefined &&
+        reviewedClosure.normalizedStaticImports === undefined &&
+        cloudflareReviewedModuleRegionMatches(
+          program,
+          reviewedClosure.authenticatedModuleRegion
+        ),
+      'Reviewed Cloudflare module-region policy must authenticate its exact module, import owner, and export'
+    );
+  }
   if (
     reviewedClosure.astSha256 !== undefined ||
     reviewedClosure.normalizedStaticImports !== undefined
@@ -41615,7 +41886,9 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
         isCloudflareFunctionNode(owner),
         `${label} must resolve one callable member owner`
       );
-      if (reviewedClosure.astSha256 !== undefined) {
+      if (
+        cloudflareReviewedClosureRequiresOwnerAuthentication(reviewedClosure)
+      ) {
         assert(
           typeof policy.ownerAstSha256 === 'string' &&
             /^[a-f0-9]{64}$/u.test(policy.ownerAstSha256) &&
@@ -41706,7 +41979,9 @@ const assertCloudflareReviewedPolicy = (program, reviewedClosure) => {
           owner.params.length > policy.exportedParameterIndex,
         `${label} must resolve one callable owner parameter`
       );
-      if (reviewedClosure.astSha256 !== undefined) {
+      if (
+        cloudflareReviewedClosureRequiresOwnerAuthentication(reviewedClosure)
+      ) {
         assert(
           typeof policy.ownerAstSha256 === 'string' &&
             /^[a-f0-9]{64}$/u.test(policy.ownerAstSha256) &&

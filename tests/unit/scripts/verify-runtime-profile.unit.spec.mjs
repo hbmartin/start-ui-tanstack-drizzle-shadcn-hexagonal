@@ -47,6 +47,7 @@ import {
   inspectCloudflareReviewedFreshExportReceiversForTesting,
   inspectCloudflareReviewedMutationRelocationForTesting,
   inspectCloudflareReviewedMixedClosureOwnershipForTesting,
+  inspectCloudflareReviewedModuleRegionForTesting,
   inspectCloudflareReviewedPolicyValidationForTesting,
   inspectCloudflareReviewedOriginDirectAliasProofForTesting,
   inspectCloudflareReviewedStaticMemberDeferredResultForTesting,
@@ -5188,6 +5189,134 @@ describe('runtime artifact verifier', { timeout: 15_000 }, () => {
       )
     ).toThrow('must resolve exactly once');
   });
+
+  it('authenticates one reviewed module region across unrelated chunk changes', () => {
+    const regionBody =
+      'var inputString=options=>string({error:options?.error});\nvar validatedString=options=>inputString(options);\nvar zu={fieldText:{required:options=>validatedString(options)}};\n';
+    const ownerSource =
+      'const string=options=>({options});export{string as w};';
+    const policy = {
+      astSha256:
+        inspectCloudflareReviewedStructuralProgramDigestForTesting(regionBody),
+      exportedLocalName: 'zu',
+      exportedName: 'M',
+      importedBinding: {
+        importedName: 'w',
+        localName: 'string',
+        ownerExportedName: 'w',
+        ownerSha256: [createHash('sha256').update(ownerSource).digest('hex')],
+        sourceStem: 'schemas',
+      },
+      moduleSuffix: 'src/platform/lib/zod/zod-utils.ts',
+    };
+    const source = (unrelated) =>
+      `import{w as string}from"./schemas-AAAAAAAA.js";\n${unrelated}\n//#region src/platform/lib/zod/zod-utils.ts\n${regionBody}//#endregion\nexport{zu as M};`;
+
+    expect(
+      inspectCloudflareReviewedModuleRegionForTesting(
+        source('const unrelated=1;'),
+        ownerSource,
+        policy
+      )
+    ).toBe(true);
+    expect(
+      inspectCloudflareReviewedModuleRegionForTesting(
+        source('const unrelated={nested:[1,2,3]};'),
+        ownerSource,
+        policy
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      'a changed transitive helper',
+      (source) =>
+        source.replace(
+          'var validatedString=options=>inputString(options);',
+          'var validatedString=options=>string(options);'
+        ),
+      (ownerSource) => ownerSource,
+      (policy) => policy,
+    ],
+    [
+      'a changed reviewed helper',
+      (source) =>
+        source.replace(
+          'required:options=>validatedString(options)',
+          'required:options=>fetch(options)'
+        ),
+      (ownerSource) => ownerSource,
+      (policy) => policy,
+    ],
+    [
+      'a changed Zod import binding',
+      (source) => source.replace('w as string', 'x as string'),
+      (ownerSource) => ownerSource,
+      (policy) => policy,
+    ],
+    [
+      'a changed application export',
+      (source) => source.replace('zu as M', 'zu as N'),
+      (ownerSource) => ownerSource,
+      (policy) => policy,
+    ],
+    [
+      'a changed imported owner',
+      (source) => source,
+      (ownerSource) => `${ownerSource}const changed=true;`,
+      (policy) => policy,
+    ],
+    [
+      'a changed imported owner export',
+      (source) => source,
+      (ownerSource) => ownerSource.replace('string as w', 'string as x'),
+      (policy, ownerSource) => ({
+        ...policy,
+        importedBinding: {
+          ...policy.importedBinding,
+          ownerSha256: [createHash('sha256').update(ownerSource).digest('hex')],
+        },
+      }),
+    ],
+  ])(
+    'rejects module-region authentication with %s',
+    (_label, mutateSource, mutateOwner, mutatePolicy) => {
+      const regionBody =
+        'var inputString=options=>string({error:options?.error});\nvar validatedString=options=>inputString(options);\nvar zu={fieldText:{required:options=>validatedString(options)}};\n';
+      const baseOwnerSource =
+        'const string=options=>({options});export{string as w};';
+      const basePolicy = {
+        astSha256:
+          inspectCloudflareReviewedStructuralProgramDigestForTesting(
+            regionBody
+          ),
+        exportedLocalName: 'zu',
+        exportedName: 'M',
+        importedBinding: {
+          importedName: 'w',
+          localName: 'string',
+          ownerExportedName: 'w',
+          ownerSha256: [
+            createHash('sha256').update(baseOwnerSource).digest('hex'),
+          ],
+          sourceStem: 'schemas',
+        },
+        moduleSuffix: 'src/platform/lib/zod/zod-utils.ts',
+      };
+      const source = `import{w as string}from"./schemas-AAAAAAAA.js";\n//#region src/platform/lib/zod/zod-utils.ts\n${regionBody}//#endregion\nexport{zu as M};`;
+      const ownerSource = mutateOwner(baseOwnerSource);
+      const policy = mutatePolicy(basePolicy, ownerSource);
+
+      expect(
+        inspectCloudflareReviewedModuleRegionForTesting(
+          mutateSource(source),
+          ownerSource,
+          policy
+        )
+      ).toBe(false);
+    }
+  );
 
   it.each([
     [
