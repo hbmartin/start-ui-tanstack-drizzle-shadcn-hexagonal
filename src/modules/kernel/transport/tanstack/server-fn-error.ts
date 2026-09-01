@@ -134,6 +134,8 @@ const CODE_BY_REASON = {
 const targetSet = new Set<string>(PUBLIC_SERVER_ERROR_TARGETS);
 const reasonSet = new Set<string>(PUBLIC_SERVER_ERROR_REASONS);
 const publicDtoKeys = ['correlationId', 'reason', 'target', 'version'] as const;
+const compareCodePointStrings = (left: string, right: string) =>
+  left < right ? -1 : left > right ? 1 : 0;
 const opaqueCorrelationIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const DESERIALIZATION_FAILURE_CAUSE_BRAND = Symbol(
@@ -220,10 +222,10 @@ export const isPublicServerErrorDto = (
   }
 
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
+  const keys = Object.keys(record).toSorted(compareCodePointStrings);
   return (
     keys.length === publicDtoKeys.length &&
-    publicDtoKeys.every((key) => Object.hasOwn(record, key)) &&
+    keys.every((key, index) => key === publicDtoKeys[index]) &&
     record.version === 1 &&
     isPublicServerErrorTarget(record.target) &&
     isPublicServerErrorReason(record.reason) &&

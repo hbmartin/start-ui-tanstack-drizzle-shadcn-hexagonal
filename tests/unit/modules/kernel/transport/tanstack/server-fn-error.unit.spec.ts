@@ -220,6 +220,20 @@ describe('public server-function error contract', () => {
       reason: 'not_found',
       target: 'request',
     }),
+    Object.defineProperties(
+      {
+        cause: 'internal cause',
+        message: 'internal message',
+        provider: 'provider payload',
+        stack: 'internal stack',
+      },
+      {
+        correlationId: { enumerable: false, value: CORRELATION_ID },
+        reason: { enumerable: false, value: 'not_found' },
+        target: { enumerable: false, value: 'request' },
+        version: { enumerable: false, value: 1 },
+      }
+    ),
   ])(
     'closes hostile or open-ended adapter payloads as bad input',
     (payload) => {
