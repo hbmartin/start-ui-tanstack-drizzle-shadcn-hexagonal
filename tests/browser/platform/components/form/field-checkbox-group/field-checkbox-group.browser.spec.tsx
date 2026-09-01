@@ -196,9 +196,7 @@ test('disabled group', async () => {
   const cb = page.getByRole('checkbox', { name: 'Buzz Pawdrin' });
   await expect.element(cb).toBeDisabled();
 
-  await user.click(page.getByRole('button', { name: 'Submit' }), {
-    timeout: FAILED_CLICK_TIMEOUT_MS,
-  });
+  await user.click(page.getByRole('button', { name: 'Submit' }));
   // TanStack Form preserves disabled-field values.
   expect(mockedSubmit).toHaveBeenCalledWith({ bears: ['pawdrin'] });
 });
