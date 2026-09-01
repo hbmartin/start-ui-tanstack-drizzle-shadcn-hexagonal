@@ -4,6 +4,7 @@ import { runtimeProfiles } from '@/platform/runtime/runtime-profile';
 
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(async () => new Response('ok')),
+  reportTelemetryFailure: vi.fn(),
 }));
 
 vi.mock('@/entry-server', () => ({
@@ -17,7 +18,7 @@ vi.mock('@/platform/telemetry', () => ({
   createRequestExceptionCaptureState: vi.fn(() => ({
     captured: new Set(),
   })),
-  reportTelemetryFailure: vi.fn(),
+  reportTelemetryFailure: mocks.reportTelemetryFailure,
   telemetryProxy: { captureException: vi.fn() },
 }));
 
@@ -46,4 +47,26 @@ describe('application server entry runtime profile', () => {
       );
     }
   );
+
+  it('does not classify an asynchronous application rejection as a request-scope setup failure', async () => {
+    const failure = new Error('application failed');
+    mocks.fetch.mockRejectedValueOnce(failure);
+    const { createApplicationServerEntry } =
+      await import('@/runtime/create-application-server-entry');
+    const entry = await createApplicationServerEntry(
+      'node',
+      undefined,
+      (operation) => operation()
+    );
+
+    await expect(
+      entry.fetch(new Request('https://app.example/'), {
+        context: undefined as never,
+      })
+    ).rejects.toBe(failure);
+    expect(mocks.reportTelemetryFailure).not.toHaveBeenCalledWith(
+      'sentry.request_scope',
+      expect.anything()
+    );
+  });
 });

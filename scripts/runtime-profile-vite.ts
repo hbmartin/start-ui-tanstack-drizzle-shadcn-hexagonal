@@ -129,6 +129,9 @@ const compareCloudflareChunkEntries = (
   [right]: readonly [string, unknown]
 ) => (left < right ? -1 : left > right ? 1 : 0);
 
+const compareCloudflareChunkFileNames = (left: string, right: string) =>
+  left < right ? -1 : left > right ? 1 : 0;
+
 const cloudflareChunkOwnership = (
   modules: ReadonlyArray<Readonly<{ owner: 'app' | 'non-app' }>>
 ) => {
@@ -161,10 +164,10 @@ const cloudflareOutputChunkProvenance = (
     {
       dynamicImports: (chunk.dynamicImports ?? [])
         .filter((file) => outputChunkFiles.has(file))
-        .sort(),
+        .sort(compareCloudflareChunkFileNames),
       imports: (chunk.imports ?? [])
         .filter((file) => outputChunkFiles.has(file))
-        .sort(),
+        .sort(compareCloudflareChunkFileNames),
       modules,
       ownership: cloudflareChunkOwnership(modules),
       sha256: createHash('sha256').update(chunk.code).digest('hex'),

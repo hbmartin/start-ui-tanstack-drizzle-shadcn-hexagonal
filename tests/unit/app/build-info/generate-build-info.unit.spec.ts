@@ -11,6 +11,7 @@ import {
   isBuildInfoEntryPoint,
   readBuildCommit,
   readGitMetadata,
+  resolveGitExecutable,
   sourceDateFromEpoch,
 } from '@/app/build-info/infrastructure/generate-build-info';
 
@@ -36,6 +37,20 @@ const isolatedChildEnvironment = (
 };
 
 describe('build info generation', () => {
+  it('resolves Git only from explicit platform locations', () => {
+    expect(
+      resolveGitExecutable('linux', (candidate) =>
+        candidate.endsWith('/usr/local/bin/git')
+      )
+    ).toBe('/usr/local/bin/git');
+    expect(
+      resolveGitExecutable('win32', (candidate) =>
+        candidate.startsWith('C:\\Program Files (x86)')
+      )
+    ).toBe('C:\\Program Files (x86)\\Git\\cmd\\git.exe');
+    expect(resolveGitExecutable('darwin', () => false)).toBeUndefined();
+  });
+
   it('uses SOURCE_DATE_EPOCH as the reproducible date when supplied', () => {
     expect(
       createBuildInfo({ gitMetadata, sourceDateEpoch: '1700000000' })

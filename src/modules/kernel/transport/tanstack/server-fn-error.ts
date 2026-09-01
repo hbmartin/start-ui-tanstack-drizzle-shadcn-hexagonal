@@ -220,10 +220,10 @@ export const isPublicServerErrorDto = (
   }
 
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).toSorted();
+  const keys = Object.keys(record);
   return (
     keys.length === publicDtoKeys.length &&
-    keys.every((key, index) => key === publicDtoKeys[index]) &&
+    publicDtoKeys.every((key) => Object.hasOwn(record, key)) &&
     record.version === 1 &&
     isPublicServerErrorTarget(record.target) &&
     isPublicServerErrorReason(record.reason) &&

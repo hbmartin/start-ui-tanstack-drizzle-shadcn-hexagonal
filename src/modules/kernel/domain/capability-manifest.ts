@@ -119,6 +119,9 @@ export class CapabilityManifestError extends Error {
   }
 }
 
+const compareCodePointStrings = (left: string, right: string) =>
+  left < right ? -1 : left > right ? 1 : 0;
+
 const capabilityIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const descriptorIdPattern = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
 const schemaObjectNamePattern = /^[A-Za-z][A-Za-z0-9_]*$/u;
@@ -442,7 +445,7 @@ export const validateCapabilityManifest = (manifest: CapabilityManifest) => {
   assertUnique(manifest.dependsOn, `${manifest.id} dependencies`);
   assertManifest(
     manifest.dependsOn
-      .toSorted()
+      .toSorted(compareCodePointStrings)
       .every((dependency, index) => dependency === manifest.dependsOn[index]),
     `${manifest.id} dependencies must be sorted`
   );

@@ -144,7 +144,7 @@ const toRequestPathname = (url: unknown): string | undefined => {
   if (typeof url !== 'string') return undefined;
 
   try {
-    return new URL(url, 'http://telemetry.invalid').pathname.slice(
+    return new URL(url, 'https://telemetry.invalid').pathname.slice(
       0,
       MAX_TEXT_LENGTH
     );

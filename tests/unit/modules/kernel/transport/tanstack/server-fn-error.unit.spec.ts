@@ -87,6 +87,17 @@ describe('public server-function error contract', () => {
     expect(first.correlationId).not.toBe(second.correlationId);
   });
 
+  it('accepts the closed DTO independently of insertion order', () => {
+    expect(
+      isPublicServerErrorDto({
+        version: 1,
+        target: 'request',
+        correlationId: CORRELATION_ID,
+        reason: 'not_found',
+      })
+    ).toBe(true);
+  });
+
   it('round-trips through the registered TanStack serialization adapter', () => {
     const source = new ServerFnError('CONFLICT', {
       correlationId: CORRELATION_ID,
@@ -199,6 +210,16 @@ describe('public server-function error contract', () => {
       target: 'request',
       version: 1,
     },
+    {
+      correlationId: CORRELATION_ID,
+      reason: 'not_found',
+      target: 'request',
+    },
+    Object.assign(Object.create({ version: 1 }), {
+      correlationId: CORRELATION_ID,
+      reason: 'not_found',
+      target: 'request',
+    }),
   ])(
     'closes hostile or open-ended adapter payloads as bad input',
     (payload) => {

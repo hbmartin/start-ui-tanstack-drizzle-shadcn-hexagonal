@@ -39,6 +39,9 @@ const signalFinalizationTimeoutMs = 8_000;
 const cspNoncePlaceholder = '__START_UI_CSP_NONCE__';
 const publicErrorCorrelationIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const publicServerErrorKeys = ['correlationId', 'reason', 'target', 'version'];
+const compareCodePointStrings = (left, right) =>
+  left < right ? -1 : left > right ? 1 : 0;
 const activeChildren = new Set();
 let activeCleanup;
 let activeDiagnostics = [];
@@ -792,8 +795,8 @@ const assertClosedBadRequest = ({ headers, label, rawBody, status }) => {
     `${label} omitted its public error`
   );
   assert(
-    JSON.stringify(Object.keys(error).toSorted()) ===
-      JSON.stringify(['correlationId', 'reason', 'target', 'version']),
+    JSON.stringify(Object.keys(error).toSorted(compareCodePointStrings)) ===
+      JSON.stringify(publicServerErrorKeys),
     `${label} changed the four-field DTO`
   );
   assert(error.version === 1, `${label} changed the DTO version`);

@@ -221,6 +221,16 @@ describe('capability manifests', () => {
     ).toThrow(/cannot depend on demo/u);
   });
 
+  it('requires dependency IDs in canonical code-point order', () => {
+    expect(
+      defineCapabilityManifest(makeManifest({ dependsOn: ['alpha', 'zeta'] }))
+        .dependsOn
+    ).toEqual(['alpha', 'zeta']);
+    expect(() =>
+      defineCapabilityManifest(makeManifest({ dependsOn: ['zeta', 'alpha'] }))
+    ).toThrow(/dependencies must be sorted/u);
+  });
+
   it('selects exact core and demo preset membership', () => {
     const core = makeManifest({ id: 'core', preset: 'core', removable: false });
     const demo = makeManifest({ id: 'demo' });

@@ -77,7 +77,7 @@ export const createApplicationServerEntry = async (
         return applicationResult;
       };
       try {
-        return requestScope(runApplicationOnce);
+        return requestScope(runApplicationOnce); // NOSONAR -- only synchronous request-scope setup failures are handled here.
       } catch (failure) {
         reportTelemetryFailure('sentry.request_scope', failure);
         return applicationResult ?? runApplicationOnce();

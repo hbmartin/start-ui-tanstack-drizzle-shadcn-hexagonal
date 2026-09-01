@@ -20,6 +20,17 @@ const buildCommitEnvironmentKeys = [
   'CF_PAGES_COMMIT_SHA',
 ] as const;
 
+const trustedGitExecutableCandidates: Readonly<
+  Record<'posix' | 'win32', readonly string[]>
+> = {
+  posix: ['/usr/bin/git', '/usr/local/bin/git', '/opt/homebrew/bin/git'],
+  win32: [
+    'C:\\Program Files\\Git\\cmd\\git.exe',
+    'C:\\Program Files\\Git\\bin\\git.exe',
+    'C:\\Program Files (x86)\\Git\\cmd\\git.exe',
+  ],
+};
+
 const canonicalPath = (candidate: string) => {
   const resolved = path.resolve(candidate);
   try {
@@ -28,6 +39,14 @@ const canonicalPath = (candidate: string) => {
     return resolved;
   }
 };
+
+export const resolveGitExecutable = (
+  platform: NodeJS.Platform = process.platform,
+  isAvailable: (candidate: string) => boolean = fs.existsSync
+) =>
+  trustedGitExecutableCandidates[platform === 'win32' ? 'win32' : 'posix'].find(
+    isAvailable
+  );
 
 export const sourceDateFromEpoch = (sourceDateEpoch: string) => {
   if (!/^\d+$/.test(sourceDateEpoch)) {
@@ -47,9 +66,12 @@ export const sourceDateFromEpoch = (sourceDateEpoch: string) => {
 };
 
 export const readGitMetadata = (cwd = process.cwd()): GitMetadata | null => {
+  const gitExecutable = resolveGitExecutable();
+  if (!gitExecutable) return null;
+
   const runGit = (arguments_: string[]) =>
     childProcess
-      .execFileSync('git', arguments_, {
+      .execFileSync(gitExecutable, arguments_, {
         cwd,
         encoding: 'utf8',
         maxBuffer: 64 * 1024,

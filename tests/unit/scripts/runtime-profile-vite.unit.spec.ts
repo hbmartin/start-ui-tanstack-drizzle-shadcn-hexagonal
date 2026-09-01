@@ -42,10 +42,20 @@ describe('runtime profile Vite selection', () => {
       const provenance = createCloudflareAppChunkProvenance(root, {
         'assets/app.js': {
           code: appCode,
-          dynamicImports: ['assets/mixed.js', 'cloudflare:sockets'],
+          dynamicImports: [
+            'assets/z-last.js',
+            'assets/mixed.js',
+            'cloudflare:sockets',
+          ],
           fileName: 'assets/app.js',
-          imports: ['assets/virtual.js', 'node:crypto'],
+          imports: ['assets/virtual.js', 'assets/a-first.js', 'node:crypto'],
           modules: { [appModule]: {} },
+          type: 'chunk',
+        },
+        'assets/a-first.js': {
+          code: 'const first=true;',
+          fileName: 'assets/a-first.js',
+          modules: { '\0virtual:first': {} },
           type: 'chunk',
         },
         'assets/mixed.js': {
@@ -60,11 +70,17 @@ describe('runtime profile Vite selection', () => {
           modules: { '\0virtual:helper': {} },
           type: 'chunk',
         },
+        'assets/z-last.js': {
+          code: 'const last=true;',
+          fileName: 'assets/z-last.js',
+          modules: { '\0virtual:last': {} },
+          type: 'chunk',
+        },
       });
 
       expect(provenance.chunks['assets/app.js']).toEqual({
-        dynamicImports: ['assets/mixed.js'],
-        imports: ['assets/virtual.js'],
+        dynamicImports: ['assets/mixed.js', 'assets/z-last.js'],
+        imports: ['assets/a-first.js', 'assets/virtual.js'],
         modules: [{ id: 'src/app.ts', owner: 'app' }],
         ownership: 'app-only',
         sha256: createHash('sha256').update(appCode).digest('hex'),
