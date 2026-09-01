@@ -1,4 +1,4 @@
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 type RouteBoundaryPhase = 'beforeLoad' | 'loader';
 type RouteBoundaryFn = (args: any) => any;
@@ -24,7 +24,7 @@ const recordRouteBoundaryMetric = ({
   routeId: string;
   status: 'error' | 'success';
 }) => {
-  getTelemetry().recordMetric({
+  telemetryProxy.recordMetric({
     attributes: {
       'route.id': routeId,
       'route.phase': phase,
@@ -46,14 +46,14 @@ const runObservedRouteBoundary = <T>(
   const start = performance.now();
   const template = normalizeRouteTemplate(routeId);
 
-  return getTelemetry().startSpan(
+  return telemetryProxy.startSpan(
     {
       attributes: {
         'route.id': routeId,
         'route.phase': phase,
         'route.template': template,
       },
-      name: `route.${phase} ${template}`,
+      name: `route.${phase}`,
       op: `router.${phase}`,
     },
     () => {
@@ -119,6 +119,3 @@ export const observedLoader = <TLoader extends RouteBoundaryFn>(
 ): TLoader =>
   ((args: Parameters<TLoader>[0]) =>
     runObservedRouteBoundary(routeId, 'loader', () => loader(args))) as TLoader;
-
-export const observeLoader = <T>(routeId: string, fn: () => T): T =>
-  runObservedRouteBoundary(routeId, 'loader', fn);

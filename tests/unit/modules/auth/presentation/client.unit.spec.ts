@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
     sendEmailOtp: vi.fn(),
     signInEmailOtp: vi.fn(),
     signInSocial: vi.fn(),
-    signOut: vi.fn(),
   },
   fetch: vi.fn(),
   useCurrentSessionQuery: vi.fn(),
@@ -115,7 +114,6 @@ describe('auth client facade', () => {
       credentials: 'same-origin',
       method: 'POST',
     });
-    expect(mocks.betterAuthBrowserClient.signOut).not.toHaveBeenCalled();
   });
 
   it('maps logout HTTP failures into a neutral error result', async () => {
@@ -135,7 +133,6 @@ describe('auth client facade', () => {
       credentials: 'same-origin',
       method: 'POST',
     });
-    expect(mocks.betterAuthBrowserClient.signOut).not.toHaveBeenCalled();
   });
 
   it('includes the HTTP status when logout failure status text is empty', async () => {

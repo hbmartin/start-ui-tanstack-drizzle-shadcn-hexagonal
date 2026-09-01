@@ -3,9 +3,10 @@ import type {
   IdGenerator,
   Logger,
   PermissionChecker,
-  TransactionRunner,
+  ResultTransactionRunner,
 } from '@/modules/kernel';
 import type { BookCoverObjectKey } from '@/modules/kernel/domain/ids';
+import type { AuditPort } from '@/modules/audit';
 
 import type { BookCoverStorage } from '../ports/book-cover-storage';
 import type {
@@ -18,12 +19,13 @@ import type {
 } from '../ports/book-repository';
 
 export type BookTransactionContext = {
+  audit: AuditPort;
   bookRepository: BookRepository;
 };
 
 export type BookUseCaseDeps = {
   bookRepository: BookRepository;
-  transactionRunner: TransactionRunner<BookTransactionContext>;
+  transactionRunner: ResultTransactionRunner<BookTransactionContext>;
   idGenerator: IdGenerator;
   permissionChecker: PermissionChecker;
   coverStorage: BookCoverStorage;

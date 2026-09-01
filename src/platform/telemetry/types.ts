@@ -46,8 +46,7 @@ export type TelemetrySpanStatus = 'ok' | 'error' | 'unset';
 export type TelemetrySpanHandle = {
   setAttributes(attributes: TelemetryAttributes): void;
   addEvent(name: string, attributes?: TelemetryAttributes): void;
-  setStatus(status: TelemetrySpanStatus, message?: string): void;
-  recordException(error: unknown): void;
+  setStatus(status: TelemetrySpanStatus): void;
   end(): void;
 };
 
@@ -93,4 +92,6 @@ export interface TelemetryAdapter {
   recordMetric(input: TelemetryMetricInput): void;
   /** Emit a structured OpenTelemetry log record. */
   emitLog(record: TelemetryLogRecord): void;
+  /** Flush pending signals. Lifecycle owners must apply a bounded timeout. */
+  forceFlush(): Promise<void>;
 }

@@ -1,28 +1,47 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sentryMocks = vi.hoisted(() => ({
+  browserApiErrorsIntegration: vi.fn(() => ({ name: 'BrowserApiErrors' })),
   browserTracingIntegration: vi.fn(() => 'browser-tracing'),
+  eventFiltersIntegration: vi.fn(() => ({ name: 'EventFilters' })),
+  functionToStringIntegration: vi.fn(() => ({ name: 'FunctionToString' })),
+  globalHandlersIntegration: vi.fn(() => ({ name: 'GlobalHandlers' })),
   init: vi.fn(),
+  linkedErrorsIntegration: vi.fn(() => ({ name: 'LinkedErrors' })),
   tanstackRouterBrowserTracingIntegration: vi.fn(() => 'router-tracing'),
 }));
 
+const otelMocks = vi.hoisted(() => ({
+  initOpenTelemetryClient: vi.fn(),
+}));
+
 const envClientMock = vi.hoisted(() => ({
+  TELEMETRY_MODE: 'optional' as 'off' | 'optional' | 'required',
   VITE_OTEL_BROWSER_ENABLED: false,
   VITE_SENTRY_DSN: '',
   VITE_SENTRY_ENVIRONMENT: undefined as string | undefined,
   VITE_SENTRY_TUNNEL_PATH: '/api/telemetry/sentry-tunnel',
-  VITE_SENTRY_TRACES_SAMPLE_RATE: 0,
 }));
 
 vi.mock('@sentry/tanstackstart-react', () => ({
+  browserApiErrorsIntegration: sentryMocks.browserApiErrorsIntegration,
   browserTracingIntegration: sentryMocks.browserTracingIntegration,
+  eventFiltersIntegration: sentryMocks.eventFiltersIntegration,
+  functionToStringIntegration: sentryMocks.functionToStringIntegration,
+  globalHandlersIntegration: sentryMocks.globalHandlersIntegration,
   init: sentryMocks.init,
+  linkedErrorsIntegration: sentryMocks.linkedErrorsIntegration,
   tanstackRouterBrowserTracingIntegration:
     sentryMocks.tanstackRouterBrowserTracingIntegration,
 }));
 
 vi.mock('@/platform/env/client', () => ({
   envClient: envClientMock,
+  getEnvClient: () => envClientMock,
+}));
+
+vi.mock('@/composition/telemetry/otel.client', () => ({
+  initOpenTelemetryClient: otelMocks.initOpenTelemetryClient,
 }));
 
 describe('Sentry telemetry composition', () => {
@@ -30,9 +49,11 @@ describe('Sentry telemetry composition', () => {
     vi.clearAllMocks();
     vi.resetModules();
     envClientMock.VITE_SENTRY_DSN = '';
+    envClientMock.TELEMETRY_MODE = 'optional';
+    envClientMock.VITE_OTEL_BROWSER_ENABLED = false;
     envClientMock.VITE_SENTRY_ENVIRONMENT = undefined;
     envClientMock.VITE_SENTRY_TUNNEL_PATH = '/api/telemetry/sentry-tunnel';
-    envClientMock.VITE_SENTRY_TRACES_SAMPLE_RATE = 0;
+    otelMocks.initOpenTelemetryClient.mockReturnValue(undefined);
   });
 
   it('is a no-op when no client DSN is configured', async () => {
@@ -61,24 +82,97 @@ describe('Sentry telemetry composition', () => {
     expect(sentryMocks.init).toHaveBeenCalledWith(
       expect.objectContaining({
         beforeSend: expect.any(Function),
-        integrations: [],
+        beforeSendTransaction: expect.any(Function),
+        defaultIntegrations: false,
+        enableLogs: false,
+        integrations: [
+          { name: 'EventFilters' },
+          { name: 'FunctionToString' },
+          { name: 'BrowserApiErrors' },
+          { name: 'GlobalHandlers' },
+          { name: 'LinkedErrors' },
+        ],
         sendDefaultPii: false,
-        tracesSampleRate: 0,
+        tracePropagationTargets: [],
         tunnel: '/api/telemetry/sentry-tunnel',
+      })
+    );
+    const options = sentryMocks.init.mock.calls[0]?.[0];
+    expect(options).not.toHaveProperty('tracesSampleRate');
+    expect(options).not.toHaveProperty('tracesSampler');
+    expect(options?.beforeSendTransaction()).toBeNull();
+  });
+
+  it('keeps browser Sentry active while off mode skips browser OTel', async () => {
+    envClientMock.TELEMETRY_MODE = 'off';
+    envClientMock.VITE_OTEL_BROWSER_ENABLED = true;
+    envClientMock.VITE_SENTRY_DSN = 'https://example.com/1';
+    const { initTelemetryClient } =
+      await import('@/composition/telemetry/sentry.client');
+
+    initTelemetryClient();
+
+    expect(otelMocks.initOpenTelemetryClient).not.toHaveBeenCalled();
+    expect(sentryMocks.init).toHaveBeenCalledOnce();
+  });
+
+  it('does not abort optional browser bootstrap when Sentry initialization fails', async () => {
+    vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    envClientMock.VITE_SENTRY_DSN = 'https://example.com/1';
+    sentryMocks.init.mockImplementationOnce(() => {
+      throw new Error('Sentry unavailable');
+    });
+    const { initTelemetryClient } =
+      await import('@/composition/telemetry/sentry.client');
+
+    expect(() => initTelemetryClient()).not.toThrow();
+    expect(globalThis.console.error).toHaveBeenCalledWith(
+      'telemetry.report_failure',
+      expect.objectContaining({
+        errorType: 'Error',
+        source: 'sentry.client.initialize',
       })
     );
   });
 
-  it('passes capture context through to Sentry with primitive tags stringified', async () => {
+  it('keeps browser Sentry available when optional OTel initialization fails', async () => {
+    vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    envClientMock.VITE_SENTRY_DSN = 'https://example.com/1';
+    otelMocks.initOpenTelemetryClient.mockImplementationOnce(() => {
+      throw new Error('OTel unavailable');
+    });
+    const { initTelemetryClient } =
+      await import('@/composition/telemetry/sentry.client');
+
+    expect(() => initTelemetryClient()).not.toThrow();
+    expect(sentryMocks.init).toHaveBeenCalledOnce();
+    expect(globalThis.console.error).toHaveBeenCalledWith(
+      'telemetry.report_failure',
+      expect.objectContaining({
+        errorType: 'Error',
+        source: 'otel.client.initialize',
+      })
+    );
+  });
+
+  it('passes allowlisted tags and active OTel correlation to Sentry', async () => {
     const { createSentryTelemetryAdapter } =
       await import('@/composition/telemetry/sentry-adapter');
     const captureException = vi.fn(() => 'event-id');
-    const adapter = createSentryTelemetryAdapter({
-      captureException,
-      setUser: vi.fn(),
-      setTag: vi.fn(),
-      startSpan: vi.fn((_options, fn) => fn()),
-    });
+    const adapter = createSentryTelemetryAdapter(
+      {
+        captureException,
+        setUser: vi.fn(),
+        setTag: vi.fn(),
+        startSpan: vi.fn((_options, fn) => fn()),
+      },
+      {
+        currentCorrelation: () => ({
+          spanId: 'b'.repeat(16),
+          traceId: 'a'.repeat(32),
+        }),
+      }
+    );
     const error = new Error('boom');
 
     adapter.captureException(error, {
@@ -89,18 +183,18 @@ describe('Sentry telemetry composition', () => {
     });
 
     expect(captureException).toHaveBeenCalledWith(error, {
-      fingerprint: ['email-send'],
       level: 'error',
       tags: {
         attempt: '2',
         event: 'email.send.failed',
+        'otel.span_id': 'b'.repeat(16),
+        'otel.trace_id': 'a'.repeat(32),
         retryable: 'false',
       },
-      extra: { statusCode: 401 },
     });
   });
 
-  it('sanitizes Sentry event tags, extras, and contexts before send', async () => {
+  it('projects Sentry events onto closed tags and trace context', async () => {
     const { sanitizeSentryEvent } =
       await import('@/composition/telemetry/sentry-adapter');
 
@@ -109,6 +203,12 @@ describe('Sentry telemetry composition', () => {
         contexts: {
           request: {
             authorization: 'Bearer token',
+          },
+          trace: {
+            data: { payload: 'confidential diagnosis' },
+            op: 'http.server',
+            span_id: 'b'.repeat(16),
+            trace_id: 'a'.repeat(32),
           },
         },
         extra: {
@@ -123,23 +223,382 @@ describe('Sentry telemetry composition', () => {
       })
     ).toEqual({
       contexts: {
-        request: {
-          authorization: '[REDACTED]',
+        trace: {
+          op: 'http.server',
+          span_id: 'b'.repeat(16),
+          trace_id: 'a'.repeat(32),
         },
-      },
-      extra: {
-        email: '[REDACTED]',
       },
       tags: {
         attempt: '2',
-        email: '[REDACTED]',
         event: 'email.send.failed',
         retryable: 'false',
       },
     });
   });
 
-  it('drops unsupported Sentry event tag values after sanitizing', async () => {
+  it('drops request secrets and sanitizes full exception events', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+
+    const sanitized = sanitizeSentryEvent({
+      breadcrumbs: [
+        {
+          category: 'fetch',
+          data: { authorization: 'Bearer breadcrumb-token' },
+          level: 'error',
+          message: 'person@example.com signed in with breadcrumb-token',
+          type: 'http',
+        },
+      ],
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                {
+                  filename: 'https://cdn.example/app.js?token=frame-token',
+                  lineno: 42,
+                  vars: {
+                    medicalNote: 'confidential diagnosis',
+                    token: 'frame-token',
+                  },
+                },
+              ],
+            },
+            type: 'Error',
+            value: 'Bearer exception-token for person@example.com',
+          },
+        ],
+      },
+      message: 'Bearer message-token for person@example.com',
+      platform: 'confidential diagnosis',
+      request: {
+        cookies: { session: 'cookie-token' },
+        data: { password: 'password-value' },
+        headers: { authorization: 'Bearer request-token' },
+        method: 'POST',
+        query_string: 'token=query-token',
+        url: 'https://app.example/account?token=query-token',
+      },
+      user: {
+        email: 'person@example.com',
+        id: 'user-1',
+        ip_address: '203.0.113.2',
+      },
+      transaction: 'confidential diagnosis',
+    });
+
+    expect(sanitized).toEqual(
+      expect.objectContaining({
+        breadcrumbs: [{ category: 'fetch', level: 'error', type: 'http' }],
+        exception: {
+          values: [
+            expect.objectContaining({
+              stacktrace: {
+                frames: [{ filename: '/app.js', lineno: 42 }],
+              },
+              type: 'Error',
+              value: 'Unexpected application error',
+            }),
+          ],
+        },
+        message: 'Unexpected application error',
+        request: { method: 'POST' },
+      })
+    );
+    expect(JSON.stringify(sanitized)).not.toMatch(
+      /breadcrumb-token|confidential diagnosis|exception-token|frame-token|message-token|request-token|query-token|cookie-token|password-value|person@example.com|user-1/u
+    );
+  });
+
+  it('preserves source-map identity while rejecting hostile release metadata', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const debugId = '01234567-89ab-cdef-0123-456789abcdef';
+    const codeFile = 'https://cdn.example/assets/app.js?token=secret';
+
+    const sanitized = sanitizeSentryEvent({
+      debug_meta: {
+        images: [
+          ...Array.from({ length: 50 }, (_, index) => ({
+            code_file: `https://cdn.example/assets/unmatched-${index}.js`,
+            debug_id: `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}`,
+            type: 'sourcemap',
+          })),
+          { code_file: codeFile, debug_id: debugId, type: 'sourcemap' },
+          { code_file: codeFile, debug_id: debugId, type: 'sourcemap' },
+          {
+            code_file: 'https://cdn.example/assets/other.js',
+            debug_id: 'fedcba98-7654-3210-fedc-ba9876543210',
+            type: 'sourcemap',
+          },
+          { code_file: codeFile, debug_id: '0'.repeat(32), type: 'sourcemap' },
+          { code_file: codeFile, debug_id: debugId, type: 'wasm' },
+        ],
+      },
+      environment: 'production',
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                {
+                  abs_path: codeFile,
+                  filename: codeFile,
+                },
+              ],
+            },
+            type: 'Error',
+          },
+        ],
+      },
+      release: 'start-ui-web@5.0.0-alpha.1+7308e9c2',
+    });
+
+    expect(sanitized).toMatchObject({
+      debug_meta: {
+        images: [
+          {
+            code_file: '/assets/app.js',
+            debug_id: debugId,
+            type: 'sourcemap',
+          },
+        ],
+      },
+      environment: 'production',
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [
+                {
+                  abs_path: '/assets/app.js',
+                  filename: '/assets/app.js',
+                },
+              ],
+            },
+            type: 'Error',
+          },
+        ],
+      },
+      release: 'start-ui-web@5.0.0-alpha.1+7308e9c2',
+    });
+
+    const rejected = sanitizeSentryEvent({
+      debug_meta: {
+        images: [
+          {
+            code_file: codeFile,
+            debug_id: 'not-a-debug-id',
+            type: 'sourcemap',
+          },
+        ],
+      },
+      environment: 'production/../../secret',
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [{ debug_id: 'not-a-debug-id', filename: codeFile }],
+            },
+            type: 'Error',
+          },
+        ],
+      },
+      release: 'release with user@example.com',
+    });
+    expect(rejected).not.toHaveProperty('debug_meta');
+    expect(rejected).not.toHaveProperty('environment');
+    expect(rejected).not.toHaveProperty('release');
+    expect(JSON.stringify(rejected)).not.toMatch(
+      /not-a-debug-id|production\/\.\.|user@example\.com/u
+    );
+
+    for (const environment of [
+      'None',
+      'a'.repeat(65),
+      'preview/query',
+      'preview environment',
+      'sk-abcdefghi',
+    ]) {
+      expect(sanitizeSentryEvent({ environment })).not.toHaveProperty(
+        'environment'
+      );
+    }
+    for (const release of [
+      '.',
+      '..',
+      'a'.repeat(201),
+      'release/path',
+      'release\\path',
+      'release\nvalue',
+      'sk-abcdefghi',
+      'user@example.com',
+      `a@${'1'.repeat(199)}`,
+    ]) {
+      expect(sanitizeSentryEvent({ release })).not.toHaveProperty('release');
+    }
+    expect(
+      sanitizeSentryEvent({ release: 'start-ui-web@v5.0.0-alpha.1+7308e9c2' })
+    ).toHaveProperty('release', 'start-ui-web@v5.0.0-alpha.1+7308e9c2');
+  });
+
+  it('retains at most 50 unique source-map identities', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const codeFile = 'https://cdn.example/assets/app.js';
+    const debugId = (index: number) =>
+      `00000000-0000-0000-0000-${index.toString(16).padStart(12, '0')}`;
+
+    const sanitized = sanitizeSentryEvent({
+      debug_meta: {
+        images: Array.from({ length: 51 }, (_, index) => ({
+          code_file: codeFile,
+          debug_id: debugId(index),
+          type: 'sourcemap',
+        })),
+      },
+      exception: {
+        values: [
+          {
+            stacktrace: { frames: [{ filename: codeFile }] },
+            type: 'Error',
+          },
+        ],
+      },
+    }) as { debug_meta?: { images?: Array<{ debug_id: string }> } };
+
+    expect(sanitized.debug_meta?.images).toHaveLength(50);
+    expect(sanitized.debug_meta?.images?.at(-1)?.debug_id).toBe(debugId(49));
+    expect(sanitized.debug_meta?.images).not.toContainEqual(
+      expect.objectContaining({ debug_id: debugId(50) })
+    );
+  });
+
+  it('scans at most 1,000 source-map records', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const acceptedPath = 'https://cdn.example/assets/accepted.js';
+    const excludedPath = 'https://cdn.example/assets/excluded.js';
+    const acceptedId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const excludedId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const unmatched = Array.from({ length: 999 }, (_, index) => ({
+      code_file: `https://cdn.example/assets/unmatched-${index}.js`,
+      debug_id: `00000000-0000-0000-0000-${index
+        .toString(16)
+        .padStart(12, '0')}`,
+      type: 'sourcemap',
+    }));
+
+    const sanitized = sanitizeSentryEvent({
+      debug_meta: {
+        images: [
+          ...unmatched,
+          {
+            code_file: acceptedPath,
+            debug_id: acceptedId,
+            type: 'sourcemap',
+          },
+          {
+            code_file: excludedPath,
+            debug_id: excludedId,
+            type: 'sourcemap',
+          },
+        ],
+      },
+      exception: {
+        values: [
+          {
+            stacktrace: {
+              frames: [{ filename: acceptedPath }, { filename: excludedPath }],
+            },
+            type: 'Error',
+          },
+        ],
+      },
+    });
+
+    expect(sanitized).toHaveProperty('debug_meta.images', [
+      {
+        code_file: '/assets/accepted.js',
+        debug_id: acceptedId,
+        type: 'sourcemap',
+      },
+    ]);
+    expect(JSON.stringify(sanitized)).not.toContain(excludedId);
+  });
+
+  it('never exports dynamic request path segments', async () => {
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+
+    const sanitized = sanitizeSentryEvent({
+      request: {
+        method: 'GET',
+        url: 'https://app.example/manager/users/person@example.com/reset/query-secret',
+      },
+    });
+
+    expect(sanitized).toEqual({ request: { method: 'GET' } });
+    expect(JSON.stringify(sanitized)).not.toMatch(
+      /person@example\.com|query-secret|manager\/users/u
+    );
+  });
+
+  it('drops transaction query data and malformed trace correlation IDs', async () => {
+    const { createSentryTelemetryAdapter, sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const captureException = vi.fn(() => 'event-id');
+    const adapter = createSentryTelemetryAdapter(
+      {
+        captureException,
+        setUser: vi.fn(),
+      },
+      {
+        currentCorrelation: () => ({
+          spanId: 'span-secret',
+          traceId: 'trace-secret',
+        }),
+      }
+    );
+
+    adapter.captureException(new Error('failed'));
+
+    expect(captureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tags: undefined })
+    );
+    expect(
+      sanitizeSentryEvent({
+        contexts: {
+          trace: { span_id: 'span-secret', trace_id: 'trace-secret' },
+        },
+        transaction: 'GET /reset?token=query-secret',
+      })
+    ).toEqual({});
+  });
+
+  it('returns a safe event when hostile event inspection fails', async () => {
+    vi.spyOn(globalThis.console, 'error').mockImplementation(() => undefined);
+    const { sanitizeSentryEvent } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const hostile = new Proxy(
+      { message: 'Bearer hostile-secret' },
+      {
+        ownKeys: () => {
+          throw new Error('inspection failed');
+        },
+      }
+    );
+
+    expect(() => sanitizeSentryEvent(hostile)).not.toThrow();
+    expect(sanitizeSentryEvent(hostile)).toEqual({
+      message: 'Unexpected application error',
+    });
+  });
+
+  it('drops unsupported and non-allowlisted Sentry event tags', async () => {
     const { sanitizeSentryEvent } =
       await import('@/composition/telemetry/sentry-adapter');
 
@@ -152,14 +611,12 @@ describe('Sentry telemetry composition', () => {
           optional: undefined,
           sequence: ['array'],
           zero: 0,
+          event: 'application.failed',
         },
       })
     ).toEqual({
-      contexts: {},
-      extra: {},
       tags: {
-        empty: '',
-        zero: '0',
+        event: 'application.failed',
       },
     });
   });
@@ -188,11 +645,7 @@ describe('Sentry telemetry composition', () => {
     const sanitized: SpecificSentryEvent = sanitizeSentryEvent(event);
 
     expect(sanitized).toEqual({
-      contexts: {},
       event_id: 'event-1',
-      extra: {
-        authorization: '[REDACTED]',
-      },
       tags: {
         event: 'auth.failure',
       },
@@ -216,5 +669,50 @@ describe('Sentry telemetry composition', () => {
 
     expect(setUser).toHaveBeenCalledWith(null);
     expect(setTag).toHaveBeenCalledWith('role', 'none');
+  });
+
+  it('leaves request-wrapper-owned Sentry flushing to the runtime', async () => {
+    const { createSentryTelemetryAdapter } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const flush = vi.fn(async () => true);
+    const adapter = createSentryTelemetryAdapter(
+      {
+        captureException: vi.fn(() => 'event-id'),
+        flush,
+        setUser: vi.fn(),
+      },
+      { flushOwner: 'request-wrapper' }
+    );
+
+    await expect(adapter.forceFlush()).resolves.toBeUndefined();
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  it('preserves adapter-owned Sentry flushing for persistent runtimes', async () => {
+    const { createSentryTelemetryAdapter } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const flush = vi.fn(async () => true);
+    const adapter = createSentryTelemetryAdapter({
+      captureException: vi.fn(() => 'event-id'),
+      flush,
+      setUser: vi.fn(),
+    });
+
+    await expect(adapter.forceFlush()).resolves.toBeUndefined();
+    expect(flush).toHaveBeenCalledExactlyOnceWith(5_000);
+  });
+
+  it('preserves adapter-owned Sentry flush failure reporting', async () => {
+    const { createSentryTelemetryAdapter } =
+      await import('@/composition/telemetry/sentry-adapter');
+    const adapter = createSentryTelemetryAdapter({
+      captureException: vi.fn(() => 'event-id'),
+      flush: vi.fn(async () => false),
+      setUser: vi.fn(),
+    });
+
+    await expect(adapter.forceFlush()).rejects.toThrow(
+      'Sentry flush did not complete'
+    );
   });
 });

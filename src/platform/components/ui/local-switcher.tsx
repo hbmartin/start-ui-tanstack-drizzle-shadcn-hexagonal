@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronsUpDownIcon, LanguagesIcon } from 'lucide-react';
+import { LanguagesIcon } from 'lucide-react';
 import { useTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -6,19 +6,21 @@ import {
   AVAILABLE_LANGUAGES,
   LanguageKey,
 } from '@/platform/lib/i18n/constants';
+import { useHydrated } from '@/platform/hooks/use-hydrated';
 import { cn } from '@/platform/lib/tailwind/utils';
 
-import { Button } from '@/platform/components/ui/button';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/platform/components/ui/dropdown-menu';
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/platform/components/ui/select';
 
 export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
   const { i18n, t } = useTranslation(['common']);
   const [isPending, startLanguageTransition] = useTransition();
+  const hydrated = useHydrated();
 
   const changeLanguage = (language: LanguageKey) => {
     if (language === i18n.language || isPending) return;
@@ -29,15 +31,19 @@ export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
   };
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button
-            variant={props.iconOnly ? 'ghost' : 'link'}
-            size={props.iconOnly ? 'icon' : 'default'}
-            loading={isPending}
-          />
-        }
+    <Select
+      value={i18n.language}
+      disabled={!hydrated || isPending}
+      onValueChange={(value) => changeLanguage(value as LanguageKey)}
+    >
+      <SelectTrigger
+        aria-label={t('common:languages.label')}
+        data-hydrated={hydrated ? 'true' : 'false'}
+        className={cn(
+          'w-auto border-0 bg-transparent px-0 shadow-none dark:bg-transparent',
+          props.iconOnly &&
+            'size-9 justify-center [&_[data-slot=select-icon]]:hidden [&_[data-slot=select-value]]:sr-only'
+        )}
       >
         <LanguagesIcon className="opacity-50" />
         {isPending && (
@@ -45,24 +51,11 @@ export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
             {t('common:languages.pending')}
           </span>
         )}
-        <span className={cn(props.iconOnly && 'sr-only')}>
-          {t(`common:languages.values.${i18n.language as LanguageKey}`)}
-        </span>
-        {!props.iconOnly && <ChevronsUpDownIcon className="opacity-50" />}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
         {AVAILABLE_LANGUAGES.map((language) => (
-          <DropdownMenuItem
-            key={language.key}
-            disabled={isPending}
-            onClick={() => changeLanguage(language.key)}
-          >
-            <CheckIcon
-              className={cn(
-                'mt-0.5 size-4 self-start text-current',
-                i18n.language === language.key ? 'opacity-100' : 'opacity-0'
-              )}
-            />
+          <SelectItem key={language.key} value={language.key}>
             <span className="flex flex-col">
               <span>{t(`common:languages.values.${language.key}`)}</span>
               {language.key !== i18n.language && (
@@ -73,9 +66,9 @@ export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
                 </span>
               )}
             </span>
-          </DropdownMenuItem>
+          </SelectItem>
         ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </SelectContent>
+    </Select>
   );
 };

@@ -9,3 +9,5 @@ export const setCookie = vi.fn((_name: string, _value: string) => undefined);
 export const setResponseHeader = vi.fn(
   (_name: string, _value: string) => undefined
 );
+
+export const setResponseStatus = vi.fn((_status: number) => undefined);

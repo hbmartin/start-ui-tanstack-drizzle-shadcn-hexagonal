@@ -1,54 +1,36 @@
 /* oxlint-disable no-process-env */
 import { z } from 'zod';
 
+import { applicationIdentitySchema } from './application-identity';
+import { resolveCanonicalOrigin } from './canonical-origin';
+import type { RuntimeProfile } from '../runtime/runtime-profile';
+import { telemetryModes } from '../telemetry/mode';
+
+import {
+  isDevRuntimeEnvironment,
+  isProdRuntimeEnvironment,
+  readRuntimeEnv,
+  type RuntimeEnv,
+} from './runtime';
 import {
   httpsInProductionMessage,
   isSecureUrlForProduction,
 } from './url-security';
 
-type RuntimeEnv = Record<string, unknown>;
-
-const runtimeEnv = (): RuntimeEnv => ({
-  ...(typeof process === 'undefined' ? {} : process.env),
-  ...import.meta.env,
-});
-
 const isTruthy = (value: unknown) => value === true || value === 'true';
 
-const isProd = () => {
-  const env = runtimeEnv();
-  return env.NODE_ENV ? env.NODE_ENV === 'production' : isTruthy(env.PROD);
-};
+const emptyStringAsUndefined = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
 
-const isDev = () => {
-  const env = runtimeEnv();
-  return env.NODE_ENV ? env.NODE_ENV === 'development' : isTruthy(env.DEV);
-};
+export const isDevEnvironment = isDevRuntimeEnvironment;
 
-export const isDevEnvironment = isDev;
-
-const getBaseUrl = (env: RuntimeEnv) => {
-  const vercelUrlPreviewUrl =
-    env.VITE_VERCEL_ENV === 'preview' ? env.VITE_VERCEL_BRANCH_URL : null;
-
-  if (typeof vercelUrlPreviewUrl === 'string' && vercelUrlPreviewUrl) {
-    return `https://${vercelUrlPreviewUrl}`;
-  }
-
-  return env.VITE_BASE_URL;
-};
-
-const clientSchema = () =>
-  z.object({
-    VITE_BASE_URL: z
-      .url()
-      .refine((value) => isSecureUrlForProduction(value, isProd()), {
-        message: httpsInProductionMessage('VITE_BASE_URL'),
-      }),
+const clientSchema = (isProduction: boolean, isDevelopment: boolean) =>
+  applicationIdentitySchema.extend({
+    VITE_BASE_URL: z.url(),
     VITE_AUTH_SIGNUP_ENABLED: z
       .enum(['true', 'false'])
       .optional()
-      .prefault('true')
+      .prefault('false')
       .transform((value) => value === 'true'),
     VITE_VISUAL_TEST: z
       .enum(['true', 'false'])
@@ -58,37 +40,39 @@ const clientSchema = () =>
     DEV: z
       .union([z.boolean(), z.string()])
       .optional()
-      .transform((value) => (value === undefined ? isDev() : isTruthy(value))),
+      .transform((value) =>
+        value === undefined ? isDevelopment : isTruthy(value)
+      ),
     VITE_ENV_NAME: z
       .string()
       .optional()
-      .transform((value) => value ?? (isDev() ? 'LOCAL' : undefined)),
+      .transform((value) => value ?? (isDevelopment ? 'LOCAL' : undefined)),
     VITE_ENV_EMOJI: z
       .emoji()
       .optional()
-      .transform((value) => value ?? (isDev() ? '🚧' : undefined)),
+      .transform((value) => value ?? (isDevelopment ? '🚧' : undefined)),
     VITE_ENV_COLOR: z
       .string()
       .optional()
-      .transform((value) => value ?? (isDev() ? 'gold' : 'plum')),
-    VITE_S3_BUCKET_PUBLIC_URL: z
-      .url()
-      .refine((value) => isSecureUrlForProduction(value, isProd()), {
-        message: httpsInProductionMessage('VITE_S3_BUCKET_PUBLIC_URL'),
-      }),
+      .transform((value) => value ?? (isDevelopment ? 'gold' : 'plum')),
+    VITE_S3_BUCKET_PUBLIC_URL: z.preprocess(
+      emptyStringAsUndefined,
+      z
+        .url()
+        .refine((value) => isSecureUrlForProduction(value, isProduction), {
+          message: httpsInProductionMessage('VITE_S3_BUCKET_PUBLIC_URL'),
+        })
+        .optional()
+    ),
     VITE_SENTRY_DSN: z
       .string()
       .url()
-      .refine((value) => isSecureUrlForProduction(value, isProd()), {
+      .refine((value) => isSecureUrlForProduction(value, isProduction), {
         message: httpsInProductionMessage('VITE_SENTRY_DSN'),
       })
       .optional(),
     VITE_SENTRY_ENVIRONMENT: z.string().optional(),
-    VITE_SENTRY_TRACES_SAMPLE_RATE: z.coerce
-      .number()
-      .min(0)
-      .max(1)
-      .prefault(isProd() ? 0.1 : 1),
+    TELEMETRY_MODE: z.enum(telemetryModes).optional().prefault('optional'),
     VITE_OTEL_BROWSER_ENABLED: z
       .enum(['true', 'false'])
       .optional()
@@ -111,15 +95,43 @@ const clientSchema = () =>
 
 export type EnvClient = z.infer<ReturnType<typeof clientSchema>>;
 
-let cachedClientEnv: EnvClient | undefined;
-
-export function getEnvClient(): EnvClient {
-  if (cachedClientEnv) return cachedClientEnv;
-  const raw = runtimeEnv();
-  cachedClientEnv = clientSchema().parse({
+export const parseClientEnv = (
+  raw: RuntimeEnv,
+  runtimeProfile?: RuntimeProfile
+): EnvClient =>
+  clientSchema(
+    isProdRuntimeEnvironment(raw),
+    isDevRuntimeEnvironment(raw)
+  ).parse({
     ...raw,
-    VITE_BASE_URL: getBaseUrl(raw),
+    VITE_BASE_URL: resolveCanonicalOrigin(raw, runtimeProfile),
   });
+
+let cachedClientEnv: EnvClient | undefined;
+let cachedRuntimeProfile: RuntimeProfile | undefined;
+
+export function getEnvClient(runtimeProfile?: RuntimeProfile): EnvClient {
+  if (cachedClientEnv && runtimeProfile === undefined) return cachedClientEnv;
+  if (cachedClientEnv && cachedRuntimeProfile === runtimeProfile) {
+    return cachedClientEnv;
+  }
+  if (cachedRuntimeProfile && runtimeProfile !== cachedRuntimeProfile) {
+    throw new TypeError(
+      `Client configuration was already initialized for the ${cachedRuntimeProfile} runtime profile.`
+    );
+  }
+  const raw = readRuntimeEnv();
+  if (
+    runtimeProfile === undefined &&
+    typeof window === 'undefined' &&
+    isProdRuntimeEnvironment(raw)
+  ) {
+    throw new TypeError(
+      'Production server client configuration requires an explicit RuntimeProfile.'
+    );
+  }
+  cachedClientEnv = parseClientEnv(raw, runtimeProfile);
+  cachedRuntimeProfile = runtimeProfile;
   return cachedClientEnv;
 }
 

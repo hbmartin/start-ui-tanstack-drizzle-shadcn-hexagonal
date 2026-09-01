@@ -3,9 +3,16 @@ import { playwright } from '@vitest/browser-playwright';
 import path from 'node:path';
 import { coverageConfigDefaults, defineConfig } from 'vitest/config';
 
-const resolve = (filePath: string) => path.resolve(__dirname, filePath);
+import { BROWSER_TELEMETRY_BUILD_TARGET } from './scripts/browser-telemetry-target.js';
+
+const resolve = (filePath: string) =>
+  path.resolve(import.meta.dirname, filePath);
 
 const testAliases = [
+  {
+    find: /^virtual:start-ui\/runtime-server-entry$/,
+    replacement: resolve('./src/runtime/node/server-entry.ts'),
+  },
   {
     find: /^@tanstack\/react-start$/,
     replacement: resolve('./tests/mocks/tanstack-react-start.ts'),
@@ -25,6 +32,9 @@ const testAliases = [
 ];
 
 export default defineConfig({
+  // Browser telemetry uses ZoneContextManager. Native async/await escapes the
+  // zone, so browser test code must exercise the same lowered output as builds.
+  oxc: { target: BROWSER_TELEMETRY_BUILD_TARGET },
   plugins: [react()],
   test: {
     coverage: {
@@ -35,6 +45,7 @@ export default defineConfig({
     },
     projects: [
       {
+        oxc: { target: BROWSER_TELEMETRY_BUILD_TARGET },
         optimizeDeps: {
           include: [
             '@base-ui/react/merge-props',
@@ -42,8 +53,6 @@ export default defineConfig({
             '@base-ui/react/use-render',
             '@tanstack/react-router',
             'better-auth/client/plugins',
-            'better-auth/plugins/access',
-            'better-auth/plugins/admin/access',
             'better-auth/react',
             'react-error-boundary',
           ],

@@ -59,6 +59,7 @@ const makeAuth = (
 const makeDb = (
   input: {
     identityUserId?: string;
+    persistedSession?: boolean;
     appUser?: {
       id: string;
       email: string;
@@ -67,12 +68,23 @@ const makeDb = (
       emailVerified: boolean;
       role: string;
       onboardedAt: Date | null;
+      banned?: boolean | null;
+      banExpires?: Date | string | null;
     } | null;
   } = {}
 ) => {
   const onConflictDoNothing = vi.fn(async () => undefined);
   const values = vi.fn(() => ({ onConflictDoNothing }));
   const insert = vi.fn(() => ({ values }));
+  const defaultAppUser = {
+    id: 'user-1',
+    email: 'user@example.com',
+    name: 'Test User',
+    image: null,
+    emailVerified: true,
+    role: 'admin',
+    onboardedAt: null,
+  };
 
   return {
     query: {
@@ -82,7 +94,14 @@ const makeDb = (
         ),
       },
       user: {
-        findFirst: vi.fn(async () => input.appUser ?? null),
+        findFirst: vi.fn(async () =>
+          'appUser' in input ? input.appUser : defaultAppUser
+        ),
+      },
+      session: {
+        findFirst: vi.fn(async () =>
+          input.persistedSession === false ? null : { id: 'session-1' }
+        ),
       },
     },
     insert,
@@ -99,11 +118,11 @@ describe('SessionGatewayBetterAuth', () => {
     vi.clearAllMocks();
   });
 
-  it('keeps valid provider roles', async () => {
+  it('uses the durable user role instead of the cached provider role', async () => {
     const { SessionGatewayBetterAuth } = await loadGateway();
     const db = makeDb();
     const gateway = new SessionGatewayBetterAuth(
-      makeAuth('admin'),
+      makeAuth('user'),
       db,
       undefined,
       telemetry
@@ -137,11 +156,21 @@ describe('SessionGatewayBetterAuth', () => {
     );
   });
 
-  it('falls back to the least-privileged role for unknown provider roles', async () => {
+  it('falls back to the least-privileged role for unknown durable roles', async () => {
     const { SessionGatewayBetterAuth } = await loadGateway();
     const gateway = new SessionGatewayBetterAuth(
-      makeAuth('owner'),
-      makeDb(),
+      makeAuth('admin'),
+      makeDb({
+        appUser: {
+          id: 'user-1',
+          email: 'user@example.com',
+          name: 'Test User',
+          image: null,
+          emailVerified: true,
+          role: 'owner',
+          onboardedAt: null,
+        },
+      }),
       undefined,
       telemetry
     );
@@ -221,6 +250,85 @@ describe('SessionGatewayBetterAuth', () => {
     const session = await gateway.getSession({ headers: new Headers() });
 
     expect(session.isOk()).toBe(true);
+    expect(session).toMatchObject({
+      tag: 'Ok',
+      value: { type: 'auth_session_missing' },
+    });
+  });
+
+  it.each([
+    { label: 'permanent', banExpires: null },
+    { label: 'active', banExpires: new Date('2026-07-01T00:00:00.000Z') },
+    { label: 'invalid', banExpires: 'not-a-date' },
+  ])('rejects an existing session for a $label durable ban', async (ban) => {
+    const { SessionGatewayBetterAuth } = await loadGateway();
+    const gateway = new SessionGatewayBetterAuth(
+      makeAuth('admin'),
+      makeDb({
+        appUser: {
+          id: 'user-1',
+          email: 'user@example.com',
+          name: 'Test User',
+          image: null,
+          emailVerified: true,
+          role: 'admin',
+          onboardedAt: null,
+          banned: true,
+          banExpires: ban.banExpires,
+        },
+      }),
+      { now: () => new Date('2026-06-01T00:00:00.000Z') },
+      telemetry
+    );
+
+    const session = await gateway.getSession({ headers: new Headers() });
+
+    expect(session).toMatchObject({
+      tag: 'Ok',
+      value: { type: 'auth_session_missing' },
+    });
+  });
+
+  it('allows an existing session after its durable ban expires', async () => {
+    const { SessionGatewayBetterAuth } = await loadGateway();
+    const gateway = new SessionGatewayBetterAuth(
+      makeAuth('admin'),
+      makeDb({
+        appUser: {
+          id: 'user-1',
+          email: 'user@example.com',
+          name: 'Test User',
+          image: null,
+          emailVerified: true,
+          role: 'admin',
+          onboardedAt: null,
+          banned: true,
+          banExpires: new Date('2026-05-01T00:00:00.000Z'),
+        },
+      }),
+      { now: () => new Date('2026-06-01T00:00:00.000Z') },
+      telemetry
+    );
+
+    const session = await gateway.getSession({ headers: new Headers() });
+
+    expect(session).toMatchObject({
+      tag: 'Ok',
+      value: { type: 'auth_session_found' },
+    });
+  });
+
+  it('rejects a cached provider session after its durable row is revoked', async () => {
+    const { SessionGatewayBetterAuth } = await loadGateway();
+    const gateway = new SessionGatewayBetterAuth(
+      makeAuth('admin'),
+      makeDb({ persistedSession: false }),
+      undefined,
+      telemetry
+    );
+
+    const session = await gateway.getSession({ headers: new Headers() });
+
     expect(session).toMatchObject({
       tag: 'Ok',
       value: { type: 'auth_session_missing' },

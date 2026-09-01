@@ -1,11 +1,14 @@
-import { toAccountName } from '@/modules/account';
+import { toProfileId, toProfileName } from '@/modules/profile';
 import { toBookAuthor, toBookTitle, toPublisherName } from '@/modules/book';
 import { toGenreColor, toGenreName } from '@/modules/genre';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 import { toUserDisplayName } from '@/modules/user';
 
-export const testAccountName = (value: string) =>
-  unwrapParseResult(toAccountName(value));
+export const testProfileName = (value: string) =>
+  unwrapParseResult(toProfileName(value));
+
+export const testProfileId = (value: string) =>
+  unwrapParseResult(toProfileId(value));
 
 export const testBookTitle = (value: string) =>
   unwrapParseResult(toBookTitle(value));

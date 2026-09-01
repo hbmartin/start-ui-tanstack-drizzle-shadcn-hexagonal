@@ -4,7 +4,7 @@ import type {
   TelemetrySpanHandle,
   TelemetrySpanOptions,
 } from '@/platform/telemetry';
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 type DbOperationInput = {
   model: string;
@@ -44,7 +44,6 @@ const attributesForOperation = ({
 const noopSpan: TelemetrySpanHandle = {
   addEvent: () => {},
   end: () => {},
-  recordException: () => {},
   setAttributes: () => {},
   setStatus: () => {},
 };
@@ -59,7 +58,7 @@ const safelyRecordTelemetry = (record: () => void) => {
 
 const startManualSpan = (options: TelemetrySpanOptions) => {
   try {
-    return getTelemetry().startManualSpan(options);
+    return telemetryProxy.startManualSpan(options);
   } catch {
     return noopSpan;
   }
@@ -68,14 +67,12 @@ const startManualSpan = (options: TelemetrySpanOptions) => {
 const completeDbObservation = ({
   attributes,
   durationMs,
-  error,
   input,
   span,
   status,
 }: {
   attributes: TelemetryAttributes;
   durationMs: number;
-  error?: unknown;
   input: DbOperationInput;
   span: TelemetrySpanHandle;
   status: 'success' | 'error';
@@ -97,16 +94,8 @@ const completeDbObservation = ({
     });
   });
   safelyRecordTelemetry(() => span.setAttributes(spanAttributes));
-  if (error !== undefined) {
-    safelyRecordTelemetry(() => span.recordException(error));
-  }
   safelyRecordTelemetry(() => {
     if (status === 'error') {
-      if (error instanceof Error) {
-        span.setStatus('error', error.message);
-        return;
-      }
-
       span.setStatus('error');
       return;
     }
@@ -115,7 +104,7 @@ const completeDbObservation = ({
   });
   safelyRecordTelemetry(() => span.end());
   safelyRecordTelemetry(() => {
-    getTelemetry().recordMetric({
+    telemetryProxy.recordMetric({
       attributes: metricAttributes,
       name: 'app.db.operation.duration',
       type: 'histogram',
@@ -125,10 +114,7 @@ const completeDbObservation = ({
   });
 };
 
-export function observeDbOperation<T>(
-  input: DbOperationInput,
-  work: () => T
-): T {
+function observeDbOperation<T>(input: DbOperationInput, work: () => T): T {
   const attributes = attributesForOperation(input);
   const startedAt = performance.now();
   const span = startManualSpan({
@@ -156,7 +142,6 @@ export function observeDbOperation<T>(
     completeDbObservation({
       attributes,
       durationMs,
-      error,
       input,
       span,
       status: 'error',

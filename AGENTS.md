@@ -11,9 +11,10 @@ Use these commands instead of invoking underlying tools directly.
 
 | Command | Purpose |
 |---|---|
+| `pnpm setup` | Interactive, idempotent setup; use explicit `--yes --preset --app-name --app-slug` in automation. |
 | `pnpm dev` | Start the local dev server. |
-| `pnpm check` | Static checks: format, lint, typecheck, depcruise, semgrep, audit. |
-| `pnpm test` | Vitest unit and browser projects. |
+| `pnpm check` | Oxfmt, zero-warning Oxlint, TypeScript, Stryker compatibility, Fallow, test layering, migration integrity, Semgrep, and locked security evidence. |
+| `pnpm test` | Unit, browser, Cloudflare-runtime, and integration tests. |
 | `pnpm test:affected:list` | List tests associated with changed files. |
 | `pnpm test:affected` | Run tests associated with changed files. |
 | `pnpm test:e2e:visual` | Local Chromium visual regression check for stable critical screens. |
@@ -21,29 +22,36 @@ Use these commands instead of invoking underlying tools directly.
 | `pnpm test:e2e:visual:app-shell` | Local Chromium visual regression check for the authenticated app shell. |
 | `pnpm test:e2e:visual:manager-users` | Local Chromium visual regression check for manager user screens. |
 | `pnpm test:e2e:visual:update` | Update local visual baselines for review. |
-| `pnpm build` | Production build. |
-| `pnpm verify` | Full pre-merge gate: `check` + `test` + `build`. |
+| `pnpm build` | Node production build alias; writes `.output/node`. |
+| `pnpm build:vercel` | Explicit Nitro Vercel artifact build. |
+| `pnpm build:cloudflare` | Explicit Cloudflare Vite artifact build; writes `dist`. |
+| `pnpm verify:artifacts` | Build and inspect all three isolated artifact contracts. |
+| `pnpm verify` | Full pre-merge gate: `check` + `test` + all profile artifacts. |
 | `pnpm verify:task` | Task-level verification runner with timestamped logs under `test-results/task-verification/`. |
 | `pnpm format:changed` | Format changed files only. |
 | `pnpm check:migrations` | Guard against invalid manual migration edits. |
 
 After code changes, run `pnpm format:changed && pnpm check && pnpm test:affected`. Before merge, run `pnpm verify`.
 
+Cloudflare is artifact-only at this v5 stage. Do not deploy or claim Worker
+runtime verification until `verify:cloudflare` exists and starts the built
+graph in workerd with the declared bindings.
+
 ## Task Verification Loop
 
 Use a layered verification loop rather than relying on one broad command.
 
 - Start with the narrowest relevant unit, browser, or E2E checks for the behavior being changed.
-- For UI changes, start the local app with `pnpm dev` or the E2E webserver path, inspect the affected flow in the Codex in-app Browser, and check desktop and mobile viewports for console errors, broken interactions, text overflow, and layout overlap.
+- For UI changes, start the local app with `pnpm dev` or the E2E webserver path, inspect the affected flow with available interactive browser tooling, and check desktop and mobile viewports for console errors, broken interactions, text overflow, and layout overlap.
 - Capture screenshots or Playwright artifacts for meaningful UI changes. Prefer local Playwright screenshots for visual regression with `pnpm test:e2e:visual`; update baselines for review with `pnpm test:e2e:visual:update`. Do not add Percy, Applitools, Cypress, BrowserStack, or another external visual/browser service unless explicitly requested.
 - After code changes, run `pnpm format:changed && pnpm check && pnpm test:affected`.
 - Use `pnpm verify:task` when a single command/report is more useful than separate commands. Add `-- --visual` for UI changes, `-- --e2e-chromium` for auth/routing/session/persistence risk, and `-- --build` for production runtime risk.
 - Escalate to `pnpm test:e2e --project=chromium` when auth, routing, session, persistence, upload, or full-stack behavior is touched.
 - Escalate to all Playwright projects or the CI matrix when a change is likely to vary by browser.
-- Run `pnpm build` for production build/runtime changes, and `pnpm verify` before merge-level handoff.
+- Run the target-specific build for production runtime changes. Run `pnpm verify:artifacts` when shared build or server-entry code changes, and `pnpm verify` before merge-level handoff.
 - When tests fail, inspect Playwright traces, screenshots, videos, console output, network evidence, and auth diagnostics before changing code. Treat retries as a diagnostic signal, not proof of correctness.
 
-Local full-stack verification with seeded data, Maildev, MinIO, and the local database is the default realism level for agent work. Production smoke testing is out of scope unless read-only routes, credentials, and data safety rules are explicitly provided.
+Local full-stack verification with seeded data, Maildev, the local database, and MinIO when uploads are enabled is the default realism level for agent work. Production smoke testing is out of scope unless read-only routes, credentials, and data safety rules are explicitly provided.
 
 Task verification artifacts should be grouped under `test-results/task-verification/<timestamp>/` when using `pnpm verify:task`. Keep Playwright traces, screenshots, videos, and failure attachments in their default `test-results/` locations and link or summarize the relevant paths in the final handoff. Visual test baselines are reviewed repo artifacts; do not silently update them without saying why.
 
@@ -53,14 +61,20 @@ Cross-module imports must use one of these public files:
 
 | File | Contents |
 |---|---|
+| `administration.ts` | Auth-owned destructive persistence adapters; production imports are restricted to `src/composition/user.ts`. |
 | `index.ts` | Domain types, application ports, factories, stable constants. |
-| `server.ts` | TanStack `createServerFn` exports only. |
+| `server.ts` | TanStack `createServerFn` exports. Kernel may also expose focused server-function DTO, serialization, and validation support contracts. |
 | `backend.ts` | Server-only non-server-function APIs, protected runners, HTTP route handlers. |
 | `client.ts` | Client-only public API, query options, client facades. |
+| `middleware.ts` | Universal TanStack middleware safe to register from the Start entry. |
 | `presentation.ts` | React components and presentation exports. |
 | `testing.ts` | Test-only public gate for owner internals. |
+| `manifest.ts` | Static capability metadata for composition, validation, and generated registries only. |
+| `persistence.ts` | Named schema exports for schema aggregation and owner persistence wiring only. |
 
 Do not deep-import another module's `domain/`, `application/`, `infrastructure/`, `transport/`, or `presentation/` internals. `kernel` internals are the practical exception for cross-cutting primitives.
+Routes, app code, presentation, and ordinary module code must not import `persistence.ts`. Cross-capability schema references use the focused persistence gate and remain confined to schema composition.
+Only `src/composition/user.ts` may import the auth `administration.ts` gate; all callers use the resulting audited user use cases.
 
 ## Module Rules
 
@@ -110,7 +124,7 @@ Keep files named by concrete concern. Avoid catch-all `utils.ts`, broad `service
 - `src/modules` must not import `src/app`; routes/app containers compose app shell/support UI around module presentation.
 - `src/modules/*/testing.ts` and platform testing gates are test-only and must not be imported by production source.
 - Module internals must not import `@/composition`; dependencies are injected through factories or public server barrels.
-- Routes import modules only through `index.ts`, `server.ts`, `backend.ts`, `client.ts`, or `presentation.ts`.
+- Routes import modules only through `index.ts`, `server.ts`, `backend.ts`, `client.ts`, or `presentation.ts`; they never import `manifest.ts` or `persistence.ts`.
 - `src/modules/*/presentation/schema.ts` must emit static error keys, not import `i18next` or `react-i18next`; `src/platform/components/form/form-field-error.tsx` translates at render time.
 - Better Auth server APIs are confined to `src/modules/auth` and `src/composition/auth.ts`.
 - Provider-specific auth tokens stay server-side and do not cross client/public boundaries.
@@ -125,9 +139,12 @@ Auth is provider-neutral above infrastructure. Application code depends on focus
 - `SessionGateway`
 - `AuthorizationGateway`
 - `AuthEmailPort`
-- `UserAdminGateway`
 
 Better Auth is the current adapter under `src/modules/auth/infrastructure/better-auth`. A future provider should implement the same ports and be selected in `src/composition/auth.ts`.
+Destructive user administration is app-owned, uses durable repositories under
+`src/modules/user`, and must commit its required audit event in the same
+transaction. Do not expose or install Better Auth's admin plugin as an
+alternative mutation path.
 
 ## Tests
 
@@ -142,6 +159,6 @@ Use the cheapest test that proves the behavior:
 | E2E | `tests/e2e/*.spec.ts` |
 | Fixtures/support | `tests/support`, `tests/server`, nearest `*.fixture.tsx` when useful |
 
-When a regression class is likely to repeat, add a guardrail through depcruise, Semgrep, or an architecture test.
+When a regression class is likely to repeat, add a guardrail through Fallow, Semgrep, or an architecture test.
 
 When touching Drizzle repositories, raw `sql`, `db.execute`, schema serialization, or migrations, prefer an integration test against the local database driver in addition to focused unit coverage. Mocked DB unit tests do not prove SQL serialization or migration behavior.

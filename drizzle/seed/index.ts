@@ -2,12 +2,12 @@ import { faker } from '@faker-js/faker';
 
 import {
   getDefaultDbClient,
+  getCapabilityPreset,
   isProdRuntimeEnvironment,
   isProductionSeedAllowed,
 } from '@/modules/kernel/backend';
 
-import { createBooks } from './book';
-import { createUsers } from './user';
+import { getSeedContributions } from './registry.generated';
 
 const SEED = 0x5eed;
 
@@ -28,8 +28,9 @@ function assertSeedAllowed() {
 async function main() {
   assertSeedAllowed();
   faker.seed(SEED);
-  await createBooks();
-  await createUsers();
+  for (const contribution of getSeedContributions(getCapabilityPreset())) {
+    await contribution.run();
+  }
 }
 
 try {

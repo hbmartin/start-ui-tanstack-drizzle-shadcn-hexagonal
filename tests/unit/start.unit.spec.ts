@@ -1,37 +1,29 @@
 import { mockLogger } from '@tests/server/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CSP_NONCE_PLACEHOLDER } from '@/platform/http/csp-nonce';
-
-const sentryMiddleware = vi.hoisted(() => ({
-  function: { type: 'sentry-function' },
-  request: { type: 'sentry-request' },
-}));
-
-vi.mock('@sentry/tanstackstart-react', () => ({
-  sentryGlobalFunctionMiddleware: sentryMiddleware.function,
-  sentryGlobalRequestMiddleware: sentryMiddleware.request,
-}));
-
 describe('TanStack Start instance', () => {
-  it('adds Sentry, telemetry, security headers, auth context, browser mutation guard, server-function body limit, and server-function CSRF middleware', async () => {
+  it('adds telemetry, security headers, auth context, browser mutation guard, server-function body limit, and server-function CSRF middleware', async () => {
     const { startInstance } = await import('@/start');
     const options = (startInstance as ExplicitAny).options;
-    const telemetry = options.requestMiddleware[1] as ExplicitAny;
-    const securityHeaders = options.requestMiddleware[2] as ExplicitAny;
-    const authContext = options.requestMiddleware[3] as ExplicitAny;
-    const browserMutationGuard = options.requestMiddleware[4] as ExplicitAny;
-    const serverFnBodyLimit = options.requestMiddleware[5] as ExplicitAny;
-    const csrf = options.requestMiddleware[6] as ExplicitAny;
+    const telemetry = options.requestMiddleware[0] as ExplicitAny;
+    const securityHeaders = options.requestMiddleware[1] as ExplicitAny;
+    const authContext = options.requestMiddleware[2] as ExplicitAny;
+    const browserMutationGuard = options.requestMiddleware[3] as ExplicitAny;
+    const serverFnBodyLimit = options.requestMiddleware[4] as ExplicitAny;
+    const csrf = options.requestMiddleware[5] as ExplicitAny;
+    const serverFnErrorBoundary = options.functionMiddleware[0] as ExplicitAny;
 
-    expect(options.requestMiddleware[0]).toBe(sentryMiddleware.request);
-    expect(options.functionMiddleware).toEqual([sentryMiddleware.function]);
+    expect(options.functionMiddleware).toHaveLength(1);
+    expect(options.serializationAdapters).toEqual([
+      expect.objectContaining({ key: 'start-ui/server-error-v1' }),
+    ]);
     expect(telemetry.type).toBe('request');
     expect(securityHeaders.type).toBe('request');
     expect(authContext.type).toBe('request');
     expect(browserMutationGuard.type).toBe('request');
     expect(serverFnBodyLimit.type).toBe('request');
     expect(csrf.type).toBe('csrf');
+    expect(serverFnErrorBoundary.type).toBe('middleware');
     expect(csrf.options.filter({ handlerType: 'serverFn' })).toBe(true);
     expect(csrf.options.filter({ handlerType: 'router' })).toBe(false);
     expect(csrf.options.secFetchSite).toBe('same-origin');
@@ -126,26 +118,26 @@ describe('TanStack Start instance', () => {
   it('applies security headers to successful responses', async () => {
     const { securityHeadersMiddleware } = await import('@/start');
     type NextOptions = { context: { cspNonce: string; requestId: string } };
+    const requestId = 'ff229da3-47d7-45b0-9687-0d90422b5241';
+    const originalResponse = new Response('<html><body>ok</body></html>', {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+      },
+    });
     const next = vi.fn(async (_options: NextOptions) => ({
-      response: new Response(
-        `<meta property="csp-nonce" content="${CSP_NONCE_PLACEHOLDER}" nonce="${CSP_NONCE_PLACEHOLDER}"><script nonce="${CSP_NONCE_PLACEHOLDER}">window.__nonce__="${CSP_NONCE_PLACEHOLDER}"</script>`,
-        {
-          headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-          },
-        }
-      ),
+      response: originalResponse,
     }));
 
     const result = await (securityHeadersMiddleware as ExplicitAny).handler({
-      context: { requestId: 'request-1' },
+      context: { requestId },
       next,
     });
     const nextOptions = next.mock.calls[0]?.[0];
     const cspNonce = nextOptions?.context.cspNonce;
 
     expect(cspNonce).toEqual(expect.any(String));
-    expect(nextOptions?.context.requestId).toBe('request-1');
+    expect(nextOptions?.context.requestId).toBe(requestId);
+    expect(result.response.headers.get('X-Request-ID')).toBe(requestId);
     expect(result.response.headers.get('X-Content-Type-Options')).toBe(
       'nosniff'
     );
@@ -164,8 +156,10 @@ describe('TanStack Start instance', () => {
     expect(result.response.headers.get('Cross-Origin-Opener-Policy')).toBe(
       'same-origin-allow-popups'
     );
+    expect(result.response).toBe(originalResponse);
+    expect(result.response.body).toBe(originalResponse.body);
     await expect(result.response.text()).resolves.toBe(
-      `<meta property="csp-nonce" content="${cspNonce}" nonce="${cspNonce}"><script nonce="${cspNonce}">window.__nonce__="${cspNonce}"</script>`
+      '<html><body>ok</body></html>'
     );
   });
 

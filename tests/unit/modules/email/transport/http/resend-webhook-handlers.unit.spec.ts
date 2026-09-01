@@ -9,7 +9,31 @@ import {
   toEmailWebhookEventId,
 } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
+import { createTrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 import { createRateLimiter } from '@/platform/http/rate-limiter';
+
+const testTrustedClientIpAdapter = {
+  kind: 'trusted-proxy-chain' as const,
+  resolve: () => '203.0.113.10',
+};
+
+const createHandlers = (
+  deps: Omit<
+    Parameters<typeof createResendWebhookHandlers>[0],
+    'requireTrustedClientIp' | 'trustedClientIpAdapter'
+  > &
+    Partial<
+      Pick<
+        Parameters<typeof createResendWebhookHandlers>[0],
+        'requireTrustedClientIp' | 'trustedClientIpAdapter'
+      >
+    >
+) =>
+  createResendWebhookHandlers({
+    requireTrustedClientIp: false,
+    trustedClientIpAdapter: testTrustedClientIpAdapter,
+    ...deps,
+  });
 
 const makeRequest = (body = 'raw-body', headers?: HeadersInit) =>
   new Request('https://example.test/api/webhooks/resend', {
@@ -63,7 +87,7 @@ describe('Resend webhook HTTP handlers', () => {
     const verifier = {
       verify: vi.fn(() => makeEmailEvent()),
     };
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       verifier,
     });
@@ -89,20 +113,29 @@ describe('Resend webhook HTTP handlers', () => {
       })
     );
     const logger = { warn: vi.fn() };
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       logger,
       rateLimiter: createRateLimiter(),
       rateLimitPerMinute: 1,
+      trustedClientIpAdapter: createTrustedClientIpAdapter({
+        runtimeProfile: 'cloudflare',
+        trustedProxyDepth: 1,
+      }),
       verifier,
     });
-    const headers = { 'X-Forwarded-For': '203.0.113.5' };
 
     const first = await handlers.receive(
-      makeRequest('{"type":"email.delivered"}', headers)
+      makeRequest('{"type":"email.delivered"}', {
+        'CF-Connecting-IP': '203.0.113.5',
+        'X-Forwarded-For': '198.51.100.1',
+      })
     );
     const second = await handlers.receive(
-      makeRequest('{"type":"email.delivered"}', headers)
+      makeRequest('{"type":"email.delivered"}', {
+        'CF-Connecting-IP': '203.0.113.5',
+        'X-Forwarded-For': '198.51.100.2',
+      })
     );
 
     expect(first.status).toBe(200);
@@ -115,7 +148,7 @@ describe('Resend webhook HTTP handlers', () => {
     );
   });
 
-  it('does not collapse missing client IPs into a shared rate-limit bucket', async () => {
+  it('fails closed in production when trusted client IP provenance is unavailable', async () => {
     const verifier = { verify: vi.fn(() => makeEmailEvent()) };
     const processStatusEvent = vi.fn(async () =>
       Result.Ok({
@@ -123,10 +156,43 @@ describe('Resend webhook HTTP handlers', () => {
         record: {} as ExplicitAny,
       })
     );
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       rateLimiter: createRateLimiter(),
       rateLimitPerMinute: 1,
+      requireTrustedClientIp: true,
+      trustedClientIpAdapter: createTrustedClientIpAdapter({
+        runtimeProfile: 'node',
+        trustedProxyDepth: 1,
+      }),
+      verifier,
+    });
+
+    const first = await handlers.receive(makeRequest());
+    const second = await handlers.receive(makeRequest());
+
+    expect(first.status).toBe(503);
+    expect(second.status).toBe(503);
+    expect(first.headers.get('Retry-After')).toBe('60');
+    expect(verifier.verify).not.toHaveBeenCalled();
+  });
+
+  it('uses a bounded local bucket when non-production provenance is unavailable', async () => {
+    const verifier = { verify: vi.fn(() => makeEmailEvent()) };
+    const processStatusEvent = vi.fn(async () =>
+      Result.Ok({
+        type: 'email_status_event_processed' as const,
+        record: {} as ExplicitAny,
+      })
+    );
+    const handlers = createHandlers({
+      getUseCases: () => ({ processStatusEvent }),
+      rateLimiter: createRateLimiter(),
+      rateLimitPerMinute: 1,
+      trustedClientIpAdapter: createTrustedClientIpAdapter({
+        runtimeProfile: 'node',
+        trustedProxyDepth: 1,
+      }),
       verifier,
     });
 
@@ -134,8 +200,8 @@ describe('Resend webhook HTTP handlers', () => {
     const second = await handlers.receive(makeRequest());
 
     expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(verifier.verify).toHaveBeenCalledTimes(2);
+    expect(second.status).toBe(429);
+    expect(verifier.verify).toHaveBeenCalledOnce();
   });
 
   it('rejects requests missing Svix signature headers before reading the body', async () => {
@@ -144,7 +210,7 @@ describe('Resend webhook HTTP handlers', () => {
       body: 'raw-body',
     });
     const getReader = vi.spyOn(request.body!, 'getReader');
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent: vi.fn() }),
       verifier: { verify: vi.fn() },
     });
@@ -159,7 +225,7 @@ describe('Resend webhook HTTP handlers', () => {
 
   it('rejects requests whose Content-Length is over the webhook byte limit', async () => {
     const verifier = { verify: vi.fn() };
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent: vi.fn() }),
       maxBodyBytes: 3,
       verifier,
@@ -188,7 +254,7 @@ describe('Resend webhook HTTP handlers', () => {
         controller.enqueue(new Uint8Array([chunkCount, chunkCount]));
       },
     });
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent: vi.fn() }),
       maxBodyBytes: 3,
       verifier,
@@ -210,7 +276,7 @@ describe('Resend webhook HTTP handlers', () => {
   });
 
   it('surfaces invalid signature errors from the verifier', async () => {
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent: vi.fn() }),
       verifier: {
         verify: vi.fn(() => {
@@ -233,7 +299,7 @@ describe('Resend webhook HTTP handlers', () => {
   it('logs a warning when signature verification fails', async () => {
     const logger = { warn: vi.fn() };
     const verifyError = new Error('Invalid signature');
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent: vi.fn() }),
       logger,
       verifier: {
@@ -258,7 +324,7 @@ describe('Resend webhook HTTP handlers', () => {
 
   it('ignores non-email webhook events with a successful response', async () => {
     const processStatusEvent = vi.fn();
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       verifier: {
         verify: vi.fn(
@@ -291,7 +357,7 @@ describe('Resend webhook HTTP handlers', () => {
 
   it('rejects malformed verified webhook events', async () => {
     const processStatusEvent = vi.fn();
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       verifier: {
         verify: vi.fn(() => ({ data: {} })),
@@ -307,7 +373,7 @@ describe('Resend webhook HTTP handlers', () => {
 
   it('rejects malformed tracked email events', async () => {
     const processStatusEvent = vi.fn();
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       verifier: {
         verify: vi.fn(() => ({
@@ -330,7 +396,7 @@ describe('Resend webhook HTTP handlers', () => {
 
   it('rejects tracked email events with invalid branded fields', async () => {
     const processStatusEvent = vi.fn();
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       verifier: {
         verify: vi.fn(() => ({
@@ -358,7 +424,7 @@ describe('Resend webhook HTTP handlers', () => {
       })
     );
     const event = makeEmailEvent('email.delivered');
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       verifier: { verify: vi.fn(() => event) },
     });
@@ -391,7 +457,7 @@ describe('Resend webhook HTTP handlers', () => {
         record: {} as ExplicitAny,
       })
     );
-    const handlers = createResendWebhookHandlers({
+    const handlers = createHandlers({
       getUseCases: () => ({ processStatusEvent }),
       verifier: { verify: vi.fn(() => makeEmailEvent()) },
     });

@@ -1,4 +1,3 @@
-/* oxlint-disable simple-import-sort/imports -- Oxfmt owns import ordering. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { readLatestOtp } from '@tests/e2e/utils/maildev';

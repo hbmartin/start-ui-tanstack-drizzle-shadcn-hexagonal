@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "start-ui-web",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "src/server.ts",
+  "hyperdrive": [
+    {
+      "binding": "START_UI_DATABASE",
+      "id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "analytics_engine_datasets": [
+    {
+      "binding": "START_UI_TELEMETRY_METRICS"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    }
+  }
+}

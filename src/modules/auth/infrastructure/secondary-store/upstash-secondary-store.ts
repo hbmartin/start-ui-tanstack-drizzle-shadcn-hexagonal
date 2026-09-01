@@ -1,4 +1,5 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
+import { z } from 'zod';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
@@ -6,6 +7,7 @@ import {
   getRedisConfig,
   type RedisConfig,
 } from '@/modules/kernel/infrastructure/config/redis';
+import { assertUrlHasNoCredentials } from '@/modules/kernel/infrastructure/config/url-security';
 import type { TelemetryAdapter } from '@/platform/telemetry';
 
 import type { SecondaryStore } from '../../application/ports/secondary-store';
@@ -25,16 +27,18 @@ const upstashError = (message: string, cause?: unknown) =>
  * Commands are issued in array form (`POST <restUrl>` with a
  * `["SET", key, value, "EX", ttl]` / `["GET", key]` / `["DEL", key]` body and
  * `Authorization: Bearer <restToken>`), and the `{ result }` envelope is parsed
- * back out. A Redis/network outage must not hard-fail authentication, so
- * transport failures are returned as Result errors and reported to telemetry.
- * The Better Auth adapter decides how to degrade those failures for the
- * framework's nullable/void secondary-storage contract.
+ * back out. Transport failures are returned as Result errors and reported to
+ * telemetry; security-sensitive rate limiting fails closed at its adapter.
  */
 
 type UpstashCommand = (string | number)[];
 type CommandOutcome = BoxedResult<unknown, AppError>;
 
 const DEFAULT_TIMEOUT_MS = 2_000;
+const rateLimitConsumeResponseSchema = z.union([
+  z.tuple([z.literal(1), z.literal(-1)]),
+  z.tuple([z.literal(0), z.number().int().positive()]),
+]);
 const TAKE_IF_MATCHES_SCRIPT = `
 local value = redis.call("GET", KEYS[1])
 if value == ARGV[1] then
@@ -42,6 +46,33 @@ if value == ARGV[1] then
   return value
 end
 return nil
+`;
+const CONSUME_RATE_LIMIT_SCRIPT = `
+local current = redis.call("GET", KEYS[1])
+local timestamp = redis.call("TIME")
+local now = tonumber(timestamp[1]) * 1000 + math.floor(tonumber(timestamp[2]) / 1000)
+local max = tonumber(ARGV[1])
+local window = tonumber(ARGV[2])
+
+if current then
+  local ok, data = pcall(cjson.decode, current)
+  local ttl = redis.call("TTL", KEYS[1])
+  if not ok or type(data) ~= "table" or type(data.count) ~= "number" or data.count < 0 or data.count % 1 ~= 0 then
+    return redis.error_reply("invalid rate-limit state")
+  end
+  if ttl > 0 then
+    if data.count >= max then
+      return {0, ttl}
+    end
+    data.count = data.count + 1
+    data.lastRequest = now
+    redis.call("SET", KEYS[1], cjson.encode(data), "KEEPTTL")
+    return {1, -1}
+  end
+end
+
+redis.call("SET", KEYS[1], cjson.encode({key = KEYS[1], count = 1, lastRequest = now}), "EX", window)
+return {1, -1}
 `;
 
 export type UpstashSecondaryStoreOptions = {
@@ -66,6 +97,10 @@ export class UpstashSecondaryStore implements SecondaryStore {
         'UpstashSecondaryStore requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.'
       );
     }
+    assertUrlHasNoCredentials({
+      name: 'UPSTASH_REDIS_REST_URL',
+      value: config.restUrl,
+    });
     this.restUrl = config.restUrl;
     this.restToken = config.restToken;
     this.fetchFn = options.fetchFn ?? fetch;
@@ -78,6 +113,15 @@ export class UpstashSecondaryStore implements SecondaryStore {
       level: 'warning',
       tags: { 'auth.secondary_store': 'upstash', 'auth.operation': operation },
     });
+  }
+
+  private invalidResponse(operation: string, cause?: unknown) {
+    const error = upstashError(
+      `Upstash returned an invalid ${operation} response`,
+      cause
+    );
+    this.reportFailure(operation, error);
+    return error;
   }
 
   private invalidTtlError(ttlSeconds: number) {
@@ -113,10 +157,20 @@ export class UpstashSecondaryStore implements SecondaryStore {
         result?: unknown;
         error?: string;
       };
+      if (typeof body !== 'object' || body === null) {
+        return Result.Error(
+          upstashError('Upstash returned an invalid envelope')
+        );
+      }
       if (typeof body.error === 'string') {
         return Result.Error(upstashError(body.error));
       }
-      return Result.Ok(body.result ?? null);
+      if (!Object.hasOwn(body, 'result')) {
+        return Result.Error(
+          upstashError('Upstash returned an invalid envelope')
+        );
+      }
+      return Result.Ok(body.result);
     } catch (error) {
       return Result.Error(upstashError('Upstash request failed', error));
     } finally {
@@ -131,9 +185,13 @@ export class UpstashSecondaryStore implements SecondaryStore {
       return Result.Error(outcome.getError());
     }
     const value = outcome.get();
-    return typeof value === 'string'
-      ? Result.Ok({ type: 'secondary_store_hit', value })
-      : Result.Ok({ type: 'secondary_store_miss' });
+    if (value === null) {
+      return Result.Ok({ type: 'secondary_store_miss' });
+    }
+    if (typeof value !== 'string') {
+      return Result.Error(this.invalidResponse('get'));
+    }
+    return Result.Ok({ type: 'secondary_store_hit', value });
   }
 
   async set(
@@ -143,7 +201,7 @@ export class UpstashSecondaryStore implements SecondaryStore {
   ): ReturnType<SecondaryStore['set']> {
     if (
       ttlSeconds !== undefined &&
-      (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0)
+      (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0)
     ) {
       return Result.Error(this.invalidTtlError(ttlSeconds));
     }
@@ -156,6 +214,9 @@ export class UpstashSecondaryStore implements SecondaryStore {
     if (outcome.isError()) {
       this.reportFailure('set', outcome.getError());
       return Result.Error(outcome.getError());
+    }
+    if (outcome.get() !== 'OK') {
+      return Result.Error(this.invalidResponse('set'));
     }
     return Result.Ok({ type: 'secondary_store_set' });
   }
@@ -176,9 +237,13 @@ export class UpstashSecondaryStore implements SecondaryStore {
       return Result.Error(outcome.getError());
     }
     const value = outcome.get();
-    return typeof value === 'string'
-      ? Result.Ok({ type: 'secondary_store_taken', value })
-      : Result.Ok({ type: 'secondary_store_miss' });
+    if (value === null) {
+      return Result.Ok({ type: 'secondary_store_miss' });
+    }
+    if (value !== expectedValue) {
+      return Result.Error(this.invalidResponse('take'));
+    }
+    return Result.Ok({ type: 'secondary_store_taken', value });
   }
 
   async delete(key: string): ReturnType<SecondaryStore['delete']> {
@@ -187,6 +252,44 @@ export class UpstashSecondaryStore implements SecondaryStore {
       this.reportFailure('delete', outcome.getError());
       return Result.Error(outcome.getError());
     }
+    const deleted = outcome.get();
+    if (
+      typeof deleted !== 'number' ||
+      !Number.isSafeInteger(deleted) ||
+      (deleted !== 0 && deleted !== 1)
+    ) {
+      return Result.Error(this.invalidResponse('delete'));
+    }
     return Result.Ok({ type: 'secondary_store_deleted' });
+  }
+
+  async consumeRateLimit(
+    key: string,
+    rule: { max: number; window: number }
+  ): ReturnType<SecondaryStore['consumeRateLimit']> {
+    const outcome = await this.command([
+      'EVAL',
+      CONSUME_RATE_LIMIT_SCRIPT,
+      1,
+      key,
+      rule.max,
+      rule.window,
+    ]);
+    if (outcome.isError()) {
+      this.reportFailure('consume_rate_limit', outcome.getError());
+      return Result.Error(outcome.getError());
+    }
+    const value = rateLimitConsumeResponseSchema.safeParse(outcome.get());
+    if (!value.success) {
+      const error = upstashError('Upstash returned invalid rate-limit state');
+      this.reportFailure('consume_rate_limit', error);
+      return Result.Error(error);
+    }
+    const [allowed, retryAfter] = value.data;
+    return Result.Ok({
+      type: 'secondary_store_rate_limit_consumed',
+      allowed: allowed === 1,
+      retryAfter: retryAfter === -1 ? null : Math.min(retryAfter, rule.window),
+    });
   }
 }

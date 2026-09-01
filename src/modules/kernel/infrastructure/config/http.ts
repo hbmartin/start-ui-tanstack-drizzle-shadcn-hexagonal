@@ -1,24 +1,30 @@
 import { z } from 'zod';
 
-import { baseEnvSchema, parseEnv } from './env-schema';
+import {
+  baseEnvSchema,
+  isProdRuntimeEnvironment,
+  parseEnv,
+} from './env-schema';
 
 const httpEnvSchema = baseEnvSchema.extend({
   TRUSTED_PROXY_DEPTH: z.preprocess(
     (value) =>
       typeof value === 'string' && value.trim() === '' ? undefined : value,
-    z.coerce.number().int().positive().optional()
+    z.coerce.number().int().nonnegative().optional()
   ),
 });
 
 export type HttpConfig = {
   /**
-   * Number of trusted reverse-proxy hops in front of the app. Used to read the
-   * genuine client IP from `X-Forwarded-For` (see `getClientIp`). Must match the
-   * deployment topology to avoid trusting attacker-supplied entries. Defaults to
-   * `1` (a single trusted edge/proxy). Depth `0` is invalid because it would
-   * mean no trusted proxy appended the forwarded header.
+   * Node-only number of trusted reverse-proxy hops in front of the app. Vercel
+   * and Cloudflare use their profile-owned single-value headers instead. Must
+   * match the Node deployment topology to avoid trusting attacker-controlled
+   * X-Forwarded-For entries. Local/test defaults to `1`; production has no
+   * default and causes Node production startup to fail until explicitly
+   * configured. `0` disables Node proxy trust only for local/test use and is
+   * rejected at production startup.
    */
-  trustedProxyDepth: number;
+  trustedProxyDepth: number | undefined;
 };
 
 let cachedHttpConfig: HttpConfig | undefined;
@@ -28,7 +34,9 @@ export function getHttpConfig(): HttpConfig {
 
   const env = parseEnv(httpEnvSchema);
   cachedHttpConfig = {
-    trustedProxyDepth: env.TRUSTED_PROXY_DEPTH ?? 1,
+    trustedProxyDepth:
+      env.TRUSTED_PROXY_DEPTH ??
+      (isProdRuntimeEnvironment(env) ? undefined : 1),
   };
   return cachedHttpConfig;
 }

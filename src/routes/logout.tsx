@@ -6,7 +6,7 @@ import { RouteError } from '@/platform/components/errors/route-error';
 import { PageLogout } from '@/modules/auth/presentation';
 
 const loadHandleLogoutRequest = createServerOnlyFn(async () => {
-  const { handleLogoutRequest } = await import('@/modules/auth/backend');
+  const { handleLogoutRequest } = await import('@/modules/user/backend');
   return handleLogoutRequest;
 });
 

@@ -6,8 +6,6 @@ import {
   diffMonths,
   diffSeconds,
   diffYears,
-  endOfYear,
-  startOfYear,
 } from 'temporal-utils';
 import './polyfill';
 
@@ -327,12 +325,6 @@ export const formatCurrentDate = (format = DEFAULT_DATE_FORMAT) => {
   );
 };
 
-export const formatCurrentLocalIsoDateTime = () =>
-  Temporal.Now.zonedDateTimeISO(getCurrentTimeZoneId()).toString({
-    smallestUnit: 'second',
-    timeZoneName: 'never',
-  });
-
 export const formatRelativeDate = (
   date: Date,
   options: {
@@ -368,18 +360,6 @@ export const isSameDate = (
       plainDateFromDate(right)
     ) === 0
   );
-};
-
-export const startOfTodayYearDate = () =>
-  dateFromPlainDate(startOfYear(getCurrentPlainDate()));
-
-export const endOfTodayYearDate = () =>
-  dateFromPlainDate(endOfYear(getCurrentPlainDate()));
-
-export const addMonthsToDate = (date: Date, months: number) => {
-  if (!isValidDate(date)) return createInvalidDate();
-
-  return dateFromPlainDate(plainDateFromDate(date).add({ months }));
 };
 
 export const addDaysToDate = (date: Date, days: number) => {

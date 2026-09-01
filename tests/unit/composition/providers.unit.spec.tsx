@@ -6,6 +6,13 @@ import { describe, expect, it, vi } from 'vitest';
 const themeProviderMock = vi.hoisted(() =>
   vi.fn((props: { children: ReactNode }) => props.children)
 );
+const cspProviderMock = vi.hoisted(() =>
+  vi.fn((props: { children: ReactNode }) => props.children)
+);
+
+vi.mock('@/platform/components/ui/csp-provider', () => ({
+  CspProvider: cspProviderMock,
+}));
 
 vi.mock('next-themes', () => ({
   ThemeProvider: themeProviderMock,
@@ -25,10 +32,11 @@ vi.mock('@/modules/auth/client', () => ({
 
 vi.mock('@/platform/env/client', () => ({
   envClient: {},
+  getEnvClient: () => ({}),
 }));
 
 describe('Providers', () => {
-  it('passes the CSP nonce to the theme provider', async () => {
+  it('passes the CSP nonce to Base UI and the theme provider', async () => {
     const { Providers } = await import('@/composition/providers');
 
     renderToStaticMarkup(
@@ -38,6 +46,12 @@ describe('Providers', () => {
     );
 
     expect(themeProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nonce: 'theme-nonce',
+      }),
+      undefined
+    );
+    expect(cspProviderMock).toHaveBeenCalledWith(
       expect.objectContaining({
         nonce: 'theme-nonce',
       }),

@@ -1,7 +1,7 @@
 import { Result } from '@bloodyowl/boxed';
-import { betterAuth } from 'better-auth';
+import { APIError, betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { admin, emailOTP, openAPI } from 'better-auth/plugins';
+import { emailOTP } from 'better-auth/plugins/email-otp';
 import { tanstackStartCookies } from 'better-auth/tanstack-start';
 import { match } from 'ts-pattern';
 
@@ -26,9 +26,7 @@ import {
   type CreateAuthOptions,
   normalizeCreateAuthInput,
 } from './create-auth-options';
-import { betterAuthPermissions } from './permissions';
-import { createBetterAuthSecondaryStorage } from './secondary-storage-adapter';
-import { InMemorySecondaryStore } from '../secondary-store/in-memory-secondary-store';
+import { TRUSTED_AUTH_CLIENT_IP_HEADER } from './auth-http-exposure';
 
 const missingAuthEmailPort = {
   async sendSignInOtp() {
@@ -52,38 +50,52 @@ const invalidAuthProviderResponse = (cause: unknown) =>
     cause,
   });
 
+const bannedUserError = () =>
+  APIError.from('FORBIDDEN', {
+    code: 'BANNED_USER',
+    message: 'This account is not permitted to sign in',
+  });
+
 export function createAuth(input?: Database | CreateAuthOptions) {
   const options = normalizeCreateAuthInput(input);
   const database = options.database ?? getDefaultDbClient();
   const authEmailPort = options.authEmailPort ?? missingAuthEmailPort;
-  const secondaryStore = options.secondaryStore ?? new InMemorySecondaryStore();
-  const secondaryStorage = createBetterAuthSecondaryStorage(secondaryStore);
   const authConfig = getBetterAuthConfig();
   const authSignupEnabled = envClient.VITE_AUTH_SIGNUP_ENABLED;
 
   return betterAuth({
     secret: authConfig.secret,
-    baseURL: {
-      allowedHosts: [
-        new URL(envClient.VITE_BASE_URL).host,
-        ...(authConfig.allowedHosts ?? []),
-      ],
-    },
-    secondaryStorage,
+    baseURL: envClient.VITE_BASE_URL,
     rateLimit: {
-      enabled: true,
-      storage: 'secondary-storage',
-      window: authConfig.rateLimitWindowSeconds,
-      max: authConfig.rateLimitMax,
+      // The app HTTP gateway owns the HMAC-keyed global/network/identity
+      // limiter. Disabling the provider middleware prevents Better Auth from
+      // collapsing requests without a trusted IP into one denial-of-service
+      // bucket while retaining one fail-closed distributed correctness owner.
+      enabled: false,
     },
     session: {
       expiresIn: authConfig.sessionExpirationInSeconds,
       updateAge: authConfig.sessionUpdateAgeInSeconds,
       freshAge: authConfig.sessionFreshAgeInSeconds,
+      // PostgreSQL is the only session source of truth. Upstash is wired only
+      // through the custom rate-limit adapter, so provider session resolution
+      // never reads or writes a secondary session/user snapshot.
+      storeSessionInDatabase: true,
     },
-    advanced: createAuthCookieSecurityOptions(envClient.VITE_BASE_URL, {
-      isProduction: isProdRuntimeEnvironment(),
-    }),
+    verification: {
+      storeIdentifier: 'hashed',
+      storeInDatabase: true,
+    },
+    advanced: {
+      ...createAuthCookieSecurityOptions(envClient.VITE_BASE_URL, {
+        isProduction: isProdRuntimeEnvironment(),
+      }),
+      ipAddress: {
+        // The HTTP gateway strips caller input and writes this single-value
+        // header only after applying the configured trusted-proxy topology.
+        ipAddressHeaders: [TRUSTED_AUTH_CLIENT_IP_HEADER],
+      },
+    },
     account: {
       encryptOAuthTokens: true,
     },
@@ -91,8 +103,61 @@ export function createAuth(input?: Database | CreateAuthOptions) {
     database: drizzleAdapter(database, {
       provider: 'pg',
     }),
+    databaseHooks: {
+      session: {
+        create: {
+          async before(session, context) {
+            if (!context) return;
+            const user = await context.context.internalAdapter.findUserById(
+              session.userId
+            );
+            const banState = user as {
+              banned?: unknown;
+              banExpires?: unknown;
+            } | null;
+            if (banState?.banned !== true) return;
+
+            const banExpires = banState.banExpires;
+            if (
+              (banExpires instanceof Date || typeof banExpires === 'string') &&
+              new Date(banExpires).getTime() < Date.now()
+            ) {
+              await context.context.internalAdapter.updateUser(session.userId, {
+                banned: false,
+                banReason: null,
+                banExpires: null,
+              });
+              return;
+            }
+
+            throw bannedUserError();
+          },
+        },
+      },
+    },
     user: {
       additionalFields: {
+        role: {
+          type: 'string',
+          required: false,
+          input: false,
+        },
+        banned: {
+          type: 'boolean',
+          defaultValue: false,
+          required: false,
+          input: false,
+        },
+        banReason: {
+          type: 'string',
+          required: false,
+          input: false,
+        },
+        banExpires: {
+          type: 'date',
+          required: false,
+          input: false,
+        },
         onboardedAt: {
           type: 'date',
           // Server-managed workflow flag. `input: false` keeps it out of Better
@@ -113,16 +178,11 @@ export function createAuth(input?: Database | CreateAuthOptions) {
         clientId: authConfig.githubClientId!,
         clientSecret: authConfig.githubClientSecret!,
         disableImplicitSignUp: !authSignupEnabled,
+        disableSignUp: !authSignupEnabled,
       },
     },
 
     plugins: [
-      openAPI({
-        disableDefaultReference: true,
-      }),
-      admin({
-        ...betterAuthPermissions,
-      }),
       emailOTP({
         disableSignUp: !authSignupEnabled,
         expiresIn: AUTH_EMAIL_OTP_EXPIRATION_IN_MINUTES * 60,
@@ -132,10 +192,6 @@ export function createAuth(input?: Database | CreateAuthOptions) {
         // (CWE-256 / CWE-312.)
         storeOTP: 'encrypted',
         allowedAttempts: authConfig.otpAllowedAttempts,
-        rateLimit: {
-          window: authConfig.otpSendWindowSeconds,
-          max: authConfig.otpSendMax,
-        },
         async sendVerificationOTP({ email, otp, type }) {
           await match(type)
             .with('sign-in', async () => {
@@ -202,11 +258,3 @@ export function getDefaultAuth() {
   defaultAuth ??= createAuth();
   return defaultAuth;
 }
-
-export const auth = new Proxy({} as Auth, {
-  get(_target, prop) {
-    const instance = getDefaultAuth();
-    const value = Reflect.get(instance, prop, instance);
-    return typeof value === 'function' ? value.bind(instance) : value;
-  },
-});

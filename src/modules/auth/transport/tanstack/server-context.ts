@@ -24,6 +24,8 @@ import {
 } from '@/modules/auth';
 import {
   createRequestLogger,
+  toCorrelationId,
+  type CorrelationId,
   type Logger,
   type LogLevel,
   toRequestId,
@@ -31,22 +33,31 @@ import {
 } from '@/modules/kernel';
 import { getBetterAuthConfig } from '@/modules/kernel/backend';
 import {
-  isServerFnError,
-  SERVER_FN_ERROR_CODES,
+  normalizeServerFnError,
+  serverFnCauseChainForLog,
+} from '@/modules/kernel/middleware';
+import {
+  isOpaquePublicCorrelationId,
   ServerFnError,
-  type ServerFnErrorCode,
-  type ServerFnErrorData,
 } from '@/modules/kernel/server';
 import { timingStore } from '@/modules/kernel/transport/tanstack/timing-store';
 import { cachePrivateNoStore } from '@/platform/http/cache-control';
-import type { TelemetryAdapter } from '@/platform/telemetry';
-import { createNoOpTelemetry } from '@/platform/telemetry';
+import type {
+  RequestExceptionCaptureState,
+  TelemetryAdapter,
+} from '@/platform/telemetry';
+import {
+  claimRequestException,
+  createNoOpTelemetry,
+  isRequestExceptionCaptureState,
+} from '@/platform/telemetry';
 
 type ServerTimingEntry = { name: string; durationMs: number };
 
 export type ProcedureLogger = Logger;
 
 export type ProtectedContext = {
+  correlationId: CorrelationId;
   user: AuthenticatedUser;
   session: AuthenticatedSession;
   scope: RequestScope;
@@ -80,6 +91,7 @@ type ServerContextDeps = {
 
 type AppStartRequestContextLike = {
   requestId?: unknown;
+  telemetryCaptureState?: unknown;
   auth?: {
     getSession?: () => Promise<AuthSession | null>;
   };
@@ -129,23 +141,37 @@ const finalize = (
   appendServerTiming(allTimings);
 };
 
-const handleError = (error: unknown, procedureLogger: ProcedureLogger) => {
-  const mappedError = mapTransportError(error);
-  const shouldLogOriginalError =
-    mappedError instanceof ServerFnError &&
-    mappedError.message === 'Unhandled error' &&
-    mappedError !== error;
-
-  if (shouldLogOriginalError) {
+const handleError = (
+  error: unknown,
+  procedureLogger: ProcedureLogger,
+  correlationId: CorrelationId
+) => {
+  const mappedError = normalizeServerFnError(error, correlationId);
+  const shouldCaptureUnexpected = mappedError.status >= 500;
+  const captureState = getStartRequestExceptionCaptureState();
+  const shouldOwnExceptionCapture =
+    shouldCaptureUnexpected &&
+    (!captureState || claimRequestException(captureState, error));
+  const internalLog = {
+    correlationId,
+    details: {
+      causeChain: serverFnCauseChainForLog(error),
+      mappedCode: mappedError.code,
+      mappedReason: mappedError.reason,
+      mappedStatus: mappedError.status,
+      mappedTarget: mappedError.target,
+    },
+    direction: 'inbound' as const,
+    error: mappedError.reason,
+    event: 'server_fn.error.internal',
+    ...(shouldOwnExceptionCapture ? { exception: error } : {}),
+  };
+  if (shouldCaptureUnexpected) {
     procedureLogger.error({
-      event: 'server_fn.error.unhandled',
-      direction: 'inbound',
-      error:
-        error instanceof Error
-          ? error.message
-          : 'Unhandled error before mapping',
-      exception: error,
+      ...internalLog,
     });
+  } else {
+    procedureLogger.warn(internalLog);
   }
 
   const logLevel: LogLevel = (() => {
@@ -166,7 +192,9 @@ const handleError = (error: unknown, procedureLogger: ProcedureLogger) => {
       direction: 'inbound',
       details: {
         code: mappedError.code,
+        reason: mappedError.reason,
         status: mappedError.status,
+        target: mappedError.target,
       },
     });
   }
@@ -178,52 +206,16 @@ const handleError = (error: unknown, procedureLogger: ProcedureLogger) => {
       mappedError instanceof ServerFnError
         ? {
             code: mappedError.code,
-            data: mappedError.data,
+            correlationId: mappedError.correlationId,
+            reason: mappedError.reason,
             status: mappedError.status,
+            target: mappedError.target,
           }
         : { value: mappedError },
   });
 
-  return mappedError;
+  return mappedError.asReported();
 };
-
-const serverFnErrorCodes = new Set<ServerFnErrorCode>(SERVER_FN_ERROR_CODES);
-
-const isServerFnErrorCode = (code: unknown): code is ServerFnErrorCode =>
-  typeof code === 'string' && serverFnErrorCodes.has(code as ServerFnErrorCode);
-
-const getServerFnErrorCode = (
-  error: unknown
-): ServerFnErrorCode | undefined => {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const code = (error as { code?: unknown }).code;
-  return isServerFnErrorCode(code) ? code : undefined;
-};
-
-const getServerFnErrorData = (error: unknown) => {
-  if (typeof error !== 'object' || error === null) return undefined;
-  const data = (error as { data?: unknown }).data;
-  return typeof data === 'object' && data !== null
-    ? (data as ServerFnErrorData)
-    : undefined;
-};
-
-function mapTransportError(error: unknown): unknown {
-  if (error instanceof ServerFnError) return error;
-  const code =
-    isServerFnError(error) && isServerFnErrorCode(error.code)
-      ? error.code
-      : getServerFnErrorCode(error);
-  if (code) {
-    return new ServerFnError(code, {
-      data: getServerFnErrorData(error),
-      message: error instanceof Error ? error.message : code,
-    });
-  }
-  return new ServerFnError('INTERNAL_SERVER_ERROR', {
-    message: 'Unhandled error',
-  });
-}
 
 const getStartRequestContext = (): AppStartRequestContextLike | undefined => {
   try {
@@ -236,9 +228,16 @@ const getStartRequestContext = (): AppStartRequestContextLike | undefined => {
   }
 };
 
+const getStartRequestExceptionCaptureState = ():
+  | RequestExceptionCaptureState
+  | undefined => {
+  const state = getStartRequestContext()?.telemetryCaptureState;
+  return isRequestExceptionCaptureState(state) ? state : undefined;
+};
+
 const getStartRequestId = () => {
   const requestId = getStartRequestContext()?.requestId;
-  if (typeof requestId !== 'string') return undefined;
+  if (!isOpaquePublicCorrelationId(requestId)) return undefined;
 
   const parsed = toRequestId(requestId);
   return parsed.isOk() ? parsed.get() : undefined;
@@ -259,6 +258,14 @@ const requestIdFromRuntime = () => {
   const fallback = toRequestId(randomUUID());
   if (fallback.isOk()) return fallback.get();
 
+  throw new ServerFnError('INTERNAL_SERVER_ERROR');
+};
+
+const correlationIdFromRequestId = (
+  requestId: ReturnType<typeof requestIdFromRuntime>
+) => {
+  const parsed = toCorrelationId(requestId);
+  if (parsed.isOk()) return parsed.get();
   throw new ServerFnError('INTERNAL_SERVER_ERROR');
 };
 
@@ -308,6 +315,7 @@ export const createServerContextTools = ({
   ): Promise<T> => {
     const start = performance.now();
     const requestId = requestIdFromRuntime();
+    const correlationId = correlationIdFromRequestId(requestId);
     const timings: ServerTimingEntry[] = [];
     let procedureLogger = createRequestLogger({ logger, requestId });
     procedureLogger.info({
@@ -340,6 +348,7 @@ export const createServerContextTools = ({
         }
 
         const ctx: PublicContext = {
+          correlationId,
           user: session?.user ?? null,
           session: session?.session ?? null,
           scope: session?.user ? scopeFromUser(session.user) : null,
@@ -347,7 +356,7 @@ export const createServerContextTools = ({
         };
         return await fn(ctx);
       } catch (error) {
-        throw handleError(error, procedureLogger);
+        throw handleError(error, procedureLogger, correlationId);
       } finally {
         finalize(procedureLogger, timings, start);
       }
@@ -362,6 +371,7 @@ export const createServerContextTools = ({
         throw new ServerFnError('UNAUTHORIZED');
       }
       return fn({
+        correlationId: ctx.correlationId,
         user: ctx.user,
         session: ctx.session,
         scope: ctx.scope,
@@ -400,7 +410,8 @@ export const createServerContextTools = ({
           direction: 'inbound',
         });
         throw new ServerFnError('FORBIDDEN', {
-          data: { reason: AUTH_REAUTH_REQUIRED },
+          reason: AUTH_REAUTH_REQUIRED,
+          target: 'authentication',
         });
       }
       return fn(ctx);

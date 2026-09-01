@@ -2,7 +2,6 @@ import { createRouter } from '@tanstack/react-router';
 import { setupRouterSsrQueryIntegration } from '@tanstack/react-router-ssr-query';
 import {
   createClientOnlyFn,
-  createServerOnlyFn,
   getGlobalStartContext,
 } from '@tanstack/react-start';
 
@@ -19,13 +18,6 @@ import { attachRouterObservability } from '@/platform/router/observability';
 import { frontendLogger } from '@/platform/telemetry/frontend-logger';
 
 import { routeTree } from './routeTree.gen';
-
-const initTelemetryServerOnly = createServerOnlyFn(async () => {
-  const { initTelemetryServer } =
-    await import('@/composition/telemetry/sentry.server');
-
-  initTelemetryServer();
-});
 
 const initTelemetryClientOnly = createClientOnlyFn(async (router: unknown) => {
   const { initTelemetryClient } =
@@ -49,12 +41,7 @@ const startTelemetryInitialization = (
   });
 };
 
-if (import.meta.env.SSR && shouldAutoInitTelemetry) {
-  startTelemetryInitialization(
-    initTelemetryServerOnly(),
-    'telemetry.server_init_failed'
-  );
-} else if (shouldAutoInitTelemetry) {
+if (!import.meta.env.SSR && shouldAutoInitTelemetry) {
   // Start client instrumentation at module evaluation so document/fetch
   // telemetry is active before router subscriptions begin handling navigation.
   startTelemetryInitialization(

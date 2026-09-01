@@ -1423,14 +1423,14 @@ rules:
     message: Construct branded IDs and domain strings with their toX parser instead of `as Brand` casts.
     severity: ERROR
     languages: [generic]
-    pattern-regex: '\bas\s+(?:AccountName|UserDisplayName|BookTitle|BookAuthor|PublisherName|GenreName|GenreColor|UserId|BookId|GenreId|SessionId|ScopeKey|AuthorId|PublisherId|BookCoverObjectKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\b'
+    pattern-regex: '\bas\s+(?:ProfileId|ProfileName|AuthIdentityId|InviteId|UserDisplayName|BookTitle|BookAuthor|PublisherName|GenreName|GenreColor|UserId|BookId|GenreId|SessionId|ScopeKey|AuthorId|PublisherId|BookCoverObjectKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\b'
     paths:
       include:
         - src/**/*.ts
         - src/**/*.tsx
       exclude:
         - src/modules/kernel/domain/ids.ts
-        - src/modules/account/domain/account.ts
+        - src/modules/profile/domain/profile.ts
         - src/modules/book/domain/book.ts
         - src/modules/genre/domain/genre.ts
         - src/modules/user/domain/user.ts
@@ -1443,7 +1443,7 @@ rules:
     message: Branch on parser Result values before unwrapping; do not call toX(...).get() directly in production code.
     severity: ERROR
     languages: [generic]
-    pattern-regex: '\bto(?:AccountName|UserDisplayName|BookTitle|BookAuthor|PublisherName|GenreName|GenreColor|UserId|BookId|GenreId|SessionId|ScopeKey|AuthorId|PublisherId|BookCoverObjectKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\s*\([^;]*?\)\s*\.get\s*\('
+    pattern-regex: '\bto(?:ProfileId|ProfileName|AuthIdentityId|InviteId|UserDisplayName|BookTitle|BookAuthor|PublisherName|GenreName|GenreColor|UserId|BookId|GenreId|SessionId|ScopeKey|AuthorId|PublisherId|BookCoverObjectKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\s*\([^;]*?\)\s*\.get\s*\('
     paths:
       include:
         - src/**/*.ts

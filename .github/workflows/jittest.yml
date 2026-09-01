@@ -3,34 +3,19 @@ name: JiTTest
 on:
   workflow_dispatch:
     inputs:
-      base-ref:
-        description: Git ref to use as the parent revision.
+      base-sha:
+        description: Full reviewed parent commit SHA.
         required: true
-        default: origin/main
-      head-ref:
-        description: Git ref to use as the child revision.
+      head-sha:
+        description: Full reviewed child commit SHA.
         required: true
-        default: HEAD
-      llm-model:
-        description: Optional Vercel AI Gateway model override. Blank uses jittest.config.json.
-        required: false
-        default: ''
-      pr-title:
-        description: Optional PR title for intent-aware analysis.
-        required: false
-        default: ''
-      pr-body:
-        description: Optional PR body for intent-aware analysis.
-        required: false
-        default: ''
-      context-file:
-        description: Optional local context file path for intent-aware analysis.
-        required: false
-        default: ''
-      fail-on:
-        description: Optional verdict floor that should fail the workflow.
-        required: false
-        default: ''
+      secret-name:
+        description: Release-environment OpenRouter credential.
+        type: choice
+        required: true
+        default: OPENROUTER_API_KEY
+        options:
+          - OPENROUTER_API_KEY
 
 permissions:
   contents: read
@@ -44,6 +29,7 @@ jobs:
     name: Catching JiTTest
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: release-jittest
 
     steps:
       - name: Checkout
@@ -58,83 +44,108 @@ jobs:
           node-version: 24
           pnpm-version: 11.9.0
 
-      - name: Cache JiTTest LLM responses
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .jittest/cache
-          key: ${{ runner.os }}-jittest-${{ hashFiles('pnpm-lock.yaml', 'jittest.config.json') }}
-          restore-keys: |
-            ${{ runner.os }}-jittest-
+      - name: Validate policy provenance
+        env:
+          JITTEST_SANDBOX_READY: ${{ vars.JITTEST_SANDBOX_READY }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "JiTTest release evidence must use the default-branch policy." >&2
+            exit 1
+          fi
+          if [ "${JITTEST_SANDBOX_READY}" != "true" ]; then
+            echo "JiTTest release execution remains disabled until its isolated runner is attested." >&2
+            exit 1
+          fi
 
       - name: Run JiTTest
+        id: run
         env:
-          LLM_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
-          LLM_MODEL: ${{ inputs['llm-model'] }}
-          BASE_REF: ${{ inputs['base-ref'] }}
-          HEAD_REF: ${{ inputs['head-ref'] }}
-          PR_TITLE: ${{ inputs['pr-title'] }}
-          PR_BODY: ${{ inputs['pr-body'] }}
-          CONTEXT_FILE: ${{ inputs['context-file'] }}
-          FAIL_ON: ${{ inputs['fail-on'] }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_SECRET_NAME: ${{ inputs['secret-name'] || 'OPENROUTER_API_KEY' }}
+          DISPATCH_BASE_SHA: ${{ inputs['base-sha'] }}
+          DISPATCH_HEAD_SHA: ${{ inputs['head-sha'] }}
         run: |
           set -euo pipefail
 
-          if [ -z "${LLM_API_KEY}" ]; then
-            echo "AI_GATEWAY_API_KEY secret is required to run JiTTest." >&2
+          if [ "${OPENROUTER_SECRET_NAME}" != "OPENROUTER_API_KEY" ]; then
+            echo "Unsupported JiTTest secret selection." >&2
+            exit 1
+          fi
+          if [ -z "${OPENROUTER_API_KEY}" ]; then
+            echo "OPENROUTER_API_KEY is required from the release-jittest environment." >&2
             exit 1
           fi
 
           mkdir -p .jittest
 
+          BASE_SHA="${DISPATCH_BASE_SHA}"
+          HEAD_SHA="${DISPATCH_HEAD_SHA}"
+
+          sha_pattern='^[a-f0-9]{40}$'
+          if [[ ! "${BASE_SHA}" =~ ${sha_pattern} ]] || [[ ! "${HEAD_SHA}" =~ ${sha_pattern} ]]; then
+            echo "JiTTest requires full lowercase commit SHAs." >&2
+            exit 1
+          fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          git merge-base --is-ancestor "${BASE_SHA}" "${HEAD_SHA}"
+
+          CONFIG_SHA="$(sha256sum jittest.config.json | cut -d ' ' -f 1)"
+          POLICY_SHA="$(git rev-parse HEAD)"
+          export BASE_SHA HEAD_SHA CONFIG_SHA POLICY_SHA
+          node scripts/write-jittest-run-metadata.mjs
+          echo "head_sha=${HEAD_SHA}" >> "${GITHUB_OUTPUT}"
+
           args=(
+            --config jittest.config.json
             --output console
-            --base "${BASE_REF}"
-            --head "${HEAD_REF}"
+            --base "${BASE_SHA}"
+            --head "${HEAD_SHA}"
             --json-file .jittest/report.json
             --summary-file "${GITHUB_STEP_SUMMARY}"
             --comment-file .jittest/comment.md
+            --feedback-path .jittest/assessment-records.jsonl
+            --workflow both
+            --report-threshold -1
+            --flake-guard-runs 3
+            --max-cost-usd 5
+            --max-tokens 200000
+            --llm-model anthropic/claude-sonnet-4
+            --fail-on likely-strong
           )
 
-          if [ -n "${PR_TITLE}" ]; then
-            args+=(--pr-title "${PR_TITLE}")
-          fi
-
-          if [ -n "${PR_BODY}" ]; then
-            args+=(--pr-body "${PR_BODY}")
-          fi
-
-          if [ -n "${CONTEXT_FILE}" ]; then
-            args+=(--context-file "${CONTEXT_FILE}")
-          fi
-
-          if [ -n "${FAIL_ON}" ]; then
-            args+=(--fail-on "${FAIL_ON}")
-          fi
-
           set +e
-          pnpm test:jittest -- "${args[@]}"
+          env \
+            -u LLM_API_KEY \
+            -u LLM_PROVIDER \
+            -u LLM_BASE_URL \
+            -u LLM_MODEL \
+            -u OPENROUTER_MODEL \
+            node --import=./scripts/jittest-child-env-preload.mjs \
+              node_modules/catching-jit-tests-vitest/dist/cli.js \
+              catch "${args[@]}" --llm-provider openrouter
           exit_code=$?
           set -e
 
-          if [ "${exit_code}" -eq 3 ]; then
-            {
-              echo "## JiTTest"
-              echo
-              echo "Base and head resolved to the same commit; nothing to analyze."
-            } >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
-
-          exit "${exit_code}"
+          node scripts/check-jittest-report.mjs \
+            --config jittest.config.json \
+            --report .jittest/report.json \
+            --triage docs/jittest-triage.json \
+            --cli-exit "${exit_code}" \
+            --base-sha "${BASE_SHA}" \
+            --head-sha "${HEAD_SHA}" \
+            --release
 
       - name: Upload JiTTest artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: jittest-report
+          name: jittest-report-${{ steps.run.outputs.head_sha }}-${{ github.run_attempt }}
           path: |
             .jittest/report.json
             .jittest/comment.md
             .jittest/assessment-records.jsonl
-          if-no-files-found: warn
-          retention-days: 30
+            .jittest/run-metadata.json
+          if-no-files-found: error
+          retention-days: 90

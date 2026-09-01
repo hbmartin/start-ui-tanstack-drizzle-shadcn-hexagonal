@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   websocketDatabases: [] as Array<{
     $client: {
       end: ReturnType<typeof vi.fn>;
+      on: ReturnType<typeof vi.fn>;
     };
     transaction: ReturnType<typeof vi.fn>;
   }>,
@@ -48,6 +49,7 @@ describe('Neon HTTP database client transaction lifecycle', () => {
           end: vi.fn(async () => {
             closed = true;
           }),
+          on: vi.fn(),
         },
         transaction: vi.fn(
           async <T>(work: (tx: { clientIndex: number }) => Promise<T>) => {
@@ -92,5 +94,43 @@ describe('Neon HTTP database client transaction lifecycle', () => {
     expect(mocks.websocketDatabases[0]?.$client.end).toHaveBeenCalledOnce();
     expect(mocks.websocketDatabases[0]?.transaction).toHaveBeenCalledOnce();
     expect(mocks.websocketDatabases[1]?.transaction).toHaveBeenCalledOnce();
+  });
+
+  it('contains asynchronous errors from the Vercel transaction pool', async () => {
+    const onError = vi.fn();
+    const { createDbClient } =
+      await import('@/modules/kernel/infrastructure/db/client');
+    const db = createDbClient({
+      driver: 'neon-http',
+      onError,
+      url: makeTestDatabaseUrl(),
+    });
+
+    await db.$runInTransaction?.(async () => undefined);
+    const transactionPool = mocks.websocketDatabases[0]?.$client;
+    const connectListener = transactionPool?.on.mock.calls.find(
+      ([eventName]) => eventName === 'connect'
+    )?.[1] as ((client: { on: ReturnType<typeof vi.fn> }) => void) | undefined;
+    const physicalClient = { on: vi.fn() };
+    connectListener?.(physicalClient);
+    const errorListener = physicalClient.on.mock.calls.find(
+      ([eventName]) => eventName === 'error'
+    )?.[1] as ((error: unknown) => void) | undefined;
+    const poolFailure = new Error('websocket pool failed');
+
+    expect(transactionPool?.on).toHaveBeenCalledWith(
+      'connect',
+      expect.any(Function)
+    );
+    expect(transactionPool?.on).toHaveBeenCalledWith(
+      'error',
+      expect.any(Function)
+    );
+    expect(physicalClient.on).toHaveBeenCalledWith(
+      'error',
+      expect.any(Function)
+    );
+    expect(() => errorListener?.(poolFailure)).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(poolFailure);
   });
 });

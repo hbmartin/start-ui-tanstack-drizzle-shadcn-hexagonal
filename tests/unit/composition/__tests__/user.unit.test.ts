@@ -5,13 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { __resetUserComposition, getUserUseCases } from '@/composition/user';
 import {
+  toCorrelationId,
   toEmailAddress,
   toSessionId,
   toUserId,
 } from '@/modules/kernel/domain/ids';
 import type { ApplicationResult } from '@/modules/kernel/testing';
 import { unwrapParseResult } from '@/modules/kernel/testing';
-import type { UserAuthGateway, UserRepository } from '@/modules/user';
+import type { UserRepository } from '@/modules/user';
 
 const user = {
   id: unwrapParseResult(toUserId('user-1')),
@@ -55,22 +56,6 @@ const makeUserRepository = (
       type: 'user_sessions_listed',
       page: { items: [session], total: 1 },
     }),
-  findSessionForRevocation: async () =>
-    Result.Ok({
-      type: 'user_session_revocation_target_found',
-      target: { id: session.id },
-    }),
-  ...overrides,
-});
-
-const makeUserAuthGateway = (
-  overrides: Partial<UserAuthGateway> = {}
-): UserAuthGateway => ({
-  removeUser: async () => Result.Ok({ type: 'user_auth_removed' }),
-  revokeUserSessions: async () =>
-    Result.Ok({ type: 'user_auth_sessions_revoked' }),
-  revokeUserSession: async () =>
-    Result.Ok({ type: 'user_auth_session_revoked' }),
   ...overrides,
 });
 
@@ -102,7 +87,6 @@ describe('user composition', () => {
     const overridden = getUserUseCases({
       kernel: makeTestKernel(),
       userRepository: makeUserRepository(),
-      userAuthGateway: makeUserAuthGateway(),
     });
 
     expect(overridden).not.toBe(singleton);
@@ -118,7 +102,6 @@ describe('user composition', () => {
     const useCases = getUserUseCases({
       kernel: makeTestKernel(),
       userRepository: makeUserRepository({ list }),
-      userAuthGateway: makeUserAuthGateway(),
     });
 
     const result = await useCases.list({
@@ -135,6 +118,24 @@ describe('user composition', () => {
       cursor: undefined,
       limit: 20,
       searchTerm: 'user',
+    });
+  });
+
+  it('fails closed for transactional security work with only a repository override', async () => {
+    const useCases = getUserUseCases({
+      kernel: makeTestKernel(),
+      userRepository: makeUserRepository(),
+    });
+
+    const result = await useCases.revokeSessions({
+      correlationId: unwrapParseResult(toCorrelationId('request-1')),
+      currentUserId: scope('admin-1').userId,
+      id: user.id,
+    });
+
+    expect(result).toMatchObject({
+      tag: 'Error',
+      error: { code: 'CONFIGURATION_ERROR' },
     });
   });
 });

@@ -3,6 +3,8 @@ import type { ReactElement } from 'react';
 
 import { DEFAULT_LANGUAGE_KEY } from '@/platform/lib/i18n/constants';
 
+import '@/app/i18n/setup';
+
 import { TemplateLoginCode } from '@/modules/email/presentation';
 import { isProdRuntimeEnvironment } from '@/modules/kernel/backend';
 

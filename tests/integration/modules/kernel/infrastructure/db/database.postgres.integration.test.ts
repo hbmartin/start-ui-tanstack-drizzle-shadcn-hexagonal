@@ -65,6 +65,7 @@ describe('PostgreSQL database integration', () => {
     const migrationDb = await createMigrationDbClient({
       databaseUrl,
       driver: 'node-pg',
+      tlsPolicy: 'off',
     });
     try {
       await migrateDatabase(migrationDb);

@@ -9,13 +9,27 @@ export type {
 } from './application/ports/authorization-gateway';
 export type { SecondaryStore } from './application/ports/secondary-store';
 export type { SessionGateway } from './application/ports/session-gateway';
-export type { UserAdminGateway } from './application/ports/user-admin-gateway';
 export {
   hasScopePermission,
   scopeUserId,
 } from './application/scope-authorization';
 export type { AuthUseCaseDeps } from './application/use-cases/types';
 export { AUTH_EMAIL_OTP_EXPIRATION_IN_MINUTES } from './domain/auth-policy';
+export {
+  type AuthIdentity,
+  type AuthIdentityId,
+  type AuthProvider,
+  authProviders,
+  toAuthIdentityId,
+  zAuthIdentityId,
+} from './domain/auth-identity';
+export {
+  type Invite,
+  type InviteId,
+  isInviteUsable,
+  toInviteId,
+  zInviteId,
+} from './domain/invite';
 export {
   defaultUserPermissions,
   hasRolePermission,

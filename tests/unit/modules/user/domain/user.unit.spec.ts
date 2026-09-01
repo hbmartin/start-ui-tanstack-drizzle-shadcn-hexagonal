@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 import { toEmailAddress, toUserId } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
-import { shouldUnverifyEmail } from '@/modules/user/domain/user';
+import {
+  shouldUnverifyEmail,
+  zUserDisplayName,
+} from '@/modules/user/domain/user';
 import {
   assignsPrivilegedRole,
   canChangeRole,
@@ -60,6 +63,10 @@ const nonBlankUserId = fc
 const role = fc.constantFrom('admin' as const, 'user' as const);
 
 describe('user domain', () => {
+  it('composes a fresh display-name schema for each caller', () => {
+    expect(zUserDisplayName()).not.toBe(zUserDisplayName());
+  });
+
   it('unverifies users only when their email changes', () => {
     expect(
       shouldUnverifyEmail(

@@ -1,4 +1,3 @@
-/* oxlint-disable simple-import-sort/imports -- Oxfmt owns import ordering. */
 import { page, render, setupUser } from '@tests/utils';
 import { useState } from 'react';
 import { expect, test, vi } from 'vitest';
@@ -157,8 +156,10 @@ test('locale changes expose localized transition feedback', async () => {
 
   render(<LocalSwitcher />);
 
-  await user.click(page.getByRole('button'));
-  (page.getByRole('menuitem').nth(1).element() as HTMLElement).click();
+  const languageSelect = page.getByRole('combobox');
+  await expect.element(languageSelect).toHaveAttribute('data-hydrated', 'true');
+  await user.click(languageSelect);
+  (page.getByRole('option').nth(1).element() as HTMLElement).click();
 
   await vi.waitFor(() => expect(changeLanguage).toHaveBeenCalledOnce());
   await expect

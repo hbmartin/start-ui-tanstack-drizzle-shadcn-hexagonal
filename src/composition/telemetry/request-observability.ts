@@ -2,77 +2,69 @@ import type { TextMapGetter } from '@opentelemetry/api';
 import { context, propagation } from '@opentelemetry/api';
 
 import type {
+  RequestExceptionCaptureState,
   TelemetryAttributes,
   TelemetryMetricInput,
 } from '@/platform/telemetry';
-import { getTelemetry } from '@/platform/telemetry';
+import {
+  claimRequestException,
+  reportTelemetryFailure,
+  telemetryProxy,
+} from '@/platform/telemetry';
+import { isUnexpectedRequestFailure } from '@/platform/http/request-failure';
 
 type RequestObservationInput = {
   request: Request;
   pathname: string;
   handlerType: string;
   requestId?: string;
+  captureState?: RequestExceptionCaptureState;
 };
 
 const TELEMETRY_ROUTE_PREFIX = '/api/telemetry/';
+const UNMATCHED_ROUTE_TEMPLATE = '/unmatched';
+const HTTP_METHODS = new Set([
+  'DELETE',
+  'GET',
+  'HEAD',
+  'OPTIONS',
+  'PATCH',
+  'POST',
+  'PUT',
+]);
 
 const headersGetter: TextMapGetter<Headers> = {
   get: (carrier, key) => carrier.get(key) ?? undefined,
   keys: (carrier) => Array.from(carrier.keys()),
 };
 
-const isPromiseLike = <T>(value: T): value is T & Promise<Awaited<T>> =>
-  value != null &&
-  typeof value === 'object' &&
-  'then' in value &&
-  typeof (value as { then?: unknown }).then === 'function';
-
-const isAlphaNumeric = (charCode: number) =>
-  (charCode >= 48 && charCode <= 57) ||
-  (charCode >= 65 && charCode <= 90) ||
-  (charCode >= 97 && charCode <= 122);
-
-const isHex = (charCode: number) =>
-  (charCode >= 48 && charCode <= 57) ||
-  (charCode >= 65 && charCode <= 70) ||
-  (charCode >= 97 && charCode <= 102);
-
-const everyCharCode = (
-  value: string,
-  predicate: (charCode: number) => boolean
-) => {
-  for (let index = 0; index < value.length; index += 1) {
-    if (!predicate(value.charCodeAt(index))) return false;
+const isPromiseLike = <T>(value: T): value is T & Promise<Awaited<T>> => {
+  try {
+    return (
+      value != null &&
+      (typeof value === 'object' || typeof value === 'function') &&
+      'then' in value &&
+      typeof (value as { then?: unknown }).then === 'function'
+    );
+  } catch {
+    return false;
   }
-
-  return true;
 };
 
-const isIdPathSegment = (segment: string) =>
-  (segment.length >= 21 &&
-    segment[0]?.toLowerCase() === 'c' &&
-    everyCharCode(segment, isAlphaNumeric)) ||
-  (segment.length >= 8 && everyCharCode(segment, isHex));
-
-const normalizePathname = (pathname: string) => {
-  let end = pathname.length;
-  while (end > 1 && pathname.charCodeAt(end - 1) === 47) end -= 1;
-  return pathname.slice(0, end);
-};
-
-const routeTemplateFromPathname = (pathname: string) =>
-  normalizePathname(pathname)
-    .split('/')
-    .map((segment) => (isIdPathSegment(segment) ? '$id' : segment))
-    .join('/');
+const normalizeHttpMethod = (method: string) =>
+  HTTP_METHODS.has(method) ? method : 'OTHER';
 
 const responseFromResult = (result: unknown): Response | undefined => {
-  if (result instanceof Response) return result;
+  try {
+    if (result instanceof Response) return result;
 
-  if (typeof result !== 'object' || result === null) return undefined;
+    if (typeof result !== 'object' || result === null) return undefined;
 
-  const response = (result as { response?: unknown }).response;
-  return response instanceof Response ? response : undefined;
+    const response = (result as { response?: unknown }).response;
+    return response instanceof Response ? response : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
 const statusClass = (statusCode: number | undefined) =>
@@ -96,27 +88,29 @@ const requestMetricAttributes = (
 };
 
 const recordRequestMetric = (input: TelemetryMetricInput) => {
-  try {
-    getTelemetry().recordMetric(input);
-  } catch {
-    // Request telemetry must never change request handling behavior.
-  }
+  telemetryProxy.recordMetric(input);
 };
 
 export function observeHttpRequest<T>(
-  { request, pathname, handlerType, requestId }: RequestObservationInput,
+  {
+    request,
+    pathname,
+    handlerType,
+    requestId,
+    captureState,
+  }: RequestObservationInput,
   next: () => T
 ): T {
   if (pathname.startsWith(TELEMETRY_ROUTE_PREFIX)) return next();
 
-  const routeTemplate = routeTemplateFromPathname(pathname);
+  const routeTemplate = UNMATCHED_ROUTE_TEMPLATE;
   const url = new URL(request.url);
+  const method = normalizeHttpMethod(request.method);
   const metricAttributes = {
-    'http.request.method': request.method,
+    'http.request.method': method,
     'http.route': routeTemplate,
-    'server.address': url.hostname,
     'tanstack.handler_type': handlerType,
-    'url.scheme': url.protocol.replace(/:$/, ''),
+    'url.scheme': url.protocol === 'https:' ? 'https' : 'http',
   } satisfies TelemetryAttributes;
   const spanAttributes = {
     ...metricAttributes,
@@ -146,32 +140,100 @@ export function observeHttpRequest<T>(
       unit: 'ms',
       value: durationMs,
     });
+    if (
+      isUnexpectedRequestFailure(error) &&
+      (!captureState || claimRequestException(captureState, error))
+    ) {
+      telemetryProxy.captureException(error, {
+        level: 'error',
+        tags: {
+          event: 'framework.request.failed',
+          ...(requestId ? { requestId } : {}),
+        },
+      });
+    }
     throw error;
   };
 
-  const extractedContext = propagation.extract(
-    context.active(),
-    request.headers,
-    headersGetter
-  );
+  type ObservationState = 'not_started' | 'returned' | 'running' | 'threw';
+  const observation = { state: 'not_started' as ObservationState };
+  let observationResult: T | undefined;
+  let observationFailure: unknown;
+  const runObservationOnce = (): T => {
+    if (observation.state === 'returned') return observationResult as T;
+    if (observation.state === 'threw') throw observationFailure;
+    if (observation.state === 'running') {
+      throw new Error('Telemetry context invoked request work recursively');
+    }
 
-  return context.with(extractedContext, () =>
-    getTelemetry().startSpan(
-      {
-        attributes: spanAttributes,
-        name: `http.request ${request.method} ${routeTemplate}`,
-        op: 'http.server',
-      },
-      () => {
-        try {
-          const result = next();
-          if (!isPromiseLike(result)) return finish(result);
+    observation.state = 'running';
+    try {
+      observationResult = telemetryProxy.startSpan(
+        {
+          attributes: spanAttributes,
+          name: 'http.request',
+          op: 'http.server',
+        },
+        () => {
+          try {
+            const result = next();
+            if (!isPromiseLike(result)) return finish(result);
 
-          return result.then(finish, fail) as T;
-        } catch (error) {
-          return fail(error);
+            return result.then(finish, fail) as T;
+          } catch (error) {
+            return fail(error);
+          }
         }
-      }
-    )
-  );
+      );
+      observation.state = 'returned';
+      return observationResult;
+    } catch (failure) {
+      observationFailure = failure;
+      observation.state = 'threw';
+      throw failure;
+    }
+  };
+
+  let extractedContext;
+  try {
+    extractedContext = propagation.extract(
+      context.active(),
+      request.headers,
+      headersGetter
+    );
+  } catch (failure) {
+    reportTelemetryFailure('otel.context.extract', failure);
+    return runObservationOnce();
+  }
+
+  let activationResult: T | undefined;
+  try {
+    activationResult = context.with(extractedContext, runObservationOnce);
+  } catch (failure) {
+    if (observation.state === 'threw' && failure === observationFailure) {
+      throw failure;
+    }
+    reportTelemetryFailure('otel.context.activate', failure);
+    return runObservationOnce();
+  }
+
+  if (observation.state === 'not_started') {
+    reportTelemetryFailure(
+      'otel.context.activate',
+      new Error('Telemetry context skipped request work')
+    );
+  }
+  if (activationResult !== observationResult) {
+    reportTelemetryFailure(
+      'otel.context.activate',
+      new Error('Telemetry context substituted the request result')
+    );
+    if (isPromiseLike(activationResult)) {
+      void Promise.resolve(activationResult).catch((failure: unknown) => {
+        reportTelemetryFailure('otel.context.activate', failure);
+      });
+    }
+  }
+
+  return runObservationOnce();
 }

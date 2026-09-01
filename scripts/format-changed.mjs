@@ -12,19 +12,28 @@ const FORMAT_EXTENSIONS = new Set([
   '.cjs',
   '.mjs',
   '.json',
-  '.md',
   '.css',
 ]);
 
+const AGENT_DIRECTORY_NAMES = new Set(['.agents', '.claude', '.codex']);
+
 const hasFormatterExtension = (file) =>
   FORMAT_EXTENSIONS.has(path.extname(file));
+
+const isOutsideAgentDirectories = (file) =>
+  file
+    .replaceAll('\\', '/')
+    .split('/')
+    .every((segment) => !AGENT_DIRECTORY_NAMES.has(segment));
 
 const inputFiles = process.argv.slice(2);
 const changedFiles = [
   ...new Set(
     inputFiles.length > 0 ? inputFiles : listChangedFiles(resolveBase())
   ),
-].filter(hasFormatterExtension);
+].filter(
+  (file) => hasFormatterExtension(file) && isOutsideAgentDirectories(file)
+);
 
 if (changedFiles.length === 0) {
   console.log('No changed files to format.');

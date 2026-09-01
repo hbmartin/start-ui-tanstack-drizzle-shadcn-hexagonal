@@ -23,10 +23,35 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  APP_NAME: Start UI
+  APP_SLUG: start-ui-web
+
 jobs:
+  CapabilityPreset:
+    name: Resolve capability preset
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      value: ${{ steps.selection.outputs.value }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - id: selection
+        name: Read generated selection
+        shell: bash
+        run: >-
+          node -e "const source=require('node:fs').readFileSync('src/modules/kernel/domain/capability-selection.generated.ts','utf8');
+          const match=source.match(/ACTIVE_CAPABILITY_PRESET = '(core|demo)'/);
+          if (!match) process.exit(1);
+          require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'value=' + match[1] + '\n');"
+
   E2E:
     name: E2E (${{ matrix.browser }})
-    if: github.event.pull_request.draft == false
+    needs: CapabilityPreset
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 30
     runs-on: ubuntu-latest
     strategy:
@@ -43,11 +68,6 @@ jobs:
       EMAIL_FROM: Start UI <noreply@example.com>
       EMAIL_DELIVERY_DISABLED: false
       MAILDEV_URL: http://127.0.0.1:1080
-      S3_HOST: localhost:9000
-      S3_BUCKET_NAME: default
-      S3_SECURE: false
-      S3_FORCE_PATH_STYLE: true
-      VITE_S3_BUCKET_PUBLIC_URL: http://localhost:9000/default
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -57,20 +77,33 @@ jobs:
       - name: Generate test secrets
         shell: bash
         run: |
+          capability_preset="${{ needs.CapabilityPreset.outputs.value }}"
           postgres_password="$(openssl rand -hex 16)"
 
           {
+            printf '%s=%s\n' 'CAPABILITY_PRESET' "${capability_preset}"
             printf '%s=%s\n' 'AUTH_SECRET' "$(openssl rand -base64 32)"
+            printf '%s=%s\n' 'AUTH_RATE_LIMIT_HMAC_SECRET' "$(openssl rand -base64 32)"
             printf '%s=%s\n' 'DATABASE_URL' "postgres://startui:${postgres_password}@localhost:5432/startui"
             printf '%s=%s\n' 'POSTGRES_DB' 'startui'
             printf '%s=%s\n' 'POSTGRES_USER' 'startui'
             printf '%s=%s\n' 'POSTGRES_PASSWORD' "${postgres_password}"
             printf '%s=%s\n' 'RESEND_API_KEY' "re_$(openssl rand -hex 16)"
-            printf '%s=%s\n' 'S3_ACCESS_KEY_ID' "startui-$(openssl rand -hex 8)"
-            printf '%s=%s\n' 'S3_SECRET_ACCESS_KEY' "$(openssl rand -hex 24)"
-            printf '%s=%s\n' 'DOCKER_MINIO_USERNAME' "minio-$(openssl rand -hex 8)"
-            printf '%s=%s\n' 'DOCKER_MINIO_PASSWORD' "$(openssl rand -hex 24)"
           } >> "$GITHUB_ENV"
+
+          if [ "${capability_preset}" = 'demo' ]; then
+            {
+              printf '%s=%s\n' 'S3_HOST' 'localhost:9000'
+              printf '%s=%s\n' 'S3_BUCKET_NAME' 'default'
+              printf '%s=%s\n' 'S3_SECURE' 'false'
+              printf '%s=%s\n' 'S3_FORCE_PATH_STYLE' 'true'
+              printf '%s=%s\n' 'VITE_S3_BUCKET_PUBLIC_URL' 'http://localhost:9000/default'
+              printf '%s=%s\n' 'S3_ACCESS_KEY_ID' "startui-$(openssl rand -hex 8)"
+              printf '%s=%s\n' 'S3_SECRET_ACCESS_KEY' "$(openssl rand -hex 24)"
+              printf '%s=%s\n' 'DOCKER_MINIO_USERNAME' "minio-$(openssl rand -hex 8)"
+              printf '%s=%s\n' 'DOCKER_MINIO_PASSWORD' "$(openssl rand -hex 24)"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm
@@ -81,6 +114,11 @@ jobs:
         uses: ./.github/actions/setup-playwright
         with:
           browsers: chromium ${{ matrix.browser }}
+
+      - name: Configure selected preset
+        run: >-
+          pnpm setup -- --yes --preset=${{ needs.CapabilityPreset.outputs.value }}
+          --app-name="Start UI" --app-slug=start-ui-web
 
       - name: Start PostgreSQL
         run: |
@@ -112,6 +150,7 @@ jobs:
           fi
 
       - name: Start MinIO server
+        if: needs.CapabilityPreset.outputs.value == 'demo'
         run: |
           docker run -d \
             --name minio \
@@ -130,6 +169,7 @@ jobs:
           echo "MinIO is ready"
 
       - name: Setup MinIO bucket
+        if: needs.CapabilityPreset.outputs.value == 'demo'
         run: |
           # Install MinIO client
           curl -sSL https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-08-13T08-35-41Z -o "$RUNNER_TEMP/mc"
@@ -169,7 +209,10 @@ jobs:
 
   Visual:
     name: Visual (chromium)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: CapabilityPreset
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
+      needs.CapabilityPreset.outputs.value == 'demo'
     timeout-minutes: 30
     runs-on: ubuntu-latest
     env:
@@ -195,10 +238,13 @@ jobs:
       - name: Generate test secrets
         shell: bash
         run: |
+          capability_preset="${{ needs.CapabilityPreset.outputs.value }}"
           postgres_password="$(openssl rand -hex 16)"
 
           {
+            printf '%s=%s\n' 'CAPABILITY_PRESET' "${capability_preset}"
             printf '%s=%s\n' 'AUTH_SECRET' "$(openssl rand -base64 32)"
+            printf '%s=%s\n' 'AUTH_RATE_LIMIT_HMAC_SECRET' "$(openssl rand -base64 32)"
             printf '%s=%s\n' 'DATABASE_URL' "postgres://startui:${postgres_password}@localhost:5432/startui"
             printf '%s=%s\n' 'POSTGRES_DB' 'startui'
             printf '%s=%s\n' 'POSTGRES_USER' 'startui'
@@ -219,6 +265,11 @@ jobs:
         uses: ./.github/actions/setup-playwright
         with:
           browsers: chromium
+
+      - name: Configure selected preset
+        run: >-
+          pnpm setup -- --yes --preset=${{ needs.CapabilityPreset.outputs.value }}
+          --app-name="Start UI" --app-slug=start-ui-web
 
       - name: Start PostgreSQL
         run: |

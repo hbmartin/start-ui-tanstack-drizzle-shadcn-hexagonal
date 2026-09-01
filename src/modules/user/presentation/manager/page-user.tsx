@@ -49,7 +49,9 @@ import { UserSessionsRegion } from './page-user-sessions';
 import { useReauthPrompt } from './use-reauth-prompt';
 
 const isNotFoundError = (error: unknown) =>
-  isServerFnError(error) && error.code === 'NOT_FOUND';
+  isServerFnError(error) &&
+  error.target === 'user' &&
+  error.reason === 'not_found';
 
 export const PageUser = (props: { userId: UserId }) => {
   const queryClient = useQueryClient();

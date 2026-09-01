@@ -6,7 +6,12 @@ import {
 import { fc, PROPERTY_DEFAULTS, test } from '@tests/support/property-testing';
 import { describe, expect, it } from 'vitest';
 
-import { normalizeBookWriteInput } from '@/modules/book/domain/book';
+import {
+  normalizeBookWriteInput,
+  zBookAuthor,
+  zBookTitle,
+  zPublisherName,
+} from '@/modules/book/domain/book';
 import { isDuplicateBookCandidate } from '@/modules/book/domain/book-policy';
 import { toBookCoverObjectKey, toGenreId } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
@@ -30,6 +35,12 @@ const coverId = fc.option(
 const duplicateText = fc.stringMatching(/^[a-z]{1,40}$/);
 
 describe('book domain', () => {
+  it('creates fresh book schemas for each consumer', () => {
+    expect(zBookTitle()).not.toBe(zBookTitle());
+    expect(zBookAuthor()).not.toBe(zBookAuthor());
+    expect(zPublisherName()).not.toBe(zPublisherName());
+  });
+
   it('normalizes writable book fields', () => {
     expect(
       normalizeBookWriteInput({

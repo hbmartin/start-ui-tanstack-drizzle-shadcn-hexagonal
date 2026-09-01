@@ -9,19 +9,27 @@ import { createRequire } from 'node:module';
 import { Client as PgClient } from 'pg';
 
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
+import { getApplicationIdentity } from '@/modules/kernel/infrastructure/config/application';
 import {
+  assertMigrationDriver,
+  assertMigrationUrlSupportsMigrations,
   getMigrationDatabaseConfig,
+  MIGRATION_DATABASE_CLIENT_DRIVER_NAME,
+  MIGRATION_DATABASE_CLIENT_URL_NAME,
   type MigrationDatabaseConfig,
   type MigrationDatabaseDriver,
 } from '@/modules/kernel/infrastructure/config/database';
+import { assertDatabaseTlsPolicy } from '@/modules/kernel/infrastructure/config/database-tls';
+import { assertDatabaseUrlTls } from '@/modules/kernel/infrastructure/config/url-security';
 
+import { createDatabaseClientErrorHandler } from './client-error-handler';
 import * as schema from './schema';
+import { nodePostgresSslForPolicy } from './node-postgres-tls';
 
 const migrationConfig = {
   migrationsFolder: 'drizzle/migrations',
 } as const;
 
-const MIGRATION_LOCK_NAMESPACE = 'start-ui-web';
 const MIGRATION_LOCK_KEY = 'drizzle-migrations';
 
 const require = createRequire(import.meta.url);
@@ -58,8 +66,18 @@ function withMigrationMetadata<TDb extends object>(
   }) as unknown as MigrationDatabase;
 }
 
-function createNodePgMigrationDb(url: string): MigrationDatabase {
-  const client = new PgClient({ connectionString: url });
+function createNodePgMigrationDb(
+  url: string,
+  tlsPolicy: MigrationDatabaseConfig['tlsPolicy']
+): MigrationDatabase {
+  const client = new PgClient({
+    connectionString: url,
+    ssl: nodePostgresSslForPolicy(tlsPolicy),
+  });
+  client.on(
+    'error',
+    createDatabaseClientErrorHandler('database.migration.node_postgres.client')
+  );
   const db = drizzleNodePg(client, { schema, casing: 'camelCase' });
 
   return withMigrationMetadata(db, {
@@ -74,6 +92,10 @@ function createNeonWebsocketMigrationDb(url: string): MigrationDatabase {
     WebSocket as typeof neonConfig.webSocketConstructor;
 
   const client = new NeonClient(url);
+  client.on(
+    'error',
+    createDatabaseClientErrorHandler('database.migration.neon.client')
+  );
   const db = drizzleNeonWebsocket({
     client,
     ws: WebSocket,
@@ -90,9 +112,21 @@ function createNeonWebsocketMigrationDb(url: string): MigrationDatabase {
 export async function createMigrationDbClient(
   config: MigrationDatabaseConfig = getMigrationDatabaseConfig()
 ): Promise<MigrationDatabase> {
+  assertMigrationDriver(config.driver, MIGRATION_DATABASE_CLIENT_DRIVER_NAME);
+  assertDatabaseTlsPolicy(config.tlsPolicy);
+  assertDatabaseUrlTls({
+    driver: config.driver,
+    name: MIGRATION_DATABASE_CLIENT_URL_NAME,
+    policy: config.tlsPolicy,
+    url: config.databaseUrl,
+  });
+  assertMigrationUrlSupportsMigrations(
+    config.databaseUrl,
+    MIGRATION_DATABASE_CLIENT_URL_NAME
+  );
   const db =
     config.driver === 'node-pg'
-      ? createNodePgMigrationDb(config.databaseUrl)
+      ? createNodePgMigrationDb(config.databaseUrl, config.tlsPolicy)
       : createNeonWebsocketMigrationDb(config.databaseUrl);
 
   try {
@@ -106,11 +140,12 @@ export async function createMigrationDbClient(
 }
 
 async function acquireMigrationLock(
-  client: MigrationDatabaseClient
+  client: MigrationDatabaseClient,
+  namespace: string
 ): Promise<() => Promise<void>> {
   const { rows } = await client.query<{ acquired: boolean }>(
     'SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired',
-    [MIGRATION_LOCK_NAMESPACE, MIGRATION_LOCK_KEY]
+    [namespace, MIGRATION_LOCK_KEY]
   );
 
   if (rows[0]?.acquired !== true) {
@@ -125,7 +160,7 @@ async function acquireMigrationLock(
     released = true;
     await client.query(
       'SELECT pg_advisory_unlock(hashtext($1), hashtext($2))',
-      [MIGRATION_LOCK_NAMESPACE, MIGRATION_LOCK_KEY]
+      [namespace, MIGRATION_LOCK_KEY]
     );
   };
 }
@@ -143,7 +178,10 @@ async function runMigration(db: MigrationDatabase) {
 }
 
 export async function migrateDatabase(db: MigrationDatabase) {
-  const releaseLock = await acquireMigrationLock(db.$client);
+  const releaseLock = await acquireMigrationLock(
+    db.$client,
+    getApplicationIdentity().slug
+  );
 
   try {
     await runMigration(db);

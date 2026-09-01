@@ -12,8 +12,6 @@ const digestPattern = /@sha256:[a-f0-9]{64}$/i;
 const pinnedActionPattern = /^[^@\s]+@[a-f0-9]{40}$/i;
 const allowedWritePermissions = new Set([
   '.github/workflows/codeql.yml:security-events',
-  '.github/workflows/cosmos-pages.yml:id-token',
-  '.github/workflows/cosmos-pages.yml:pages',
   '.github/workflows/osv-scanner.yml:security-events',
   '.github/workflows/osv-scanner-full.yml:security-events',
   '.github/workflows/supply-chain.yml:attestations',
@@ -533,6 +531,22 @@ describe('GitHub Actions supply-chain policy', () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it('scopes OSV token permissions to the jobs that require them', () => {
+    const workflow = parseYamlProjectFile('.github/workflows/osv-scanner.yml');
+    const jobs = asRecord(workflow.jobs);
+
+    expect(workflow.permissions).toEqual({});
+    expect(asRecord(jobs?.['dependency-paths'])?.permissions).toEqual({
+      contents: 'read',
+    });
+    expect(asRecord(jobs?.['scan-pr-run'])?.permissions).toEqual({
+      actions: 'read',
+      contents: 'read',
+      'security-events': 'write',
+    });
+    expect(asRecord(jobs?.['scan-pr'])?.permissions).toBeUndefined();
   });
 
   it('requires Docker image references to be digest-pinned', () => {

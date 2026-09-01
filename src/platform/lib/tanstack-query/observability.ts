@@ -1,4 +1,4 @@
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 import {
   deriveOperationMetadataFromKey,
   type OperationMetadata,
@@ -18,7 +18,7 @@ const recordOperationMetric = (
   durationMs: number,
   status: 'error' | 'success'
 ) => {
-  getTelemetry().recordMetric({
+  telemetryProxy.recordMetric({
     attributes: {
       ...metadata.attributes,
       status,
@@ -38,7 +38,7 @@ export const observeQueryOperation = <T>(
   const metadata = deriveOperationMetadataFromKey(queryKey, operationType);
   const start = performance.now();
 
-  return getTelemetry().startSpan(
+  return telemetryProxy.startSpan(
     {
       attributes: metadata.attributes,
       name: `${operationType}.${metadata.operationName}`,
@@ -79,7 +79,7 @@ export const recordQueryCacheEvent = (
   status: 'error' | 'success'
 ) => {
   const metadata = deriveOperationMetadataFromKey(queryKey, operationType);
-  getTelemetry().recordMetric({
+  telemetryProxy.recordMetric({
     attributes: {
       ...metadata.attributes,
       status,

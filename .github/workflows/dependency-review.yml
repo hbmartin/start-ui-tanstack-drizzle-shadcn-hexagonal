@@ -13,17 +13,77 @@ permissions:
   pull-requests: read
 
 jobs:
+  dependency-paths:
+    name: Detect dependency changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect dependency inputs
+        id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          changed_files="$(mktemp)"
+          trap 'rm -f "${changed_files}"' EXIT
+          git diff --name-only -z "${BASE_SHA}...${HEAD_SHA}" > "${changed_files}"
+
+          relevant=false
+          while IFS= read -r -d '' file; do
+            case "${file}" in
+              .github/workflows/dependency-review.yml|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tools/*/package.json)
+                relevant=true
+                break
+                ;;
+            esac
+          done < "${changed_files}"
+
+          echo "relevant=${relevant}" >> "${GITHUB_OUTPUT}"
+
   dependency-review:
     name: Dependency Review
-    if: github.event.pull_request.draft == false
+    needs: dependency-paths
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Require successful dependency detection
+        env:
+          DETECTION_RESULT: ${{ needs.dependency-paths.result }}
+          RELEVANT: ${{ needs.dependency-paths.outputs.relevant }}
+        run: |
+          set -euo pipefail
+
+          if [ "${DETECTION_RESULT}" != 'success' ]; then
+            echo "Dependency input detection failed (${DETECTION_RESULT})." >&2
+            exit 1
+          fi
+
+          case "${RELEVANT}" in
+            true|false) ;;
+            *)
+              echo "Dependency input detection returned an invalid result." >&2
+              exit 1
+              ;;
+          esac
+
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: github.event.pull_request.draft == false && needs.dependency-paths.outputs.relevant == 'true'
         with:
           persist-credentials: false
 
       - name: Review dependency changes
+        if: github.event.pull_request.draft == false && needs.dependency-paths.outputs.relevant == 'true'
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: moderate

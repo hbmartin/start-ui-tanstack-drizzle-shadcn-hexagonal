@@ -5,18 +5,27 @@ import type { TelemetryAdapter } from './types';
  * call sites unconditional so route loaders and server functions never need to
  * null-check the telemetry slot.
  */
-export const createNoOpTelemetry = (): TelemetryAdapter => ({
-  captureException: () => {},
-  setUser: () => {},
-  startSpan: (_options, fn) => fn(),
-  startManualSpan: () => ({
-    addEvent: () => {},
-    end: () => {},
-    recordException: () => {},
-    setAttributes: () => {},
-    setStatus: () => {},
-  }),
-  currentCorrelation: () => ({}),
-  emitLog: () => {},
-  recordMetric: () => {},
-});
+const noOpAdapters = new WeakSet<TelemetryAdapter>();
+
+export const createNoOpTelemetry = (): TelemetryAdapter => {
+  const adapter: TelemetryAdapter = {
+    captureException: () => {},
+    setUser: () => {},
+    startSpan: (_options, fn) => fn(),
+    startManualSpan: () => ({
+      addEvent: () => {},
+      end: () => {},
+      setAttributes: () => {},
+      setStatus: () => {},
+    }),
+    currentCorrelation: () => ({}),
+    emitLog: () => {},
+    forceFlush: () => Promise.resolve(),
+    recordMetric: () => {},
+  };
+  noOpAdapters.add(adapter);
+  return adapter;
+};
+
+export const isNoOpTelemetry = (adapter: TelemetryAdapter) =>
+  noOpAdapters.has(adapter);

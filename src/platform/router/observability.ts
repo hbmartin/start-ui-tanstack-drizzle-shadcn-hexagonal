@@ -1,5 +1,5 @@
 import type { TelemetrySpanHandle } from '@/platform/telemetry';
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 type RouterLifecycleEvent = {
   fromLocation?: { href: string; pathname: string };
@@ -35,43 +35,12 @@ const normalizePathname = (pathname: string) => {
   return pathname.slice(0, end);
 };
 
-const isAlphaNumeric = (charCode: number) =>
-  (charCode >= 48 && charCode <= 57) ||
-  (charCode >= 65 && charCode <= 90) ||
-  (charCode >= 97 && charCode <= 122);
-
-const isHex = (charCode: number) =>
-  (charCode >= 48 && charCode <= 57) ||
-  (charCode >= 65 && charCode <= 70) ||
-  (charCode >= 97 && charCode <= 102);
-
-const everyCharCode = (
-  value: string,
-  predicate: (charCode: number) => boolean
-) => {
-  for (let index = 0; index < value.length; index += 1) {
-    if (!predicate(value.charCodeAt(index))) return false;
-  }
-
-  return true;
-};
-
-const isIdPathSegment = (segment: string) =>
-  (segment.length >= 21 &&
-    segment[0]?.toLowerCase() === 'c' &&
-    everyCharCode(segment, isAlphaNumeric)) ||
-  (segment.length >= 8 && everyCharCode(segment, isHex));
-
 const routeTemplateFromRouterState = (router: ObservableRouter) => {
   const routeId = router.state?.matches?.at(-1)?.routeId;
   return routeId ? normalizePathname(routeId) : undefined;
 };
 
-const routeTemplateFromPathname = (pathname: string) =>
-  normalizePathname(pathname)
-    .split('/')
-    .map((segment) => (isIdPathSegment(segment) ? '$id' : segment))
-    .join('/');
+const UNMATCHED_ROUTE_TEMPLATE = '/unmatched';
 
 const shouldTraceNavigation = (event: RouterLifecycleEvent) =>
   event.hrefChanged !== false &&
@@ -87,8 +56,7 @@ const finishNavigation = (
 
   const durationMs = performance.now() - active.start;
   const routeTemplate =
-    routeTemplateFromRouterState(router) ??
-    routeTemplateFromPathname(event.toLocation.pathname);
+    routeTemplateFromRouterState(router) ?? UNMATCHED_ROUTE_TEMPLATE;
 
   active.span.setAttributes({
     'navigation.duration_ms': durationMs,
@@ -98,7 +66,7 @@ const finishNavigation = (
   active.span.setStatus('ok');
   active.span.end();
 
-  getTelemetry().recordMetric({
+  telemetryProxy.recordMetric({
     attributes: {
       'navigation.status': status,
       'route.template': routeTemplate,
@@ -126,22 +94,15 @@ export const attachRouterObservability = (router: ObservableRouter) => {
 
       activeNavigation?.span.end();
 
-      const routeTemplate = routeTemplateFromPathname(
-        event.toLocation.pathname
-      );
       activeNavigation = {
         href: event.toLocation.href,
-        span: getTelemetry().startManualSpan({
+        span: telemetryProxy.startManualSpan({
           attributes: {
-            'navigation.href': event.toLocation.href,
             'navigation.hash_changed': event.hashChanged,
             'navigation.path_changed': event.pathChanged,
-            ...(event.fromLocation
-              ? { 'navigation.from': event.fromLocation.href }
-              : {}),
-            'route.template': routeTemplate,
+            'route.template': UNMATCHED_ROUTE_TEMPLATE,
           },
-          name: `router.navigation ${routeTemplate}`,
+          name: 'router.navigation',
           op: 'router.navigation',
         }),
         start: performance.now(),

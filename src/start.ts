@@ -1,8 +1,4 @@
 import {
-  sentryGlobalFunctionMiddleware,
-  sentryGlobalRequestMiddleware,
-} from '@sentry/tanstackstart-react';
-import {
   createCsrfMiddleware,
   createMiddleware,
   createStart,
@@ -11,21 +7,32 @@ import {
 import { observeHttpRequest } from '@/composition/telemetry/request-observability';
 import type { AuthSession } from '@/modules/auth';
 import type { Logger } from '@/modules/kernel';
-import { isProdRuntimeEnvironment } from '@/modules/kernel/backend';
+import {
+  isOpaquePublicCorrelationId,
+  serverFnErrorSerializationAdapter,
+} from '@/modules/kernel/client';
+import { serverFnErrorBoundaryMiddleware } from '@/modules/kernel/middleware';
 import { envClient } from '@/platform/env/client';
 import {
   appendBrowserMutationVaryHeader,
   shouldProtectBrowserMutation,
   validateSameOriginBrowserMutationRequest,
 } from '@/platform/http/browser-mutation-protection';
-import { replaceCspNoncePlaceholderInHtmlResponse } from '@/platform/http/csp-nonce';
 import { createCspNonce } from '@/platform/http/csp-nonce-server';
 import { violatesServerFnBodyLimit } from '@/platform/http/request-body-limit';
 import { applySecurityHeaders } from '@/platform/http/security-headers';
-import { createNoOpTelemetry } from '@/platform/telemetry';
+import { isProdRuntimeEnvironment } from '@/platform/env/runtime';
+import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
+import {
+  createNoOpTelemetry,
+  isRequestExceptionCaptureState,
+  type RequestExceptionCaptureState,
+} from '@/platform/telemetry';
 
 export type AppStartRequestContext = {
   requestId: string;
+  runtimeProfile: RuntimeProfile;
+  telemetryCaptureState?: RequestExceptionCaptureState;
   cspNonce?: string;
   auth?: {
     getSession: () => Promise<AuthSession | null>;
@@ -53,6 +60,10 @@ type RequestContextWithRequestId = {
   requestId?: unknown;
 };
 
+type RequestContextWithTelemetryCaptureState = {
+  telemetryCaptureState?: unknown;
+};
+
 const getCspNonceFromContext = (context: unknown) => {
   if (typeof context !== 'object' || context === null) return undefined;
 
@@ -65,6 +76,16 @@ const getRequestIdFromContext = (context: unknown) => {
 
   const { requestId } = context as RequestContextWithRequestId;
   return typeof requestId === 'string' ? requestId : undefined;
+};
+
+const getTelemetryCaptureStateFromContext = (context: unknown) => {
+  if (typeof context !== 'object' || context === null) return undefined;
+
+  const { telemetryCaptureState } =
+    context as RequestContextWithTelemetryCaptureState;
+  return isRequestExceptionCaptureState(telemetryCaptureState)
+    ? telemetryCaptureState
+    : undefined;
 };
 
 const mergeRequestContext = (
@@ -98,6 +119,7 @@ const getBrowserMutationGuardLogger = async () => {
 
   if (!browserMutationGuardLoggerPromise) {
     browserMutationGuardLoggerPromise =
+      // fallow-ignore-next-line boundary-violation -- Lazy server-only bootstrap; Semgrep rejects static infrastructure imports here.
       import('@/modules/kernel/infrastructure/logger/telemetry')
         .then(({ createTelemetryLogger }) => {
           const logger = createTelemetryLogger({
@@ -155,15 +177,12 @@ export const securityHeadersMiddleware = createMiddleware({
   const cspNonce = createCspNonce();
   const nextContext = mergeRequestContext(context, { cspNonce });
   const result = await next({ context: nextContext });
-  const response = applyAppSecurityHeaders(
-    await replaceCspNoncePlaceholderInHtmlResponse(result.response, cspNonce),
-    nextContext
-  );
-
-  return {
-    ...result,
-    response,
-  };
+  applyAppSecurityHeaders(result.response, nextContext);
+  const requestId = getRequestIdFromContext(nextContext);
+  if (isOpaquePublicCorrelationId(requestId)) {
+    result.response.headers.set('X-Request-ID', requestId);
+  }
+  return result;
 });
 
 export const browserMutationGuardMiddleware = createMiddleware({
@@ -230,6 +249,7 @@ export const telemetryRequestMiddleware = createMiddleware({
       pathname,
       request,
       requestId: getRequestIdFromContext(context),
+      captureState: getTelemetryCaptureStateFromContext(context),
     },
     () => next()
   )
@@ -242,8 +262,8 @@ const csrfMiddleware = createCsrfMiddleware({
 });
 
 export const startInstance = createStart(() => ({
+  serializationAdapters: [serverFnErrorSerializationAdapter],
   requestMiddleware: [
-    sentryGlobalRequestMiddleware,
     telemetryRequestMiddleware,
     securityHeadersMiddleware,
     authRequestContextMiddleware,
@@ -251,7 +271,7 @@ export const startInstance = createStart(() => ({
     serverFnBodyLimitMiddleware,
     csrfMiddleware,
   ],
-  functionMiddleware: [sentryGlobalFunctionMiddleware],
+  functionMiddleware: [serverFnErrorBoundaryMiddleware],
 }));
 
 export {

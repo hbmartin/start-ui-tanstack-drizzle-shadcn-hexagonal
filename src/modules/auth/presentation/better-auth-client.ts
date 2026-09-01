@@ -1,73 +1,67 @@
 import {
-  adminClient,
   emailOTPClient,
   inferAdditionalFields,
 } from 'better-auth/client/plugins';
-import { createAccessControl } from 'better-auth/plugins/access';
-import { adminAc } from 'better-auth/plugins/admin/access';
 import { createAuthClient } from 'better-auth/react';
 
-import { permissionStatements, rolePermissions } from '@/modules/auth';
-import { envClient } from '@/platform/env/client';
+import { getEnvClient } from '@/platform/env/client';
 
-const ac = createAccessControl(permissionStatements);
-const betterAuthClientPermissions = {
-  ac,
-  roles: {
-    admin: ac.newRole({
-      ...adminAc.statements,
-      ...rolePermissions.admin,
-    }),
-    user: ac.newRole(rolePermissions.user),
-  },
+const createBetterAuthBrowserClient = () => {
+  const env = getEnvClient();
+  return createAuthClient({
+    baseURL:
+      typeof globalThis.window === 'undefined'
+        ? env.VITE_BASE_URL
+        : globalThis.window.location.origin,
+    plugins: [
+      inferAdditionalFields({
+        user: {
+          onboardedAt: {
+            type: 'date',
+            // Mirror the server: server-managed, not client-writable input.
+            input: false,
+          },
+        },
+      }),
+      emailOTPClient(),
+    ],
+  });
 };
 
-const betterAuthClient = createAuthClient({
-  baseURL:
-    typeof globalThis.window === 'undefined'
-      ? envClient.VITE_BASE_URL
-      : globalThis.window.location.origin,
-  plugins: [
-    inferAdditionalFields({
-      user: {
-        onboardedAt: {
-          type: 'date',
-          // Mirror the server: server-managed, not client-writable input.
-          input: false,
-        },
-      },
-    }),
-    adminClient({
-      ...betterAuthClientPermissions,
-    }),
-    emailOTPClient(),
-  ],
-});
+type BetterAuthBrowserClient = ReturnType<typeof createBetterAuthBrowserClient>;
+
+let betterAuthClient: BetterAuthBrowserClient | undefined;
+
+const getBetterAuthBrowserClient = () =>
+  (betterAuthClient ??= createBetterAuthBrowserClient());
 
 export type BetterAuthSocialProvider = Parameters<
-  typeof betterAuthClient.signIn.social
+  BetterAuthBrowserClient['signIn']['social']
 >[0]['provider'];
 
-export const authErrorCodes = betterAuthClient.$ERROR_CODES;
+export const authErrorCodes = new Proxy(
+  {} as BetterAuthBrowserClient['$ERROR_CODES'],
+  {
+    get: (_target, property) =>
+      Reflect.get(getBetterAuthBrowserClient().$ERROR_CODES, property),
+  }
+);
 
 export const betterAuthBrowserClient = {
   sendEmailOtp(input: { email: string }) {
-    return betterAuthClient.emailOtp.sendVerificationOtp({
+    return getBetterAuthBrowserClient().emailOtp.sendVerificationOtp({
       email: input.email,
       type: 'sign-in',
     });
   },
   signInEmailOtp(input: { email: string; otp: string }) {
-    return betterAuthClient.signIn.emailOtp(input);
+    return getBetterAuthBrowserClient().signIn.emailOtp(input);
   },
   signInSocial(input: {
     provider: BetterAuthSocialProvider;
     callbackURL: string;
     errorCallbackURL: string;
   }) {
-    return betterAuthClient.signIn.social(input);
-  },
-  signOut() {
-    return betterAuthClient.signOut();
+    return getBetterAuthBrowserClient().signIn.social(input);
   },
 };

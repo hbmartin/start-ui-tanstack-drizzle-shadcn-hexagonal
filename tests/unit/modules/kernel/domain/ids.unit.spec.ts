@@ -15,9 +15,19 @@ import {
   toSessionId,
   toUserId,
   type UserId,
+  zAuthorId,
   zBookId,
+  zBookCoverObjectKey,
   zEmailAddress,
+  zEmailIdempotencyKey,
+  zEmailProviderMessageId,
+  zEmailRecipientList,
+  zEmailStatusId,
+  zEmailWebhookEventId,
   zGenreId,
+  zLanguageCode,
+  zOtpCode,
+  zPublisherId,
   zScopeKey,
   zSessionId,
   zUserId,
@@ -48,6 +58,29 @@ describe('kernel domain ids', () => {
   it('parses email addresses', () => {
     expect(zEmailAddress().parse('user@example.com')).toBe('user@example.com');
     expect(() => zEmailAddress().parse('not-an-email')).toThrow();
+  });
+
+  it('composes fresh public schemas for each caller', () => {
+    const factories = [
+      zUserId,
+      zBookId,
+      zGenreId,
+      zSessionId,
+      zScopeKey,
+      zAuthorId,
+      zPublisherId,
+      zBookCoverObjectKey,
+      zEmailStatusId,
+      zEmailProviderMessageId,
+      zEmailIdempotencyKey,
+      zEmailWebhookEventId,
+      zEmailRecipientList,
+      zOtpCode,
+      zLanguageCode,
+      zEmailAddress,
+    ];
+
+    factories.forEach((factory) => expect(factory()).not.toBe(factory()));
   });
 
   it('converts primitive strings into branded domain values', () => {

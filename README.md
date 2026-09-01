@@ -1,18 +1,24 @@
 <h1 align="center"><img src=".github/assets/thumbnail.png" alt="Start UI Web" /></h1>
 
-🚀 Start UI <small>[web]</small> is an opinionated frontend starter repository created & maintained by the [BearStudio Team](https://www.bearstudio.fr/team) and other contributors.
-It represents our team's up-to-date stack that we use when creating web apps for our clients.
+🚀 Start UI <small>[web]</small> v5 is a production-oriented authenticated
+TanStack Start modular-monolith template. It was originally
+created & maintained by the [BearStudio Team](https://www.bearstudio.fr/team) and other contributors;
+that template-author attribution is retained throughout the v5 rewrite.
 
 
 ## Technologies
 
 <div align="center" style="margin: 0 0 16px 0"><img src=".github/assets/tech-logos.png" alt="Technologies logos of the starter" /></div>
 
-[⚙️ Node.js](https://nodejs.org), [🟦 TypeScript](https://www.typescriptlang.org/), [⚛️ React](https://react.dev/), [📦 TanStack Start](https://tanstack.com/start), [💨 Tailwind CSS](https://tailwindcss.com/), [🧩 shadcn/ui](https://ui.shadcn.com/), [📋 React Hook Form](https://react-hook-form.com/), [🔌 oRPC](https://orpc.unnoq.com/), [🛠 Drizzle ORM](https://orm.drizzle.team/), [🔐 Better Auth](https://www.better-auth.com/), [🪐 React Cosmos](https://reactcosmos.org/), [🧪 Vitest](https://vitest.dev/), [🎭 Playwright](https://playwright.dev/)
+[⚙️ Node.js](https://nodejs.org), [🟦 TypeScript](https://www.typescriptlang.org/), [⚛️ React](https://react.dev/), [📦 TanStack Start](https://tanstack.com/start), [🔄 TanStack Query](https://tanstack.com/query), [📋 TanStack Form](https://tanstack.com/form), [🧱 Base UI](https://base-ui.com/), [💨 Tailwind CSS](https://tailwindcss.com/), [🛠 Drizzle ORM](https://orm.drizzle.team/), [🔐 Better Auth](https://www.better-auth.com/), [📈 OpenTelemetry](https://opentelemetry.io/), [🧪 Vitest](https://vitest.dev/), [🎭 Playwright](https://playwright.dev/)
 
 ## Documentation
 
-For detailed information on how to use this project, please refer to the [documentation](https://docs.web.start-ui.com). The documentation contains all the necessary information on installation, usage, and some guides.
+The v5 source of truth is the documentation in this repository: start with
+[CONTEXT.md](CONTEXT.md), [AGENTS.md](AGENTS.md), [Testing Strategy](TESTING.md),
+and the accepted decisions under [docs/adr](docs/adr). The original Start UI
+documentation remains useful for upstream background, but it does not describe
+every breaking v5 template contract.
 
 ## Requirements
 
@@ -47,16 +53,54 @@ This project uses Vite's native `resolve.tsconfigPaths: true` option to resolve 
 ## Installation
 
 ```bash
-cp .env.example .env  # Setup your env variables
-pnpm install          # Install dependencies
-pnpm dk:init          # Start Docker containers (PostgreSQL, MinIO)
-pnpm db:init          # Push the Drizzle schema and seed the database
+pnpm install
+pnpm setup # Interactive: choose core or demo and provide the application identity
+pnpm dk:db:init # core: PostgreSQL only
+# pnpm dk:init # demo: PostgreSQL plus MinIO bucket initialization
+pnpm db:init
 ```
+
+For a deterministic noninteractive setup:
+
+```bash
+pnpm setup -- --yes --preset=core --app-name="Acme Cloud" --app-slug=acme-cloud
+```
+
+There is no default preset. `core` enables auth, permissions, Profile, email
+ports, and durable audit without requiring object storage. `demo` additionally
+enables the books, genres, uploads, and demo seed data. Setup creates a private
+`.env`, generates distinct authentication and rate-limit secrets, and leaves
+optional email delivery and external telemetry exporters disabled until they are
+configured. Browser telemetry and its local SQLite development sink remain on.
+Email-dependent sign-in, invitation, verification, and reset delivery cannot
+complete while email delivery is disabled.
+
+`APP_NAME` is presentation identity and can be renamed. `APP_SLUG` is the stable
+machine identifier used by durable consumers; change it only before the first
+deployment unless you also supply an explicit data migration.
+
+Inspect setup without writing files by adding `--dry-run`. Re-running the same
+setup is byte-idempotent and preserves explicitly configured optional adapters.
+The production build validates every supplied adapter value but does not require
+deploy-time Upstash credentials. Production server startup still fails closed
+until the distributed authentication limiter is configured.
 
 > [!NOTE]
 > **Don't want to use docker?**
 >
 > Setup a PostgreSQL database (locally or online) and replace the **DATABASE_URL** environment variable. Then you can run `pnpm db:push` to update your database schema and then run `pnpm db:seed` to seed your database.
+
+Database transport is controlled by `DATABASE_TLS_POLICY`, not URL parameters. Loopback URLs default to `off`; every remote URL defaults to `verify`, including migration and Drizzle CLI processes. `encrypt` is an explicit opt-down that encrypts traffic without verifying the certificate or hostname. For private certificate authorities, extend the Node trust store (for example with `NODE_EXTRA_CA_CERTS`) instead of adding `sslmode` or certificate parameters to the database URL.
+
+The trusted runtime entrypoint also fixes the request-path database adapter:
+Node requires `DATABASE_DRIVER=node-pg`, while Vercel requires
+`DATABASE_DRIVER=neon-http`. Maintenance migrations may independently use
+`node-pg` or `neon-websocket`. The Cloudflare request path uses the
+source-declared `START_UI_DATABASE` Hyperdrive binding rather than one of these
+process-owned drivers. The checked-in all-zero configuration ID is
+intentionally non-deployable: replace it with the ID returned by
+`wrangler hyperdrive create` before a preview or deployment. Artifact-only
+build validation remains credential-free.
 
 ## Run
 
@@ -68,8 +112,8 @@ pnpm dev
 ## Verification
 
 ```bash
-pnpm check           # Static checks: format, lint, types, architecture, test layering, security, audit
-pnpm test            # Unit, browser, and integration tests
+pnpm check           # Deterministic formatting, lint, types, architecture, migrations, and security evidence
+pnpm test            # Unit, browser, Cloudflare-runtime, and integration tests
 pnpm test:property   # Focused property/invariant tests
 pnpm test:e2e        # Full Playwright user journeys
 pnpm verify          # Full local pre-merge gate
@@ -151,20 +195,6 @@ Add the language in the preview url like `http://localhost:3000/api/dev/email/{t
 You can add search params to the preview url to pass as props to the template.
 `http://localhost:3000/api/dev/email/{template}/?{propsName}={propsValue}`
 
-### OpenAPI Documentation for the API
-
-You can access the API documentation via the OpenAPI interface at:
-
-`http://localhost:3000/api/openapi/app`
-
-This interface allows you to:
-
-* View complete and up-to-date documentation of all backend endpoints exposed by the API.
-
-* Understand request and response formats for each route.
-
-* Facilitate development and debugging by testing endpoints directly from the interface, without needing the frontend.
-
 ### Generate custom icons components from svg files
 
 Put the custom svg files into the `src/platform/components/icons/svg-sources` folder and then run the following command:
@@ -183,59 +213,130 @@ If you want to use the same set of custom duotone icons that Start UI is already
 
 E2E tests are setup with Playwright.
 
-```sh
-pnpm e2e:setup  # Setup context to be used across test for more efficient execution 
-pnpm e2e        # Run tests in headless mode, this is the command executed in CI
-pnpm e2e:ui     # Open a UI which allows you to run specific tests and see test execution
+```bash
+pnpm e2e:setup          # Prepare Playwright authentication state
+pnpm test:e2e:chromium  # Focused local Chromium target
+pnpm test:e2e           # All configured Playwright projects
+pnpm e2e:ui             # Interactive Playwright UI
 ```
+
+The current non-draft pull-request workflow runs Chromium, Firefox, and WebKit.
+The accepted future split—Chromium on pull requests and all three browsers on
+scheduled/release gates—remains open as QUAL-008/QUAL-009 in the remediation
+ledger.
 
 > [!WARNING]
-> The generated e2e context files contain authentication logic. If you make changes to your local database instance, you should re-run `pnpm e2e:setup`. It will be run automatically in a CI context.
+> Generated E2E state contains authentication material and is ignored by Git.
+> Re-run `pnpm e2e:setup` after changing the local database or seed identities.
+> CI creates isolated secrets and state for each run.
 ## Production
 
+Production targets are explicit and have isolated output contracts:
+
 ```bash
-pnpm install
-pnpm cosmos-export # Optional: Build the React Cosmos component library export
-pnpm build
-pnpm start
+pnpm build                 # Node alias; writes .output/node
+pnpm build:vercel          # Nitro Vercel preset; writes .vercel/output
+pnpm build:cloudflare      # Cloudflare Vite plugin; writes dist
+pnpm verify:artifacts      # Build and inspect all three artifact shapes
+pnpm verify:node           # Build, boot, stream-test, and hydrate the Node artifact in Chromium
 ```
 
-## Deploy
+`pnpm preview:node` and `pnpm preview:vercel` run the corresponding
+already-built output. Runtime selection is a trusted build input; the application never
+infers a deployment profile from request hosts, forwarding headers, or ambient
+provider variables.
 
-This app is a TanStack Start app with Nitro already enabled in `vite.config.ts`. `pnpm build` creates the production `.output` directory, and `pnpm start` runs `.output/server/index.mjs`.
+The Vercel build and preview commands validate
+`DATABASE_DRIVER=neon-http` and an effective `verify` TLS policy. Remote URLs
+default to `verify`. For artifact-only validation with a loopback placeholder,
+use `pnpm verify:artifact:vercel`; its isolated environment selects `verify`
+while keeping the loopback migration policy `off`. Do not persist that verify
+override in the shared local `.env`, because it would also apply to Node dev and
+migration connections unless separately overridden. These checks do not
+connect to the database or prove endpoint compatibility. Before exercising a
+DB-backed Vercel request, supply a remote Neon-compatible `DATABASE_URL`; the
+Neon HTTP driver cannot serve requests against the local Docker PostgreSQL
+endpoint. Use the Node build/preview commands for that local driver.
 
-Before deploying anywhere:
+Set `DATABASE_MIGRATION_URL` when migrations need a connection distinct from
+`DATABASE_URL`; transaction-pooled migration URLs are rejected. Migrations may
+use `node-pg` or `neon-websocket`; `neon-http` is rejected. The
+default follows the request driver: `node-pg` for a Node request runtime and
+`neon-websocket` for Vercel's `neon-http` runtime. Set
+`DATABASE_MIGRATION_DRIVER=node-pg` explicitly when the maintenance URL is a
+conventional direct PostgreSQL endpoint, and set
+`DATABASE_MIGRATION_TLS_POLICY=off` when that endpoint is loopback and would
+otherwise inherit a non-`off` request policy. When neither policy is configured,
+the migration URL independently defaults to `off` for loopback and `verify` for
+remote endpoints.
+Conversely, a distinct remote `DATABASE_MIGRATION_URL` that would inherit
+`DATABASE_TLS_POLICY=off` must set `DATABASE_MIGRATION_TLS_POLICY=verify`.
+When migrations reuse the remote `DATABASE_URL` and no explicit
+`DATABASE_MIGRATION_TLS_POLICY` is set, correct the shared
+`DATABASE_TLS_POLICY` so runtime requests and migrations enforce the same safe
+policy. An explicit migration policy remains scoped to the migration client.
+
+The v5 runtime work is intentionally incremental. The artifact commands prove
+isolated output shapes and trusted profile injection. `pnpm verify:node` also
+uses an isolated PGlite database and local Upstash configuration stub to boot the built
+Node server and prove that `/login` returns HTTP 200, completes the TanStack
+serialization stream within a bounded timeout, and applies one request nonce
+consistently to the CSP header and every executable HTML tag. It then hydrates
+the production response in Chromium, opens a Base UI Select under the enforced
+CSP, and verifies Base UI's generated scrollbar style carries the request
+nonce. Verification builds ignore repository `.env*` files and consume only
+their generated, allowlisted child-process environment. Executable
+adapter contract tests for Hyperdrive, R2, Worker lifecycle ownership, and the
+Vercel serverless lifecycle land before Workers or Vercel are declared
+production-ready.
+
+The Node gate covers the emitted entry, streamed public-login response, and
+strict-CSP browser hydration. Node
+is not production-ready until its remaining adapter contracts and
+lifecycle-owned telemetry shutdown are executable as well.
+
+## Deployment readiness
+
+Node and Vercel use explicit Nitro presets. Cloudflare uses the official
+Cloudflare Vite plugin and its generated deployment configuration. Do not set
+`NITRO_PRESET`; use the target-specific command instead.
+
+No profile is declared production-ready in the current v5 alpha. The sections
+below document artifact and platform configuration contracts; they are not live
+deployment approval. Promotion instructions return only after the profile's
+runtime, adapter, lifecycle, and release gates close in the remediation ledger.
+
+Before a target can be approved:
 
 * Use Node.js 24 or newer to match the current `package.json` engine.
-* Set production values for the required variables in `.env.example`, especially `DATABASE_URL`, `AUTH_SECRET`, `VITE_BASE_URL`, S3 storage, email, OAuth, and any public `VITE_*` values.
-* Point `VITE_BASE_URL` at the deployed HTTPS URL. For preview domains, also configure `AUTH_ALLOWED_HOSTS` as needed.
+* Set production values for the required variables in `.env.example`, especially the database, authentication secrets, canonical application URL, and public `VITE_*` values. Object storage is required only when its capability is enabled.
+* Use explicit platform secrets and bindings. The Cloudflare artifact build disables implicit `.env` fallback and rejects local `.dev.vars*` files before bundling.
 * Run your versioned migration command against the production database before serving production traffic. Do not use `pnpm db:push` for production deployments because it bypasses migration history.
 
 <details>
 <summary><strong>Cloudflare Workers</strong></summary>
 
-Cloudflare's TanStack Start guide supports existing projects through Wrangler automatic configuration.
+Build and inspect the Worker artifact while the executable runtime gate is
+under construction:
 
 ```bash
-pnpm dlx wrangler login
-pnpm dlx wrangler deploy
+pnpm build:cloudflare
 ```
 
-Wrangler can detect TanStack Start and generate the Worker configuration for `.output/server/index.mjs`, `.output/public`, and the `nodejs_compat` compatibility flag.
+`wrangler.json` is the source configuration. The Cloudflare Vite plugin emits
+the deployment snapshot at `dist/server/wrangler.json`; Wrangler automatically
+uses that generated output after a build. `pnpm setup` keeps the Worker name in
+sync with `APP_SLUG`. Before any preview or deployment, replace the all-zero
+`START_UI_DATABASE` Hyperdrive configuration ID with the ID of a provisioned
+Hyperdrive configuration. The artifact verifier rejects a missing, renamed, or
+drifted binding. `.wrangler` and `.dev.vars*` are local-only and ignored.
 
-For Workers Builds from the Cloudflare dashboard:
-
-* Deploy command: `pnpm dlx wrangler deploy`
-* Build variables: set `NODE_VERSION=24` and `PNPM_VERSION=11.9.0`
-* Secrets and environment variables: add the production values from `.env.example`
-
-For source-controlled Worker configuration, install Wrangler and the Cloudflare Vite plugin, then follow Cloudflare's existing-app setup for `vite.config.ts` and `wrangler.jsonc`.
-
-```bash
-pnpm add -D wrangler @cloudflare/vite-plugin
-```
-
-Cloudflare Workers is not a normal Node server, so validate database, storage, and email dependencies with Workers-compatible providers or bindings instead of local Docker, MinIO, and Maildev URLs.
+The artifact build alone is not a deployment approval, so the v5 branch does
+not yet expose a Cloudflare preview or deploy script. The production Worker
+gate must first prove that the built graph starts in workerd and exercises
+Hyperdrive, R2 when uploads are enabled, lifecycle flushing, and non-Node
+adapters. Workers Builds configuration and deploy instructions return only
+after that contract is executable.
 
 Docs: [Cloudflare TanStack Start](https://developers.cloudflare.com/workers/framework-guides/web-apps/tanstack-start/), [Workers Builds image](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/)
 
@@ -244,107 +345,33 @@ Docs: [Cloudflare TanStack Start](https://developers.cloudflare.com/workers/fram
 <details>
 <summary><strong>Vercel</strong></summary>
 
-Vercel supports TanStack Start with Nitro, and this repo already has the required `nitro()` Vite plugin.
-
-Deploy from Git:
-
-1. Import the repository in Vercel.
-2. Use the TanStack Start preset if it is shown, otherwise use the default project settings.
-3. Set Node.js Version to `24.x`.
-4. Set Build Command to `pnpm build`.
-5. Leave Output Directory empty/default.
-6. Add the production environment variables from `.env.example`.
-7. Deploy.
-
-Deploy from the CLI:
+Build and inspect the explicit Nitro `vercel` preset, which emits Build Output
+API v3 under `.vercel/output`:
 
 ```bash
-pnpm dlx vercel
-pnpm dlx vercel --prod
+pnpm build:vercel
+pnpm verify:artifact:vercel
 ```
 
-For Vercel preview URLs, this app can derive `VITE_BASE_URL` from Vercel's preview environment variables when `VITE_BASE_URL` is not set. Add `AUTH_ALLOWED_HOSTS="*.vercel.app"` if auth should accept Vercel preview hosts.
+The artifact verifier validates the function entry, Node 24 runtime metadata,
+response-streaming flag, and static output. It does not boot a Vercel function
+or prove serverless lifecycle behavior, database connectivity, or promotion
+safety, so no Vercel deployment command is release-approved yet.
+
+The eventual request runtime requires a remote Neon-compatible `DATABASE_URL`,
+`DATABASE_DRIVER=neon-http`, and `DATABASE_TLS_POLICY=verify`. A conventional
+direct PostgreSQL maintenance endpoint also needs its separate URL and
+`DATABASE_MIGRATION_DRIVER=node-pg`; otherwise Vercel's request driver makes
+migrations default to `neon-websocket`.
+
+Vercel selects the canonical application origin from its validated
+`VERCEL_PROJECT_PRODUCTION_URL`, falling back to `VERCEL_URL`; Better Auth uses
+that fixed origin rather than deriving links or callbacks from request hosts.
+Because Vercel exposes the project production URL to preview deployments,
+previews intentionally share the production callback origin. Use a separate
+Vercel project when isolated preview authentication callbacks are required.
 
 Docs: [TanStack Start on Vercel](https://vercel.com/docs/frameworks/full-stack/tanstack-start), [Vercel Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions)
-
-</details>
-
-<details>
-<summary><strong>Railway</strong></summary>
-
-Railway deploys TanStack Start as a standard Node service. Railpack detects `package.json`, installs pnpm from `packageManager`, runs the `build` script, and uses the `start` script.
-
-Deploy from Git:
-
-1. Create a Railway project and deploy from the GitHub repository.
-2. Add a PostgreSQL service or connect an external PostgreSQL database.
-3. Add the production environment variables from `.env.example`.
-4. Set `RAILPACK_NODE_VERSION=24` if Railway does not pick Node 24 from `package.json`.
-5. Generate a public domain in the service Networking tab.
-6. Set `VITE_BASE_URL` to that public URL and redeploy.
-
-Deploy from the CLI after installing and authenticating the Railway CLI:
-
-```bash
-railway init
-railway up
-```
-
-If detection fails, set explicit commands in the service settings:
-
-```text
-Build Command: pnpm build
-Start Command: pnpm start
-```
-
-Nitro reads Railway's `PORT` environment variable automatically.
-
-Docs: [Railway TanStack Start](https://docs.railway.com/guides/tanstack-start), [Railway CLI deploys](https://docs.railway.com/cli/deploying), [Railpack Node.js](https://railpack.com/languages/node)
-
-</details>
-
-<details>
-<summary><strong>Render</strong></summary>
-
-Render should be configured as a Node Web Service that builds the Nitro output and starts the generated Node server.
-
-Dashboard settings:
-
-```text
-Runtime: Node
-Build Command: pnpm i --shamefully-hoist && pnpm build
-Start Command: node .output/server/index.mjs
-```
-
-Environment variables:
-
-```text
-NITRO_PRESET=render-com
-NODE_VERSION=24
-HOST=0.0.0.0
-```
-
-Also add the production values from `.env.example`. Render provides `PORT`; Nitro reads `PORT` automatically.
-
-Optional `render.yaml`:
-
-```yaml
-services:
-  - type: web
-    name: start-ui-web
-    env: node
-    buildCommand: pnpm i --shamefully-hoist && pnpm build
-    startCommand: node .output/server/index.mjs
-    envVars:
-      - key: NITRO_PRESET
-        value: render-com
-      - key: NODE_VERSION
-        value: 24
-      - key: HOST
-        value: 0.0.0.0
-```
-
-Docs: [Nitro on Render](https://nitro-docs.pages.dev/deploy/providers/render/), [Render deploys](https://render.com/docs/deploys), [Render Node.js versions](https://render.com/docs/node-version)
 
 </details>
 

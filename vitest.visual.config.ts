@@ -3,7 +3,8 @@ import { playwright } from '@vitest/browser-playwright';
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
-const resolve = (filePath: string) => path.resolve(__dirname, filePath);
+const resolve = (filePath: string) =>
+  path.resolve(import.meta.dirname, filePath);
 const visualViewport = { width: 1280, height: 900 } as const;
 const visualSnapshotRoot = resolve('./__visual_snapshots__');
 
@@ -34,8 +35,6 @@ export default defineConfig({
       '@base-ui/react/use-render',
       '@tanstack/react-router',
       'better-auth/client/plugins',
-      'better-auth/plugins/access',
-      'better-auth/plugins/admin/access',
       'better-auth/react',
     ],
   },

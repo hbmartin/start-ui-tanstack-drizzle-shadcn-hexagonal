@@ -1,24 +1,68 @@
 import { isProdRuntimeEnvironment } from './env-schema';
+import type { DatabaseTlsPolicy } from './database-tls';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
 type RuntimeEnv = Record<string, unknown>;
 
+type DatabaseTlsPolicyOwner = Readonly<{
+  policyName: string;
+  role: 'migration' | 'runtime';
+}>;
+
 const LOCALHOST_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
-/**
- * PostgreSQL sslmode values that negotiate *authenticated* TLS — the server
- * certificate and hostname are verified, defeating MITM. `require` only
- * encrypts without verifying the server identity; `disable`, `allow`, and
- * `prefer` (the libpq/node-pg default when sslmode is absent) may transmit
- * credentials and data in cleartext. All of these are rejected in production.
- */
-const SECURE_SSL_MODES = new Set(['verify-ca', 'verify-full']);
+const DATABASE_URL_SCHEMES = new Set(['postgres:', 'postgresql:']);
 
-/** URL schemes that are unambiguously cleartext for a database connection. */
-const CLEARTEXT_DB_SCHEMES = new Set(['http:', 'ws:']);
+/**
+ * node-postgres connection-string parameters that can override the endpoint
+ * or the adapter-owned TLS options. Comparisons are case-insensitive so a URL
+ * cannot bypass the guard by varying parameter casing.
+ */
+const FORBIDDEN_DATABASE_URL_PARAMETERS = new Set([
+  'host',
+  'hostaddr',
+  'port',
+  'ssl',
+  'sslcert',
+  'sslkey',
+  'sslmode',
+  'sslnegotiation',
+  'sslrootcert',
+  'uselibpqcompat',
+]);
+
+export const findForbiddenDatabaseUrlParameters = (parsed: URL): string[] => [
+  ...new Set(
+    [...parsed.searchParams.keys()]
+      .map((parameterName) => parameterName.toLowerCase())
+      .filter(
+        (parameterName) =>
+          parameterName.startsWith('ssl') ||
+          FORBIDDEN_DATABASE_URL_PARAMETERS.has(parameterName)
+      )
+  ),
+];
 
 const stripIpv6Brackets = (value: string) =>
   value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
+
+function describeDatabaseUrlTlsRemedy({
+  policyOwners,
+  urlOwnerPolicyName,
+}: {
+  policyOwners: readonly DatabaseTlsPolicyOwner[] | undefined;
+  urlOwnerPolicyName: string | undefined;
+}): string {
+  if (policyOwners && policyOwners.length > 0) {
+    return `configure ${policyOwners
+      .map(({ policyName, role }) => `${role} TLS with ${policyName}`)
+      .join(' and ')}`;
+  }
+  if (!urlOwnerPolicyName) {
+    return 'configure TLS with the caller-provided policy';
+  }
+  return `configure TLS with ${urlOwnerPolicyName}`;
+}
 
 /**
  * True when the URL points at the loopback host. Mirrors the localhost
@@ -27,7 +71,9 @@ const stripIpv6Brackets = (value: string) =>
  */
 export const isLocalhostUrl = (value: string): boolean => {
   try {
-    return LOCALHOST_HOSTNAMES.has(stripIpv6Brackets(new URL(value).hostname));
+    return LOCALHOST_HOSTNAMES.has(
+      stripIpv6Brackets(new URL(value).hostname).toLowerCase()
+    );
   } catch {
     return false;
   }
@@ -65,69 +111,94 @@ export const assertSecureUrlInProduction = ({
   }
 };
 
+/** Reject credentials embedded in a URL before transport errors can log it. */
+export const assertUrlHasNoCredentials = ({
+  name,
+  value,
+}: {
+  name: string;
+  value: string | undefined;
+}): void => {
+  if (!value) return;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return;
+  }
+  if (parsed.username || parsed.password) {
+    throw new ConfigurationError(`${name} must not contain URL credentials.`);
+  }
+};
+
 /**
- * Rejects cleartext / unauthenticated-TLS database connections in production,
- * for every driver — no driver is blanket-exempt (CWE-183).
- *
- * - All drivers: an explicitly cleartext scheme (`http://`, `ws://`) or
- *   `sslmode=disable` is rejected.
- * - `node-pg`: the URL carries the TLS decision, so it must request an
- *   *authenticated* sslmode (`verify-ca` / `verify-full`). `require` only
- *   encrypts without verifying the server certificate and is not accepted.
- * - `neon-http` / `neon-websocket`: TLS is negotiated inside the Neon driver
- *   (secure-by-default) from a `postgres://` connection string, so beyond the
- *   cleartext sanity checks above there is no URL-level sslmode to enforce.
- *
- * No-op for non-production runtimes, localhost hosts, or malformed URLs
- * (malformed URLs are surfaced by the schema's own `url()` validation).
+ * Keeps endpoint and TLS ownership out of the connection string. The database
+ * adapter applies `DatabaseTlsPolicy` directly, so URL parameters must not be
+ * able to replace that policy or redirect a loopback URL to a remote host.
  */
 export const assertDatabaseUrlTls = ({
   name,
   url,
   driver,
   env,
+  policy,
+  policyOverrideName,
+  urlPolicyOwners,
+  urlOwnerPolicyName = policyOverrideName,
 }: {
   name: string;
   url: string;
   driver: string;
   env?: RuntimeEnv;
+  policy: DatabaseTlsPolicy;
+  policyOverrideName?: string;
+  urlPolicyOwners?: readonly DatabaseTlsPolicyOwner[];
+  urlOwnerPolicyName?: string;
 }): void => {
-  if (!isProdRuntimeEnvironment(env)) return;
-  if (isLocalhostUrl(url)) return;
-
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return;
-  }
-
-  if (CLEARTEXT_DB_SCHEMES.has(parsed.protocol)) {
     throw new ConfigurationError(
-      `${name} must not use a cleartext (${parsed.protocol}) URL in production.`
+      `${name} must be an absolute PostgreSQL connection string.`
     );
   }
 
-  const sslmodes = parsed.searchParams
-    .getAll('sslmode')
-    .map((value) => value.toLowerCase());
-
-  if (sslmodes.includes('disable')) {
+  if (!DATABASE_URL_SCHEMES.has(parsed.protocol)) {
     throw new ConfigurationError(
-      `${name} must not set sslmode=disable in production.`
+      `${name} must use a PostgreSQL connection-string scheme, not ${parsed.protocol}.`
     );
   }
 
-  if (driver === 'neon-http' || driver === 'neon-websocket') {
-    return;
+  const forbiddenParameters = findForbiddenDatabaseUrlParameters(parsed);
+  if (forbiddenParameters.length > 0) {
+    const tlsPolicyRemedy = describeDatabaseUrlTlsRemedy({
+      policyOwners: urlPolicyOwners,
+      urlOwnerPolicyName,
+    });
+    throw new ConfigurationError(
+      `${name} must not configure endpoint or TLS parameters in the URL (${forbiddenParameters.join(
+        ', '
+      )}); remove those parameters, keep the endpoint in the URL authority, and ${tlsPolicyRemedy}.`
+    );
   }
 
-  const [sslmode] = sslmodes;
-  if (sslmodes.length !== 1 || !sslmode || !SECURE_SSL_MODES.has(sslmode)) {
+  if (policy === 'off' && !isLocalhostUrl(url)) {
     throw new ConfigurationError(
-      `${name} must enable authenticated TLS in production: set sslmode=verify-full ` +
-        `(recommended) or sslmode=verify-ca. sslmode=require only encrypts without ` +
-        `verifying the server certificate; disable/allow/prefer transmit credentials in cleartext.`
+      `${name} must not use TLS policy 'off' for a remote database; select a 'verify' policy or target a loopback endpoint.`
+    );
+  }
+
+  if (
+    (driver === 'neon-http' || driver === 'neon-websocket') &&
+    policy !== 'verify' &&
+    isProdRuntimeEnvironment(env)
+  ) {
+    const requiredPolicy = policyOverrideName
+      ? `${policyOverrideName}=verify`
+      : "TLS policy 'verify'";
+    throw new ConfigurationError(
+      `${name} uses a Neon adapter that owns secure transport; production requires ${requiredPolicy}.`
     );
   }
 };

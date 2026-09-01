@@ -22,20 +22,15 @@ export type AuthCookieSecurityOptionsInput = {
   isProduction?: boolean;
 };
 
-const LOCAL_HTTP_COOKIE_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-
-const isLocalHttpCookieHost = (url: URL) =>
-  LOCAL_HTTP_COOKIE_HOSTS.has(url.hostname);
-
 export function createAuthCookieSecurityOptions(
   baseUrl: string,
   input: AuthCookieSecurityOptionsInput = {}
 ): AuthCookieSecurityOptions {
   const parsedBaseUrl = new URL(baseUrl);
   const secure = parsedBaseUrl.protocol === 'https:';
-  if (input.isProduction && !secure && !isLocalHttpCookieHost(parsedBaseUrl)) {
+  if (input.isProduction && !secure) {
     throw new TypeError(
-      'Production auth cookies require an HTTPS VITE_BASE_URL unless the host is localhost.'
+      'Production auth cookies require an HTTPS VITE_BASE_URL.'
     );
   }
 

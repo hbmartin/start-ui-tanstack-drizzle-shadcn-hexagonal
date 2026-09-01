@@ -1,7 +1,15 @@
 import { z } from 'zod';
 
-import { baseEnvSchema, parseEnv, zNonEmptyEnvString } from './env-schema';
-import { assertSecureUrlInProduction } from './url-security';
+import {
+  baseEnvSchema,
+  isProdRuntimeEnvironment,
+  parseEnv,
+  zNonEmptyEnvString,
+} from './env-schema';
+import {
+  assertSecureUrlInProduction,
+  assertUrlHasNoCredentials,
+} from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
 const redisEnvSchema = baseEnvSchema.extend({
@@ -30,20 +38,31 @@ const redisConfigMissingFieldsError = (fields: string[]) =>
     }
   );
 
-export function getRedisConfig(): RedisConfig | null {
+export function getRedisConfig(
+  options: { requiredInProduction?: boolean } = {}
+): RedisConfig | null {
   if (cachedRedisConfig !== undefined) return cachedRedisConfig;
 
   const env = parseEnv(redisEnvSchema);
   const restUrl = env.UPSTASH_REDIS_REST_URL;
   const restToken = env.UPSTASH_REDIS_REST_TOKEN;
+  assertUrlHasNoCredentials({ name: 'UPSTASH_REDIS_REST_URL', value: restUrl });
   assertSecureUrlInProduction({
     name: 'UPSTASH_REDIS_REST_URL',
     value: restUrl,
     env,
   });
   if (!restUrl && !restToken) {
-    cachedRedisConfig = null;
-    return cachedRedisConfig;
+    if (
+      isProdRuntimeEnvironment(env) &&
+      (options.requiredInProduction ?? true)
+    ) {
+      throw new ConfigurationError(
+        'Production startup requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for distributed authentication rate limiting.'
+      );
+    }
+    if (!isProdRuntimeEnvironment(env)) cachedRedisConfig = null;
+    return null;
   }
   if (!restUrl || !restToken) {
     throw redisConfigMissingFieldsError(

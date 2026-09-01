@@ -1,4 +1,4 @@
-import account from './account.json' with { type: 'json' };
+import profile from './profile.json' with { type: 'json' };
 import auth from './auth.json' with { type: 'json' };
 import book from './book.json' with { type: 'json' };
 import buildInfo from './build-info.json' with { type: 'json' };
@@ -10,7 +10,7 @@ import layout from './layout.json' with { type: 'json' };
 import user from './user.json' with { type: 'json' };
 
 export default {
-  account,
+  profile,
   auth,
   book,
   buildInfo,

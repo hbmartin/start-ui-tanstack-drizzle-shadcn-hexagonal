@@ -49,6 +49,17 @@ describe('kernel primitives', () => {
     expect(error.message).toBe('TEST');
   });
 
+  it('preserves provider retry advice for transport-specific policy', () => {
+    const error = new AppError({
+      code: 'UPSTREAM_RATE_LIMITED',
+      category: 'rate_limit',
+      status: 429,
+      retryAfterSeconds: 300,
+    });
+
+    expect(error.retryAfterSeconds).toBe(300);
+  });
+
   it('creates bad request domain errors', () => {
     const cause = new Error('invalid field');
     const error = new DomainError('INVALID_DOMAIN_VALUE', {

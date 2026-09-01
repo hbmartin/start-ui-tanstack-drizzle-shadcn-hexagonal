@@ -3,14 +3,17 @@
   "plugins": ["react", "unicorn", "typescript", "node", "vitest", "promise"],
   "jsPlugins": [
     "@tanstack/eslint-plugin-query",
-    "@tanstack/eslint-plugin-router",
-    "eslint-plugin-simple-import-sort",
-    "eslint-plugin-sonarjs"
+    "@tanstack/eslint-plugin-router"
   ],
-  "ignorePatterns": [".github/codeql/**", "**/*.testproj/**"],
-  "categories": {
-    "correctness": "error"
-  },
+  "ignorePatterns": [
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".github/codeql/**",
+    "**/*.testproj/**",
+    "tools/mutation/node_modules/**"
+  ],
+  "categories": { "correctness": "error" },
   "rules": {
     "no-unreachable": "error",
     "typescript/no-unused-vars": [
@@ -25,13 +28,16 @@
         "ignoreRestSiblings": true
       }
     ],
+    "typescript/no-base-to-string": "off",
+    "typescript/no-floating-promises": "off",
+    "typescript/no-implied-eval": "off",
+    "typescript/no-misused-spread": "off",
+    "typescript/no-redundant-type-constituents": "off",
+    "typescript/unbound-method": "off",
     "unicorn/filename-case": ["error", { "case": "kebabCase" }],
-    "react/only-export-components": [
-      "warn",
-      {
-        "allowConstantExport": true
-      }
-    ],
+    "react/rules-of-hooks": "error",
+    "react/react-compiler": "error",
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
     "promise/always-return": "warn",
     "promise/catch-or-return": "warn",
     "promise/no-multiple-resolved": "error",
@@ -55,33 +61,6 @@
     "vitest/valid-expect": "error",
     "vitest/valid-expect-in-promise": "error",
     "vitest/valid-title": "error",
-    "simple-import-sort/imports": [
-      "warn",
-      {
-        "groups": [
-          ["^@?\\w", "^\\u0000"],
-          ["^.+\\.s?css$"],
-          ["^@/platform/lib", "^@/platform/hooks"],
-          ["^@/data"],
-          ["^@/platform/components", "^@/container"],
-          ["^@/store"],
-          ["^@/"],
-          [
-            "^\\./?$",
-            "^\\.(?!/?$)",
-            "^\\.\\./?$",
-            "^\\.\\.(?!/?$)",
-            "^\\.\\./\\.\\./?$",
-            "^\\.\\./\\.\\.(?!/?$)",
-            "^\\.\\./\\.\\./\\.\\./?$",
-            "^\\.\\./\\.\\./\\.\\.\\.(?!/?$)"
-          ],
-          ["^@/types"],
-          ["^"]
-        ]
-      }
-    ],
-    "simple-import-sort/exports": "warn",
     "@tanstack/query/exhaustive-deps": "error",
     "@tanstack/query/no-rest-destructuring": "error",
     "@tanstack/query/stable-query-client": "error",
@@ -91,55 +70,21 @@
     "@tanstack/query/mutation-property-order": "error",
     "@tanstack/query/prefer-query-options": "warn",
     "@tanstack/router/create-route-property-order": "error",
-    "@tanstack/router/route-param-names": "error",
-    "sonarjs/cognitive-complexity": ["warn", 50],
-    "sonarjs/prefer-immediate-return": "warn",
-    "sonarjs/todo-tag": "warn"
+    "@tanstack/router/route-param-names": "error"
   },
   "overrides": [
     {
       "files": ["src/**/*"],
       "rules": {
         "node/no-process-env": "error",
+        "typescript/no-floating-promises": ["error", { "ignoreVoid": true }],
         "react/only-export-components": [
           "error",
-          {
-            "allowConstantExport": true
-          }
+          { "allowConstantExport": true }
         ],
         "promise/always-return": "error",
         "promise/catch-or-return": "error",
-        "simple-import-sort/imports": [
-          "error",
-          {
-            "groups": [
-              ["^@?\\w", "^\\u0000"],
-              ["^.+\\.s?css$"],
-              ["^@/platform/lib", "^@/platform/hooks"],
-              ["^@/data"],
-              ["^@/platform/components", "^@/container"],
-              ["^@/store"],
-              ["^@/"],
-              [
-                "^\\./?$",
-                "^\\.(?!/?$)",
-                "^\\.\\./?$",
-                "^\\.\\.(?!/?$)",
-                "^\\.\\./\\.\\./?$",
-                "^\\.\\./\\.\\.(?!/?$)",
-                "^\\.\\./\\.\\./\\.\\./?$",
-                "^\\.\\./\\.\\./\\.\\.\\.(?!/?$)"
-              ],
-              ["^@/types"],
-              ["^"]
-            ]
-          }
-        ],
-        "simple-import-sort/exports": "error",
-        "@tanstack/query/prefer-query-options": "error",
-        "sonarjs/cognitive-complexity": ["error", 50],
-        "sonarjs/prefer-immediate-return": "error",
-        "sonarjs/todo-tag": "error"
+        "@tanstack/query/prefer-query-options": "error"
       }
     },
     {

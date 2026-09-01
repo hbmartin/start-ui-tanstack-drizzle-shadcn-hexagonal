@@ -25,10 +25,10 @@ afterEach(() => {
 describe('local telemetry SQLite sink', () => {
   it('writes inspectable telemetry summaries', async () => {
     mkdirSync(dirname(dbPath), { recursive: true });
-    const { __resetLocalTelemetrySinkForTests, recordLocalTelemetrySummary } =
+    const { __resetLocalTelemetrySinkForTests, persistLocalTelemetrySummary } =
       await import('@/composition/telemetry/local-sqlite-sink');
 
-    recordLocalTelemetrySummary({
+    persistLocalTelemetrySummary({
       bytes: 123,
       eventCount: 2,
       kind: 'frontend_log',
@@ -58,11 +58,11 @@ describe('local telemetry SQLite sink', () => {
 
   it('does not propagate local SQLite setup failures to callers', async () => {
     mkdirSync(dbPath, { recursive: true });
-    const { recordLocalTelemetrySummary } =
+    const { persistLocalTelemetrySummary } =
       await import('@/composition/telemetry/local-sqlite-sink');
 
     expect(() =>
-      recordLocalTelemetrySummary({
+      persistLocalTelemetrySummary({
         kind: 'otlp_proxy',
         statusCode: 204,
       })

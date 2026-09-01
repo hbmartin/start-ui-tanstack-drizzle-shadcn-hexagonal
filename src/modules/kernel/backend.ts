@@ -1,4 +1,9 @@
 export {
+  getApplicationConfig,
+  getApplicationIdentity,
+  getCapabilityPreset,
+} from './infrastructure/config/application';
+export {
   getAuthProviderConfig,
   getBetterAuthConfig,
 } from './infrastructure/config/auth';
@@ -9,14 +14,48 @@ export {
   isProductionSeedAllowed,
 } from './infrastructure/config/env-schema';
 export { getHttpConfig } from './infrastructure/config/http';
+export { runWithNormalizedOtelSdkEnvironment } from './infrastructure/config/otel-sdk-environment';
 export { getRedisConfig } from './infrastructure/config/redis';
-export { validateServerConfig } from './infrastructure/config/server';
 export {
+  getTelemetryConfig,
+  parseTelemetryConfig,
+  type TelemetryConfig,
+} from './infrastructure/config/telemetry';
+export {
+  telemetryModes,
+  telemetrySignals,
+  type TelemetryMode,
+  type TelemetrySignal,
+  type TelemetrySignalReadiness,
+} from '@/platform/telemetry';
+export {
+  assertRequiredTelemetrySignals,
+  configuredTelemetrySignalReadiness,
+  createTelemetrySignalReadiness,
+  isTelemetrySignalRequired,
+  type TelemetryReadinessPhase,
+} from './infrastructure/config/telemetry-readiness';
+export {
+  validateServerBuildConfig,
+  validateServerConfig,
+} from './infrastructure/config/server';
+export type { RuntimeServerAdapters } from './infrastructure/config/server';
+export type { DatabaseTlsPolicy } from './infrastructure/config/database-tls';
+export {
+  createHyperdriveDbClient,
   createTransactionRunner,
   getDefaultDbClient,
 } from './infrastructure/db/client';
+export type { HyperdriveBinding } from './infrastructure/db/client';
+export type { DbTransaction } from './infrastructure/db/client';
+export {
+  requireRuntimeDatabaseClient,
+  runWithRuntimeDatabaseClient,
+} from './infrastructure/db/runtime-database-scope';
+export { createResultTransactionRunner } from './infrastructure/db/result-transaction-runner';
 export { book, genre, user } from './infrastructure/db/schema';
 export { isRootDatabase } from './infrastructure/db/types';
 export { createTelemetryLogger } from './infrastructure/logger/telemetry';
 export { BetterUploadObjectStorage } from './infrastructure/storage/better-upload';
 export { appErrorToResponse } from './transport/http/error-mapper';
+export { assertCapabilityAvailable } from './transport/tanstack/capability-availability';

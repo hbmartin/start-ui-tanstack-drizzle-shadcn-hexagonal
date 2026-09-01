@@ -1,7 +1,5 @@
-import locales from '@/app/i18n';
-
 export type Language = {
-  key: keyof typeof locales;
+  key: 'en' | 'fr' | 'ar' | 'sw';
   dir?: 'ltr' | 'rtl';
   fontScale?: number;
 };
@@ -27,3 +25,12 @@ export const AVAILABLE_LANGUAGES = [
     key: 'sw',
   } as const,
 ] satisfies Language[];
+
+export const getLanguagePresentation = (language: string) => {
+  const configuration = AVAILABLE_LANGUAGES.find(({ key }) => key === language);
+
+  return {
+    dir: configuration?.dir ?? 'ltr',
+    fontScale: configuration?.fontScale,
+  } as const;
+};

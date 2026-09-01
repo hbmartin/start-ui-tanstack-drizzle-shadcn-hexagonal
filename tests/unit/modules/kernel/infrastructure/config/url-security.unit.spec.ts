@@ -16,6 +16,7 @@ describe('isLocalhostUrl', () => {
     expect(isLocalhostUrl('http://127.0.0.1:9000/default')).toBe(true);
     expect(isLocalhostUrl('http://[::1]:4318/v1')).toBe(true);
     expect(isLocalhostUrl('postgres://user@localhost:5432/app')).toBe(true);
+    expect(isLocalhostUrl('postgres://user@LOCALHOST:5432/app')).toBe(true);
   });
 
   it('returns false for remote hosts and malformed URLs', () => {
@@ -65,51 +66,116 @@ describe('assertSecureUrlInProduction', () => {
 });
 
 describe('assertDatabaseUrlTls', () => {
-  const remote = (sslmode?: string) =>
-    `postgres://user@db.example.com:5432/app${sslmode ? `?sslmode=${sslmode}` : ''}`;
+  const remote = (query = '') =>
+    `postgres://user@db.example.com:5432/app${query ? `?${query}` : ''}`;
 
-  it.each(['verify-ca', 'verify-full', 'Verify-CA', 'Verify-Full'])(
-    'accepts production node-pg URLs with authenticated sslmode=%s',
-    (mode) => {
+  it.each([
+    'host=attacker.example.com',
+    'HOST=attacker.example.com',
+    'hostaddr=203.0.113.10',
+    'port=6432',
+    'ssl=true',
+    'sslmode=verify-full',
+    'sslcert=client.pem',
+    'sslkey=client.key',
+    'sslrootcert=ca.pem',
+    'sslpassword=secret',
+    'sslnegotiation=direct',
+    'uselibpqcompat=true',
+  ])('rejects adapter-policy override parameter %s', (query) => {
+    expect(() =>
+      assertDatabaseUrlTls({
+        name: 'DATABASE_URL',
+        url: remote(query),
+        driver: 'node-pg',
+        env: PROD,
+        policy: 'verify',
+      })
+    ).toThrow(ConfigurationError);
+  });
+
+  it('uses neutral remediation for programmatic URL parameters', () => {
+    expect(() =>
+      assertDatabaseUrlTls({
+        name: 'database client URL',
+        url: remote('sslmode=require'),
+        driver: 'node-pg',
+        env: PROD,
+        policy: 'verify',
+      })
+    ).toThrow(
+      'remove those parameters, keep the endpoint in the URL authority, and configure TLS with the caller-provided policy.'
+    );
+  });
+
+  it.each(['encrypt', 'verify'] as const)(
+    'accepts an override-free production node-pg URL with the %s policy',
+    (policy) => {
       expect(() =>
         assertDatabaseUrlTls({
           name: 'DATABASE_URL',
-          url: remote(mode),
+          url: remote(),
           driver: 'node-pg',
           env: PROD,
+          policy,
         })
       ).not.toThrow();
     }
   );
 
-  it.each([undefined, 'require', 'REQUIRE', 'prefer', 'disable', 'allow'])(
-    'rejects production node-pg URLs with unauthenticated sslmode=%s',
-    (mode) => {
-      expect(() =>
-        assertDatabaseUrlTls({
-          name: 'DATABASE_URL',
-          url: remote(mode),
-          driver: 'node-pg',
-          env: PROD,
-        })
-      ).toThrow(ConfigurationError);
-    }
-  );
-
-  it('rejects production node-pg URLs with duplicate sslmode values', () => {
+  it('rejects an override-free remote production URL with TLS off', () => {
     expect(() =>
       assertDatabaseUrlTls({
         name: 'DATABASE_URL',
-        url: remote('verify-full&sslmode=verify-ca'),
+        url: remote(),
         driver: 'node-pg',
         env: PROD,
+        policy: 'off',
       })
     ).toThrow(ConfigurationError);
   });
 
-  describe('Neon drivers are no longer blanket-exempt', () => {
+  it('keeps defensive off-policy remediation neutral when given an env-style label', () => {
+    expect(() =>
+      assertDatabaseUrlTls({
+        name: 'DATABASE_MIGRATION_URL',
+        url: remote(),
+        driver: 'node-pg',
+        env: PROD,
+        policy: 'off',
+        policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+      })
+    ).toThrow(
+      "DATABASE_MIGRATION_URL must not use TLS policy 'off' for a remote database; select a 'verify' policy or target a loopback endpoint."
+    );
+  });
+
+  it('does not conflate URL-parameter removal with a policy override', () => {
+    expect(() =>
+      assertDatabaseUrlTls({
+        name: 'DATABASE_URL',
+        url: remote('sslmode=require'),
+        driver: 'node-pg',
+        env: PROD,
+        policy: 'verify',
+        policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+        urlPolicyOwners: [
+          { policyName: 'DATABASE_TLS_POLICY', role: 'runtime' },
+          {
+            policyName: 'DATABASE_MIGRATION_TLS_POLICY',
+            role: 'migration',
+          },
+        ],
+        urlOwnerPolicyName: 'DATABASE_TLS_POLICY',
+      })
+    ).toThrow(
+      'remove those parameters, keep the endpoint in the URL authority, and configure runtime TLS with DATABASE_TLS_POLICY and migration TLS with DATABASE_MIGRATION_TLS_POLICY.'
+    );
+  });
+
+  describe('Neon owns its production transport', () => {
     it.each(['neon-http', 'neon-websocket'])(
-      'accepts a normal postgres:// connection string for %s (driver enforces TLS)',
+      'requires verify policy for %s in production',
       (driver) => {
         expect(() =>
           assertDatabaseUrlTls({
@@ -117,32 +183,49 @@ describe('assertDatabaseUrlTls', () => {
             url: remote(),
             driver,
             env: PROD,
+            policy: 'verify',
           })
         ).not.toThrow();
+        expect(() =>
+          assertDatabaseUrlTls({
+            name: 'DATABASE_URL',
+            url: remote(),
+            driver,
+            env: PROD,
+            policy: 'encrypt',
+          })
+        ).toThrow(ConfigurationError);
       }
     );
 
-    it.each(['neon-http', 'neon-websocket'])(
-      'rejects a cleartext ws:// / sslmode=disable URL for %s',
-      (driver) => {
-        expect(() =>
-          assertDatabaseUrlTls({
-            name: 'DATABASE_URL',
-            url: 'ws://attacker.example.com/app',
-            driver,
-            env: PROD,
-          })
-        ).toThrow(ConfigurationError);
-        expect(() =>
-          assertDatabaseUrlTls({
-            name: 'DATABASE_URL',
-            url: remote('disable'),
-            driver,
-            env: PROD,
-          })
-        ).toThrow(ConfigurationError);
-      }
-    );
+    it('recommends the migration policy for an inherited Neon policy', () => {
+      expect(() =>
+        assertDatabaseUrlTls({
+          name: 'DATABASE_MIGRATION_URL',
+          url: remote(),
+          driver: 'neon-websocket',
+          env: PROD,
+          policy: 'encrypt',
+          policyOverrideName: 'DATABASE_MIGRATION_TLS_POLICY',
+        })
+      ).toThrow(
+        'DATABASE_MIGRATION_URL uses a Neon adapter that owns secure transport; production requires DATABASE_MIGRATION_TLS_POLICY=verify.'
+      );
+    });
+
+    it('uses a neutral policy name for a programmatic Neon policy', () => {
+      expect(() =>
+        assertDatabaseUrlTls({
+          name: 'database client URL',
+          url: remote(),
+          driver: 'neon-websocket',
+          env: PROD,
+          policy: 'encrypt',
+        })
+      ).toThrow(
+        "database client URL uses a Neon adapter that owns secure transport; production requires TLS policy 'verify'."
+      );
+    });
   });
 
   it('rejects cleartext http:// / ws:// schemes for node-pg too', () => {
@@ -156,27 +239,42 @@ describe('assertDatabaseUrlTls', () => {
           url,
           driver: 'node-pg',
           env: PROD,
+          policy: 'verify',
         })
       ).toThrow(ConfigurationError);
     }
   });
 
-  it('exempts localhost and non-production runtimes', () => {
+  it('allows off only for loopback endpoints in every environment', () => {
     expect(() =>
       assertDatabaseUrlTls({
         name: 'DATABASE_URL',
         url: 'postgres://user@localhost:5432/app',
         driver: 'node-pg',
         env: PROD,
+        policy: 'off',
       })
     ).not.toThrow();
     expect(() =>
       assertDatabaseUrlTls({
         name: 'DATABASE_URL',
-        url: remote('require'),
+        url: remote(),
         driver: 'node-pg',
         env: DEV,
+        policy: 'off',
       })
-    ).not.toThrow();
+    ).toThrow(ConfigurationError);
+  });
+
+  it('rejects non-PostgreSQL URL schemes in every environment', () => {
+    expect(() =>
+      assertDatabaseUrlTls({
+        name: 'DATABASE_URL',
+        url: 'https://db.example.com/app',
+        driver: 'node-pg',
+        env: DEV,
+        policy: 'off',
+      })
+    ).toThrow(ConfigurationError);
   });
 });

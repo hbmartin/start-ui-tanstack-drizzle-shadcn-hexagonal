@@ -7,14 +7,19 @@ import type {
 } from '@/modules/kernel/application/result';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 
-import { ServerFnError, type ServerFnErrorCode } from './server-fn-error';
+import {
+  ServerFnError,
+  type PublicServerErrorReason,
+  type PublicServerErrorTarget,
+  type ServerFnErrorCode,
+} from './server-fn-error';
 
 type ReasonConfig =
   | ServerFnErrorCode
   | {
       code: ServerFnErrorCode;
-      message?: string;
-      data?: Record<string, unknown>;
+      reason?: PublicServerErrorReason;
+      target?: PublicServerErrorTarget;
     };
 
 const codeForCategory: Record<AppError['category'], ServerFnErrorCode> = {
@@ -22,12 +27,26 @@ const codeForCategory: Record<AppError['category'], ServerFnErrorCode> = {
   conflict: 'CONFLICT',
   forbidden: 'FORBIDDEN',
   not_found: 'NOT_FOUND',
-  rate_limit: 'BAD_REQUEST',
+  rate_limit: 'TOO_MANY_REQUESTS',
   system: 'INTERNAL_SERVER_ERROR',
   unauthorized: 'UNAUTHORIZED',
 };
 
-export const throwServerFnErrorForReason = (
+const publicErrorForConflictAppCode: Readonly<
+  Record<
+    string,
+    Readonly<{
+      reason: PublicServerErrorReason;
+      target: PublicServerErrorTarget;
+    }>
+  >
+> = {
+  BOOK_DUPLICATE: { reason: 'already_exists', target: 'book.title' },
+  GENRE_DUPLICATE: { reason: 'already_exists', target: 'genre' },
+  USER_DUPLICATE: { reason: 'already_exists', target: 'user.email' },
+};
+
+const throwServerFnErrorForReason = (
   reason: string,
   reasons: Record<string, ReasonConfig>
 ): never => {
@@ -39,29 +58,30 @@ export const throwServerFnErrorForReason = (
     throw new ServerFnError(config);
   }
   throw new ServerFnError(config.code, {
-    message: config.message,
-    data: config.data,
+    reason: config.reason,
+    target: config.target,
   });
 };
 
-export const mapAppErrorToServerFnError = (error: unknown): never => {
+const mapAppErrorToServerFnError = (error: unknown): never => {
   if (error instanceof AppError) {
-    // Never forward an internal (5xx/system) error's developer-facing message
-    // to the client. The real message is still logged server-side; the client
-    // only sees a generic string. Client-error categories keep their message.
     const isInternal = error.category === 'system' || error.status >= 500;
-    throw new ServerFnError(
-      isInternal ? 'INTERNAL_SERVER_ERROR' : codeForCategory[error.category],
-      {
-        message: isInternal ? 'Internal server error' : error.message,
-        data:
-          !isInternal &&
-          error.exposeDetails &&
-          typeof error.details === 'object'
-            ? error.details
-            : undefined,
-      }
-    );
+    const transportCode = isInternal
+      ? 'INTERNAL_SERVER_ERROR'
+      : codeForCategory[error.category];
+    const publicOverride =
+      transportCode === 'CONFLICT'
+        ? publicErrorForConflictAppCode[error.code]
+        : undefined;
+    throw new ServerFnError(transportCode, {
+      cause: error,
+      reason: publicOverride?.reason,
+      retryAfterSeconds:
+        transportCode === 'TOO_MANY_REQUESTS'
+          ? error.retryAfterSeconds
+          : undefined,
+      target: publicOverride?.target,
+    });
   }
   throw error;
 };

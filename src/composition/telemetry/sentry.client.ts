@@ -2,7 +2,7 @@ import * as Sentry from '@sentry/tanstackstart-react';
 
 import { envClient } from '@/platform/env/client';
 import {
-  createNoOpTelemetry,
+  reportTelemetryFailure,
   type TelemetryAdapter,
 } from '@/platform/telemetry';
 
@@ -13,12 +13,9 @@ import {
   createSentryTelemetryAdapter,
   sanitizeSentryEvent,
 } from './sentry-adapter';
+import { createExceptionOnlyIntegrations } from './sentry-exception-integrations';
 
 let initialized = false;
-
-// OpenTelemetry owns tracing; Sentry stays error-only even if
-// VITE_SENTRY_TRACES_SAMPLE_RATE is present to avoid duplicate span reporting.
-const SENTRY_ERROR_ONLY_TRACES_SAMPLE_RATE = 0;
 
 /**
  * Initialize Sentry for the browser runtime. Safe to call multiple times.
@@ -30,11 +27,39 @@ const isTelemetryAdapter = (
   adapter: TelemetryAdapter | undefined
 ): adapter is TelemetryAdapter => Boolean(adapter);
 
+export const createBrowserSentryOptions = () => ({
+  beforeSend: sanitizeSentryEvent,
+  beforeSendTransaction: () => null,
+  defaultIntegrations: false as const,
+  dsn: envClient.VITE_SENTRY_DSN,
+  enableLogs: false,
+  environment: envClient.VITE_SENTRY_ENVIRONMENT,
+  integrations: createExceptionOnlyIntegrations(Sentry, [
+    Sentry.functionToStringIntegration(),
+    Sentry.browserApiErrorsIntegration(),
+    Sentry.globalHandlersIntegration({
+      onerror: true,
+      onunhandledrejection: true,
+    }),
+  ]),
+  sendDefaultPii: false,
+  tracePropagationTargets: [],
+  tunnel: envClient.VITE_SENTRY_TUNNEL_PATH,
+});
+
 export const initTelemetryClient = (_router?: unknown) => {
   if (initialized) return;
   initialized = true;
 
-  const adapters = [initOpenTelemetryClient()].filter(isTelemetryAdapter);
+  let otelAdapter: TelemetryAdapter | undefined;
+  if (envClient.TELEMETRY_MODE !== 'off') {
+    try {
+      otelAdapter = initOpenTelemetryClient();
+    } catch (failure) {
+      reportTelemetryFailure('otel.client.initialize', failure);
+    }
+  }
+  const adapters = [otelAdapter].filter(isTelemetryAdapter);
 
   if (!envClient.VITE_SENTRY_DSN) {
     if (adapters.length > 0) {
@@ -43,20 +68,18 @@ export const initTelemetryClient = (_router?: unknown) => {
     return;
   }
 
-  Sentry.init({
-    dsn: envClient.VITE_SENTRY_DSN,
-    environment: envClient.VITE_SENTRY_ENVIRONMENT,
-    tracesSampleRate: SENTRY_ERROR_ONLY_TRACES_SAMPLE_RATE,
-    sendDefaultPii: false,
-    tunnel: envClient.VITE_SENTRY_TUNNEL_PATH,
-    beforeSend: sanitizeSentryEvent,
-    integrations: [],
-  });
+  try {
+    Sentry.init(createBrowserSentryOptions());
 
-  adapters.push(createSentryTelemetryAdapter(Sentry));
-  setTelemetry(
-    createTelemetryAdapterChain(
-      adapters.length > 0 ? adapters : [createNoOpTelemetry()]
-    )
-  );
+    adapters.push(
+      createSentryTelemetryAdapter(Sentry, {
+        currentCorrelation: () => otelAdapter?.currentCorrelation() ?? {},
+      })
+    );
+  } catch (failure) {
+    reportTelemetryFailure('sentry.client.initialize', failure);
+  }
+  if (adapters.length > 0) {
+    setTelemetry(createTelemetryAdapterChain(adapters));
+  }
 };

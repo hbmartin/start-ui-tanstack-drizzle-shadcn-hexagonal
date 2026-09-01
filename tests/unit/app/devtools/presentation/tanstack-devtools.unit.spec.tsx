@@ -85,7 +85,7 @@ describe('TanStackDevtoolsPanel', () => {
     const { getPageTitle } = await import('@/platform/lib/get-page-title');
 
     expect(getEnvHintTitlePrefix()).toBe('[LOCAL]');
-    expect(getPageTitle(undefined, getEnvHintTitlePrefix())).toBe(
+    expect(getPageTitle(undefined, getEnvHintTitlePrefix(), 'Start UI')).toBe(
       '[LOCAL] Start UI'
     );
   });

@@ -1,5 +1,7 @@
 import { linkOptions } from '@tanstack/react-router';
 
+import { isCapabilityEnabled } from '@/modules/kernel';
+
 import {
   IconBookOpenDuotone,
   IconBookOpenFill,
@@ -17,17 +19,21 @@ export const MAIN_NAV_LINKS = linkOptions([
     to: '/app',
     activeOptions: { exact: true },
   },
+  ...(isCapabilityEnabled('book')
+    ? [
+        {
+          labelTranslationKey: 'layout:nav.books' as const,
+          icon: IconBookOpenDuotone,
+          iconActive: IconBookOpenFill,
+          to: '/app/books' as const,
+        },
+      ]
+    : []),
   {
-    labelTranslationKey: 'layout:nav.books',
-    icon: IconBookOpenDuotone,
-    iconActive: IconBookOpenFill,
-    to: '/app/books',
-  },
-  {
-    labelTranslationKey: 'layout:nav.account',
+    labelTranslationKey: 'layout:nav.profile',
     icon: IconUserCircleDuotone,
     iconActive: IconUserCircleFill,
-    to: '/app/account',
+    to: '/app/profile',
   },
 ]);
 

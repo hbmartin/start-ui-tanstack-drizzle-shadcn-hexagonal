@@ -13,6 +13,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  APP_NAME: Start UI
+  APP_SLUG: start-ui-web
+
 jobs:
   format:
     name: Format Check
@@ -53,7 +57,7 @@ jobs:
           node-version: 24
 
       - name: Run lint and typecheck
-        run: pnpm exec run-p -n lint lint:eslint typecheck
+        run: pnpm exec run-p -n lint typecheck
 
       - name: Ensure lint and typecheck did not mutate files
         run: git diff --exit-code -- .
@@ -108,8 +112,8 @@ jobs:
       - name: Ensure affected tests did not mutate files
         run: git diff --exit-code -- .
 
-  dependency-cruiser:
-    name: Dependency Cruiser
+  fallow:
+    name: Fallow architecture and quality
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -118,6 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup pnpm
@@ -125,32 +130,11 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install Graphviz
-        run: sudo apt-get update && sudo apt-get install -y graphviz
+      - name: Run project-wide Fallow gates
+        run: pnpm quality:fallow
 
-      - name: Run dependency-cruiser
-        run: pnpm depcruise
-
-      - name: Check module dependency graph
-        run: pnpm architecture:graph:check
-
-      - name: Generate dependency graphs
-        if: always()
-        run: |
-          mkdir -p test-results/dependency-cruiser
-          status=0
-          pnpm exec depcruise --config .dependency-cruiser.cjs --output-type json --output-to test-results/dependency-cruiser/dependency-cruiser.json src || status=$?
-          pnpm exec depcruise --config .dependency-cruiser.cjs --output-type dot --output-to test-results/dependency-cruiser/dependency-cruiser.dot src || status=$?
-          pnpm exec depcruise --config .dependency-cruiser.cjs --output-type mermaid --output-to test-results/dependency-cruiser/dependency-cruiser.mmd src || status=$?
-          exit "$status"
-
-      - name: Upload dependency graphs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dependency-cruiser-graphs
-          path: test-results/dependency-cruiser/
-          retention-days: 30
+      - name: Gate changed-code regressions
+        run: pnpm quality:audit --format compact
 
       - name: Ensure static checks did not mutate files
         run: git diff --exit-code -- .
@@ -291,6 +275,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 10
     runs-on: ubuntu-latest
+    env:
+      CAPABILITY_PRESET: demo
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -318,13 +304,17 @@ jobs:
           retention-days: 30
 
   build:
-    name: Build
+    name: Build (${{ matrix.preset }}, ${{ matrix.profile }})
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     timeout-minutes: 10
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [core, demo]
+        profile: [node, vercel, cloudflare]
     env:
       VITE_BASE_URL: http://localhost:3000
-      VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -335,43 +325,31 @@ jobs:
         with:
           node-version: 24
 
-      - name: Generate CI-only build config
-        shell: bash
-        run: |
-          database_url="$(
-            printf '%s%s:%s@%s/%s' \
-              'postgres://' \
-              'startui' \
-              'startui' \
-              'localhost:5432' \
-              'startui'
-          )"
+      - name: Setup Chromium for Node runtime verification
+        if: matrix.profile == 'node'
+        uses: ./.github/actions/setup-playwright
+        with:
+          browsers: chromium
 
-          {
-            printf '%s=%s\n' 'AUTH_SECRET' "$(openssl rand -base64 32)"
-            printf '%s=%s\n' 'DATABASE_URL' "${database_url}"
-            printf '%s=%s\n' 'RESEND_API_KEY' "re_$(openssl rand -hex 16)"
-            printf '%s=%s\n' 'EMAIL_FROM' 'Start UI <noreply@example.com>'
-            printf '%s=%s\n' 'EMAIL_DELIVERY_DISABLED' 'true'
-            printf '%s=%s\n' 'S3_ACCESS_KEY_ID' "startui-$(openssl rand -hex 8)"
-            printf '%s=%s\n' 'S3_SECRET_ACCESS_KEY' "$(openssl rand -hex 24)"
-            printf '%s=%s\n' 'S3_BUCKET_NAME' 'default'
-            printf '%s=%s\n' 'S3_HOST' 'localhost:9000'
-            printf '%s=%s\n' 'S3_SECURE' 'false'
-            printf '%s=%s\n' 'S3_FORCE_PATH_STYLE' 'true'
-            printf '%s=%s\n' 'OTEL_COLLECTOR_URL' 'http://localhost:4318'
-          } >> "$GITHUB_ENV"
+      - name: Configure selected preset
+        run: >-
+          pnpm setup -- --yes --preset=${{ matrix.preset }}
+          --app-name="Start UI" --app-slug=start-ui-web
 
-      - name: Build app
+      - name: Build and verify runtime artifact
         run: |
-          mkdir -p test-results/build
+          mkdir -p test-results/build/${{ matrix.preset }}-${{ matrix.profile }}
           set -o pipefail
-          pnpm build 2>&1 | tee test-results/build/build.log
+          if [ "${{ matrix.profile }}" = "node" ]; then
+            pnpm verify:node 2>&1 | tee test-results/build/${{ matrix.preset }}-${{ matrix.profile }}/build.log
+          else
+            pnpm verify:artifact:${{ matrix.profile }} 2>&1 | tee test-results/build/${{ matrix.preset }}-${{ matrix.profile }}/build.log
+          fi
 
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-log
-          path: test-results/build/build.log
+          name: build-log-${{ matrix.preset }}-${{ matrix.profile }}
+          path: test-results/build/${{ matrix.preset }}-${{ matrix.profile }}/build.log
           retention-days: 30

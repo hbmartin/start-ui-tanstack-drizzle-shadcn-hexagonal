@@ -36,6 +36,13 @@
       "when": 1782659196693,
       "tag": "0004_past_meteorite",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787601775304,
+      "tag": "0005_add_audit_event",
+      "breakpoints": true
     }
   ]
 }

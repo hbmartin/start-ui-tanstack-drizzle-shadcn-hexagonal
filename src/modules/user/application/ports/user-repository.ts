@@ -2,7 +2,6 @@ import type { ApplicationResult } from '@/modules/kernel/application/result';
 import type { SessionId, UserId } from '@/modules/kernel/domain/ids';
 
 import type {
-  SessionRevocationTarget,
   User,
   UserCreateInput,
   UserListPage,
@@ -39,13 +38,6 @@ export type UserSessionsListRepositoryOutcome = {
   page: UserSessionListPage;
 };
 
-export type UserSessionRevocationTargetRepositoryOutcome =
-  | {
-      type: 'user_session_revocation_target_found';
-      target: SessionRevocationTarget;
-    }
-  | { type: 'user_session_not_found' };
-
 export interface UserRepository {
   list(input: {
     cursor?: UserId;
@@ -68,10 +60,6 @@ export interface UserRepository {
     cursor?: SessionId;
     limit: number;
   }): Promise<ApplicationResult<UserSessionsListRepositoryOutcome>>;
-  findSessionForRevocation(input: {
-    userId: UserId;
-    sessionId: SessionId;
-  }): Promise<ApplicationResult<UserSessionRevocationTargetRepositoryOutcome>>;
 }
 
 export type { UserUpdateInput };

@@ -13,7 +13,7 @@ import {
 } from '@/platform/components/form';
 import { Button } from '@/platform/components/ui/button';
 
-import { accountQueries } from '@/modules/account/client';
+import { profileQueries } from '@/modules/profile/client';
 import {
   clearAllQueryStateForAuthBoundary,
   useAuthSession,
@@ -30,7 +30,7 @@ export const PageOnboarding = () => {
   const queryClient = useQueryClient();
 
   const submitOnboarding = useMutation({
-    ...accountQueries.submitOnboarding(),
+    ...profileQueries.submitOnboarding(),
     onSuccess: async (_, variables) => {
       toast.success(
         t('auth:pageOnboarding.successMessage', { name: variables.name })

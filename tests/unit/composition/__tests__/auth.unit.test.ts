@@ -11,7 +11,6 @@ import type {
   AuthEmailPort,
   AuthorizationGateway,
   SessionGateway,
-  UserAdminGateway,
 } from '@/modules/auth';
 import { toUserId } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
@@ -30,15 +29,6 @@ const makeAuthOverrides = (): Required<AuthOverrides> => ({
       Result.Ok({ type: 'auth_sign_in_otp_sent' })
     ),
   } as AuthEmailPort,
-  userAdminGateway: {
-    removeUser: vi.fn(async () => Result.Ok({ type: 'auth_user_removed' })),
-    revokeUserSessions: vi.fn(async () =>
-      Result.Ok({ type: 'auth_user_sessions_revoked' })
-    ),
-    revokeUserSession: vi.fn(async () =>
-      Result.Ok({ type: 'auth_user_session_revoked' })
-    ),
-  } as UserAdminGateway,
 });
 
 describe('auth composition', () => {
@@ -88,7 +78,7 @@ describe('auth composition', () => {
     });
     const request = new Request('http://localhost/api/auth/session');
 
-    await expect(gateway.handle(request)).resolves.toBe(response);
-    expect(handle).toHaveBeenCalledWith(request);
+    await expect(gateway.handle(request, 'node')).resolves.toBe(response);
+    expect(handle).toHaveBeenCalledWith(request, 'node');
   });
 });

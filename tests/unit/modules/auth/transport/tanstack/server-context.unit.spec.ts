@@ -19,6 +19,7 @@ import { unwrapParseResult } from '@/modules/kernel/testing';
 import { createNoOpTelemetry } from '@/platform/telemetry';
 
 const getGlobalStartContextMock = vi.mocked(getGlobalStartContext);
+const START_REQUEST_ID = 'c19f3f46-9629-42f4-8be4-0688a8ca6bd8';
 
 beforeEach(() => {
   getGlobalStartContextMock.mockReturnValue(undefined as never);
@@ -115,7 +116,7 @@ describe('server function middleware', () => {
     const getCurrentSession = vi.fn();
     getGlobalStartContextMock.mockReturnValue({
       auth: { getSession },
-      requestId: 'request-1',
+      requestId: START_REQUEST_ID,
     } as never);
     const tools = createServerContextTools({
       getAuthUseCases: () =>
@@ -126,14 +127,16 @@ describe('server function middleware', () => {
       logger: mockLogger,
     });
 
-    await expect(tools.withPublicContext(async () => 'ok')).resolves.toBe('ok');
+    await expect(
+      tools.withPublicContext(async (ctx) => ctx.correlationId)
+    ).resolves.toBe(START_REQUEST_ID);
 
     expect(getSession).toHaveBeenCalledOnce();
     expect(getCurrentSession).not.toHaveBeenCalled();
     expect(mockLogger.info).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'server_fn.request.finish',
-        requestId: 'request-1',
+        requestId: START_REQUEST_ID,
       })
     );
   });
@@ -249,12 +252,26 @@ describe('server function middleware', () => {
     const error = new Error('auth unavailable');
     mockGetSession.mockRejectedValueOnce(error);
 
-    await expect(withPublicContext(async () => 'ok')).rejects.toMatchObject({
+    const mapped = await withPublicContext(async () => 'ok').catch(
+      (caught: unknown) => caught
+    );
+    expect(mapped).toMatchObject({
       code: 'INTERNAL_SERVER_ERROR',
+      correlationId: expect.any(String),
+      reason: 'internal_error',
+      target: 'system',
     });
+    const mappedError = mapped as ServerFnError;
     expect(mockLogger.error).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: 'server_fn.error.unhandled',
+        correlationId: mappedError.correlationId,
+        details: expect.objectContaining({
+          causeChain: [
+            expect.objectContaining({ code: 'AUTH_SESSION_GATEWAY_ERROR' }),
+            expect.objectContaining({ type: 'Error' }),
+          ],
+        }),
+        event: 'server_fn.error.internal',
         exception: expect.objectContaining({
           cause: error,
           code: 'AUTH_SESSION_GATEWAY_ERROR',
@@ -265,6 +282,9 @@ describe('server function middleware', () => {
       expect.objectContaining({
         details: expect.objectContaining({
           code: 'INTERNAL_SERVER_ERROR',
+          correlationId: mappedError.correlationId,
+          reason: 'internal_error',
+          target: 'system',
         }),
         event: 'server_fn.error.mapped',
       })
@@ -275,21 +295,31 @@ describe('server function middleware', () => {
     await expect(
       withPublicContext(async () => {
         throw new ServerFnError('CONFLICT', {
-          message: 'Unique constraint violation',
-          data: { target: ['email'] },
+          reason: 'already_exists',
+          target: 'user.email',
         });
       })
     ).rejects.toMatchObject({
       code: 'CONFLICT',
-      data: { target: ['email'] },
+      reason: 'already_exists',
+      target: 'user.email',
     });
 
-    expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+    expect(mockLogger.warn).toHaveBeenCalledTimes(2);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          causeChain: [expect.objectContaining({ code: 'CONFLICT' })],
+        }),
+        event: 'server_fn.error.internal',
+      })
+    );
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         details: expect.objectContaining({
           code: 'CONFLICT',
-          data: { target: ['email'] },
+          reason: 'already_exists',
+          target: 'user.email',
         }),
         event: 'server_fn.error.mapped',
       })
@@ -349,7 +379,8 @@ describe('withFreshProtectedMutation (step-up re-authentication)', () => {
       tools.withFreshProtectedMutation(async () => 'ok')
     ).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      data: { reason: 'reauth_required' },
+      reason: 'reauth_required',
+      target: 'authentication',
     });
 
     expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -364,7 +395,8 @@ describe('withFreshProtectedMutation (step-up re-authentication)', () => {
       tools.withFreshProtectedMutation(async () => 'ok')
     ).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      data: { reason: 'reauth_required' },
+      reason: 'reauth_required',
+      target: 'authentication',
     });
   });
 
@@ -375,7 +407,8 @@ describe('withFreshProtectedMutation (step-up re-authentication)', () => {
       tools.withFreshProtectedMutation(async () => 'ok')
     ).rejects.toMatchObject({
       code: 'FORBIDDEN',
-      data: { reason: 'reauth_required' },
+      reason: 'reauth_required',
+      target: 'authentication',
     });
   });
 });

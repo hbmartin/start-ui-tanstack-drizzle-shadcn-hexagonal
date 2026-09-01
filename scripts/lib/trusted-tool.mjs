@@ -13,7 +13,6 @@ const TRUSTED_UNIX_TOOL_DIRECTORIES = [
 const TRUSTED_WINDOWS_TOOL_DIRECTORIES = [
   'C:\\Windows\\System32',
   'C:\\Program Files\\Git\\cmd',
-  'C:\\Program Files\\Graphviz\\bin',
 ];
 
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;

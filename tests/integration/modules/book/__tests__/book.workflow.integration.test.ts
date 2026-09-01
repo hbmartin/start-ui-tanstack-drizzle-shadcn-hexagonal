@@ -6,6 +6,7 @@ import {
 } from '@tests/support/branded-values';
 import { describe, expect, it } from 'vitest';
 
+import { toAuditEventId, type AuditPort } from '@/modules/audit';
 import {
   type Book,
   type BookCoverStorage,
@@ -21,6 +22,7 @@ import {
   type PermissionChecker,
   toBookCoverObjectKey,
   toBookId,
+  toCorrelationId,
   toGeneratedId,
   toGenreId,
   toUserId,
@@ -30,6 +32,17 @@ import { unwrapParseResult } from '@/modules/kernel/testing';
 const now = new Date('2026-01-01T00:00:00.000Z');
 const genreId = unwrapParseResult(toGenreId('genre-1'));
 const currentUserId = unwrapParseResult(toUserId('admin-1'));
+const correlationId = unwrapParseResult(toCorrelationId('correlation-1'));
+const audit: AuditPort = {
+  record: async () =>
+    Result.Ok({
+      type: 'audit_recorded',
+      eventId: unwrapParseResult(
+        toAuditEventId(unwrapParseResult(toGeneratedId('audit-event-1')))
+      ),
+      occurredAt: now,
+    }),
+};
 const logger: Logger = {
   debug: () => {},
   error: () => {},
@@ -176,7 +189,7 @@ describe('book public workflow integration', () => {
     const useCases = createBookUseCases({
       bookRepository,
       transactionRunner: {
-        run: (work) => work({ bookRepository }),
+        run: (work) => work({ audit, bookRepository }),
       },
       idGenerator: { createId: () => toGeneratedId('cover-id') },
       logger,
@@ -249,7 +262,11 @@ describe('book public workflow integration', () => {
     });
     expect(getOk(duplicate)).toEqual({ type: 'book_duplicate' });
 
-    const deleted = await useCases.delete({ currentUserId, id: createdId });
+    const deleted = await useCases.delete({
+      correlationId,
+      currentUserId,
+      id: createdId,
+    });
     expect(getOk(deleted)).toEqual({
       type: 'book_deleted',
       deletedCoverId: null,

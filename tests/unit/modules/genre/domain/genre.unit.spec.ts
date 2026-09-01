@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeGenreSearchTerm,
   toGenreColor,
+  zGenreColor,
+  zGenreName,
 } from '@/modules/genre/domain/genre';
 
 const hexCharacter = fc.constantFrom(
@@ -32,6 +34,11 @@ const hexCharacter = fc.constantFrom(
 );
 
 describe('genre domain', () => {
+  it('creates fresh genre schemas for each consumer', () => {
+    expect(zGenreName()).not.toBe(zGenreName());
+    expect(zGenreColor()).not.toBe(zGenreColor());
+  });
+
   it('normalizes search terms and validates hex colors', () => {
     expect(normalizeGenreSearchTerm(' fiction ')).toBe('fiction');
     expect(normalizeGenreSearchTerm(undefined)).toBe('');

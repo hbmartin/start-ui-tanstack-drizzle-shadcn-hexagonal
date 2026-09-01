@@ -4,12 +4,12 @@ import { getPageTitle } from '@/platform/lib/get-page-title';
 
 describe('getPageTitle', () => {
   it('omits the prefix separator when no title prefix is provided', () => {
-    expect(getPageTitle('Home')).toBe('Home | Start UI');
-    expect(getPageTitle()).toBe('Start UI');
+    expect(getPageTitle('Home', '', 'Acme')).toBe('Home | Acme');
+    expect(getPageTitle(undefined, '', 'Acme')).toBe('Acme');
   });
 
   it('adds a separator when a title prefix is provided', () => {
-    expect(getPageTitle('Home', '[Demo]')).toBe('[Demo] Home | Start UI');
-    expect(getPageTitle(undefined, '[Demo]')).toBe('[Demo] Start UI');
+    expect(getPageTitle('Home', '[Demo]', 'Acme')).toBe('[Demo] Home | Acme');
+    expect(getPageTitle(undefined, '[Demo]', 'Acme')).toBe('[Demo] Acme');
   });
 });

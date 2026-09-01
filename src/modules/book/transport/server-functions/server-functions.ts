@@ -6,6 +6,8 @@ import {
 } from '@/platform/lib/tanstack-start/server-function-handler';
 
 import type { ProtectedContext } from '@/modules/auth/backend';
+import { assertCapabilityAvailable } from '@/modules/kernel/backend';
+import { serverFnValidator } from '@/modules/kernel/server';
 
 import {
   type BookHandlers,
@@ -25,41 +27,44 @@ type BookServerRuntimeDeps = {
   withProtectedMutation: ProtectedRunner;
 };
 
-const getDeps = createServerOnlyFn(async (): Promise<BookServerRuntimeDeps> => {
-  const [
-    { getBookUseCases },
-    { getKernel },
-    { withProtectedContext, withProtectedMutation },
-  ] = await Promise.all([
-    import('@/composition/book'),
-    import('@/composition/kernel'),
-    import('@/modules/auth/backend'),
-  ]);
+export const getBookServerRuntimeDeps = createServerOnlyFn(
+  async (): Promise<BookServerRuntimeDeps> => {
+    assertCapabilityAvailable('book');
+    const [
+      { getBookUseCases },
+      { getKernel },
+      { withProtectedContext, withProtectedMutation },
+    ] = await Promise.all([
+      import('@/composition/book'),
+      import('@/composition/kernel'),
+      import('@/modules/auth/backend'),
+    ]);
 
-  return {
-    handlers: createBookHandlers({
-      getUseCases: (ctx) =>
-        getBookUseCases({
-          kernel: getKernel({ logger: ctx.logger }),
-        }),
-    }),
-    withProtectedContext,
-    withProtectedMutation,
-  };
-});
+    return {
+      handlers: createBookHandlers({
+        getUseCases: (ctx) =>
+          getBookUseCases({
+            kernel: getKernel({ logger: ctx.logger }),
+          }),
+      }),
+      withProtectedContext,
+      withProtectedMutation,
+    };
+  }
+);
 
 const runProtected = createServerFunctionInvoker({
-  getDeps,
+  getDeps: getBookServerRuntimeDeps,
   selectRunner: (deps) => deps.withProtectedContext,
 });
 
 const runMutation = createServerFunctionInvoker({
-  getDeps,
+  getDeps: getBookServerRuntimeDeps,
   selectRunner: (deps) => deps.withProtectedMutation,
 });
 
 export const bookGetAll = createServerFn({ method: 'GET' })
-  .inputValidator(zGetAllInput())
+  .validator(serverFnValidator(zGetAllInput()))
   .handler(async ({ data }) =>
     runProtected.withOperation('book.getAll')(
       data,
@@ -68,7 +73,7 @@ export const bookGetAll = createServerFn({ method: 'GET' })
   );
 
 export const bookGetById = createServerFn({ method: 'GET' })
-  .inputValidator(zGetByIdInput())
+  .validator(serverFnValidator(zGetByIdInput()))
   .handler(async ({ data }) =>
     runProtected.withOperation('book.getById')(
       data,
@@ -77,7 +82,7 @@ export const bookGetById = createServerFn({ method: 'GET' })
   );
 
 export const bookCreate = createServerFn({ method: 'POST' })
-  .inputValidator(zCreateInput())
+  .validator(serverFnValidator(zCreateInput()))
   .handler(async ({ data }) =>
     runMutation.withOperation('book.create')(data, ({ handlers }, ctx, input) =>
       handlers.create(ctx, input)
@@ -85,7 +90,7 @@ export const bookCreate = createServerFn({ method: 'POST' })
   );
 
 export const bookUpdateById = createServerFn({ method: 'POST' })
-  .inputValidator(zUpdateByIdInput())
+  .validator(serverFnValidator(zUpdateByIdInput()))
   .handler(async ({ data }) =>
     runMutation.withOperation('book.updateById')(
       data,
@@ -94,7 +99,7 @@ export const bookUpdateById = createServerFn({ method: 'POST' })
   );
 
 export const bookDeleteById = createServerFn({ method: 'POST' })
-  .inputValidator(zDeleteByIdInput())
+  .validator(serverFnValidator(zDeleteByIdInput()))
   .handler(async ({ data }) =>
     runMutation.withOperation('book.deleteById')(
       data,

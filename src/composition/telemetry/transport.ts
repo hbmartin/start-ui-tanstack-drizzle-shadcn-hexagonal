@@ -2,19 +2,23 @@ import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields'
 
 import { getAuthUseCases } from '@/composition/auth';
 import { getKernel } from '@/composition/kernel';
-import { getHttpConfig } from '@/modules/kernel/backend';
+import {
+  getHttpConfig,
+  isProdRuntimeEnvironment,
+} from '@/modules/kernel/backend';
 import { getTelemetryConfig } from '@/modules/kernel/infrastructure/config/telemetry';
 import {
   appendBrowserMutationVaryHeader,
   validateSameOriginBrowserMutationRequest,
 } from '@/platform/http/browser-mutation-protection';
-import { getClientIp } from '@/platform/http/get-client-ip';
+import { createTrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 import { defaultRateLimiter } from '@/platform/http/rate-limiter';
+import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
 import type { TelemetryAdapter, TelemetryLogLevel } from '@/platform/telemetry';
-import { getTelemetry } from '@/platform/telemetry';
+import { telemetryProxy } from '@/platform/telemetry';
 
 import { telemetrySignalUrl } from './collector-url';
-import { recordLocalTelemetrySummary } from './local-sqlite-sink';
+import { recordLocalTelemetrySummary } from './local-summary';
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -94,6 +98,15 @@ const tooManyRequests = (retryAfterSeconds: number) =>
     status: 429,
   });
 
+const rateLimiterUnavailable = () =>
+  new Response(JSON.stringify({ error: 'rate_limiter_unavailable' }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Retry-After': '60',
+    },
+    status: 503,
+  });
+
 const unauthorized = () =>
   new Response(JSON.stringify({ error: 'unauthorized' }), {
     headers: { 'Content-Type': 'application/json' },
@@ -127,11 +140,11 @@ const validateTelemetryMutationRequest = (
 };
 
 /**
- * Best-effort per-IP rate limit. The same-origin guard is a CSRF control, not
+ * Per-IP rate limit. The same-origin guard is a CSRF control, not
  * authentication, so these endpoints still accept forgeable non-browser
- * traffic; this caps abuse/cost amplification per process. The client IP is
- * derived with the configured `TRUSTED_PROXY_DEPTH` so a spoofed leftmost
- * `X-Forwarded-For` entry cannot mint a fresh per-IP bucket and bypass the cap.
+ * traffic; this caps abuse/cost amplification per process. The entrypoint-owned
+ * runtime profile selects the only trusted header source. Node additionally
+ * uses `TRUSTED_PROXY_DEPTH` to ignore attacker-controlled XFF entries.
  *
  * IMPORTANT: this limiter is in-memory and per-process, so on serverless /
  * multi-instance deployments each instance counts independently. Durable,
@@ -140,12 +153,23 @@ const validateTelemetryMutationRequest = (
  * in-app lock-down that closes the anonymous proxy entirely. `scope` keeps a
  * single page's traffic to one endpoint from starving the others.
  */
-const enforceTelemetryRateLimit = (request: Request, scope: string) => {
+const enforceTelemetryRateLimit = (
+  request: Request,
+  scope: string,
+  runtimeProfile: RuntimeProfile
+) => {
   const { rateLimitPerMinute } = getTelemetryConfig();
-  const ip =
-    getClientIp(request, {
-      trustedProxyDepth: getHttpConfig().trustedProxyDepth,
-    }) ?? 'unknown';
+  const trustedIp = createTrustedClientIpAdapter({
+    runtimeProfile,
+    trustedProxyDepth: getHttpConfig().trustedProxyDepth,
+  }).resolve(request);
+  if (!trustedIp && isProdRuntimeEnvironment()) {
+    return withTelemetryVary(rateLimiterUnavailable());
+  }
+
+  // Direct localhost requests have no reverse-proxy header. A single local
+  // bucket keeps developer telemetry usable without weakening production.
+  const ip = trustedIp ?? 'local-unattributed';
   const result = defaultRateLimiter.check(
     `telemetry:${scope}:${ip}`,
     rateLimitPerMinute,
@@ -306,12 +330,17 @@ const forwardSentryEnvelope = async (body: ArrayBuffer) => {
 
 export const handleOtlpProxyRequest = async (
   request: Request,
-  signal: OtlpSignal
+  signal: OtlpSignal,
+  runtimeProfile: RuntimeProfile
 ) => {
   const invalid = validateTelemetryMutationRequest(request, OTLP_CONTENT_TYPES);
   if (invalid) return invalid;
 
-  const rateLimited = enforceTelemetryRateLimit(request, signal);
+  const rateLimited = enforceTelemetryRateLimit(
+    request,
+    signal,
+    runtimeProfile
+  );
   if (rateLimited) return rateLimited;
 
   const unauthenticated = await enforceTelemetryAuth(request);
@@ -325,14 +354,21 @@ export const handleOtlpProxyRequest = async (
   );
 };
 
-export const handleSentryTunnelRequest = async (request: Request) => {
+export const handleSentryTunnelRequest = async (
+  request: Request,
+  runtimeProfile: RuntimeProfile
+) => {
   const invalid = validateTelemetryMutationRequest(
     request,
     SENTRY_ENVELOPE_CONTENT_TYPES
   );
   if (invalid) return invalid;
 
-  const rateLimited = enforceTelemetryRateLimit(request, 'sentry');
+  const rateLimited = enforceTelemetryRateLimit(
+    request,
+    'sentry',
+    runtimeProfile
+  );
   if (rateLimited) return rateLimited;
 
   const unauthenticated = await enforceTelemetryAuth(request);
@@ -496,11 +532,18 @@ const toFrontendLogBatch = async (request: Request) => {
   };
 };
 
-export const handleFrontendLogsRequest = async (request: Request) => {
+export const handleFrontendLogsRequest = async (
+  request: Request,
+  runtimeProfile: RuntimeProfile
+) => {
   const invalid = validateTelemetryMutationRequest(request, JSON_CONTENT_TYPES);
   if (invalid) return invalid;
 
-  const rateLimited = enforceTelemetryRateLimit(request, 'logs');
+  const rateLimited = enforceTelemetryRateLimit(
+    request,
+    'logs',
+    runtimeProfile
+  );
   if (rateLimited) return rateLimited;
 
   // The frontend log sink writes into the trusted server log/telemetry stream,
@@ -514,7 +557,7 @@ export const handleFrontendLogsRequest = async (request: Request) => {
   if (!batch.ok) return withTelemetryVary(batch.response);
 
   const logger = getKernel().logger;
-  const telemetry = getTelemetry();
+  const telemetry = telemetryProxy;
 
   for (const record of batch.records) {
     recordFrontendLog({ logger, record, telemetry });

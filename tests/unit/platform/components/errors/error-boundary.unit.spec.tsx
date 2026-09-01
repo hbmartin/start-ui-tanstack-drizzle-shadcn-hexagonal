@@ -24,6 +24,9 @@ vi.mock('@/platform/telemetry', () => ({
   getTelemetry: () => ({
     captureException: boundaryMocks.captureException,
   }),
+  telemetryProxy: {
+    captureException: boundaryMocks.captureException,
+  },
 }));
 
 vi.mock('@/platform/telemetry/frontend-logger', () => ({
@@ -71,14 +74,7 @@ describe('ErrorBoundary', () => {
       level: 'error',
       tags: { event: 'feature.error_boundary' },
     });
-    expect(boundaryMocks.loggerError).toHaveBeenCalledWith(
-      'feature.error_boundary',
-      {
-        details: { componentStack: 'Component stack' },
-        error,
-        message: 'feature failed',
-      }
-    );
+    expect(boundaryMocks.loggerError).not.toHaveBeenCalled();
     expect(callerOnError).toHaveBeenCalledWith(error, {
       componentStack: 'Component stack',
     });

@@ -3,7 +3,7 @@ import { Resend } from 'resend';
 import { AppError } from '@/modules/kernel';
 import { getEmailConfig } from '@/modules/kernel/backend';
 
-export function createResendClient(apiKey = getEmailConfig().resendApiKey) {
+function createResendClient(apiKey = getEmailConfig().resendApiKey) {
   if (!apiKey) {
     throw new AppError({
       code: 'EMAIL_RESEND_API_KEY_NOT_CONFIGURED',

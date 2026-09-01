@@ -1,10 +1,7 @@
-import {
-  getAuth,
-  getAuthHttpGateway,
-  getAuthUseCases,
-} from '@/composition/auth';
+import { getAuthHttpGateway, getAuthUseCases } from '@/composition/auth';
 import { getKernel } from '@/composition/kernel';
 import type { Logger } from '@/modules/kernel';
+import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
 
 import { createServerContextTools } from './transport/tanstack/server-context';
 
@@ -30,7 +27,10 @@ const serverContextTools = createServerContextTools({
 });
 
 export { getAuthUseCases };
-export const handleAuthRequest = (request: Request) =>
+export const handleAuthRequest = (
+  request: Request,
+  runtimeProfile: RuntimeProfile
+) =>
   getKernel().telemetry.startSpan(
     {
       attributes: {
@@ -42,25 +42,7 @@ export const handleAuthRequest = (request: Request) =>
       name: 'auth.httpRequest',
       op: 'auth.http',
     },
-    () => getAuthHttpGateway().handle(request)
-  );
-export const handleLogoutRequest = (request: Request) =>
-  getKernel().telemetry.startSpan(
-    {
-      attributes: {
-        'auth.provider': 'better-auth',
-        'http.request.method': request.method,
-        'operation.name': 'auth.signOut',
-        'operation.type': 'provider_operation',
-      },
-      name: 'auth.signOut',
-      op: 'auth.provider',
-    },
-    () =>
-      getAuth().api.signOut({
-        asResponse: true,
-        headers: request.headers,
-      })
+    () => getAuthHttpGateway().handle(request, runtimeProfile)
   );
 export const assertPermission = serverContextTools.assertPermission;
 export const withFreshProtectedMutation =

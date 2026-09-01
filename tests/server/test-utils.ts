@@ -1,7 +1,12 @@
 import { expect, vi } from 'vitest';
 
 import type { Permission } from '@/modules/auth';
-import { toEmailAddress, toSessionId, toUserId } from '@/modules/kernel';
+import {
+  toCorrelationId,
+  toEmailAddress,
+  toSessionId,
+  toUserId,
+} from '@/modules/kernel';
 
 const hoisted = vi.hoisted(() => ({
   mockGetSession: vi.fn(),
@@ -136,6 +141,10 @@ export function setupAuthenticatedUser() {
     session: mockSession,
   });
   mockUserHasPermission.mockResolvedValue({ success: true, error: false });
+  // Production session resolution treats PostgreSQL as authoritative even
+  // when Better Auth returns a secondary-storage cache hit.
+  mockDb.query.session.findFirst.mockResolvedValue({ id: mockSession.id });
+  mockDb.query.user.findFirst.mockResolvedValue(mockUser);
 }
 
 export const mockLogger = {
@@ -150,6 +159,7 @@ export const createAuthenticatedContext = (overrides?: {
   session?: typeof mockSession;
 }) =>
   ({
+    correlationId: unwrapParseResult(toCorrelationId('correlation-1')),
     user: overrides?.user ?? mockUser,
     session: overrides?.session ?? mockSession,
     scope: {

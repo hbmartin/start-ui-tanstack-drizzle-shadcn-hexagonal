@@ -5,7 +5,10 @@ import {
   getDefaultDbClient,
   getEmailConfig,
   getHttpConfig,
+  isProdRuntimeEnvironment,
 } from '@/modules/kernel/backend';
+import { createTrustedClientIpAdapter } from '@/platform/http/get-client-ip';
+import type { RuntimeProfile } from '@/platform/runtime/runtime-profile';
 
 import { createEmailUseCases, type EmailTransactionContext } from './index';
 import { createEmailStatusRepository } from './infrastructure/drizzle/email-status-repository-drizzle';
@@ -32,6 +35,7 @@ export {
  */
 export type ResendWebhookRequestDeps = {
   logger?: Pick<Logger, 'warn'>;
+  runtimeProfile: RuntimeProfile;
 };
 
 type EmailServerRuntimeDeps = {
@@ -72,14 +76,18 @@ const getDeps = (deps: ResendWebhookRequestDeps): EmailServerRuntimeDeps => ({
     getUseCases: createDefaultEmailUseCases,
     logger: deps.logger,
     maxBodyBytes: getEmailConfig().resendWebhookMaxBytes,
-    trustedProxyDepth: getHttpConfig().trustedProxyDepth,
+    requireTrustedClientIp: isProdRuntimeEnvironment(),
+    trustedClientIpAdapter: createTrustedClientIpAdapter({
+      runtimeProfile: deps.runtimeProfile,
+      trustedProxyDepth: getHttpConfig().trustedProxyDepth,
+    }),
     verifier: new ResendWebhookVerifier(),
   }),
 });
 
 export async function handleResendWebhookRequest(
   request: Request,
-  deps: ResendWebhookRequestDeps = {}
+  deps: ResendWebhookRequestDeps
 ) {
   try {
     const { handlers } = getDeps(deps);

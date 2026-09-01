@@ -5,14 +5,14 @@ take the integrity of this template and its supply chain seriously.
 
 ## Supported Versions
 
-Security fixes are provided for the latest released major version on the
-`main` branch. Older majors are not maintained — upgrade to the latest release
-to receive security updates.
+Security fixes are provided for the active v5 line on `main`, including its
+pre-releases. The breaking v5 branch does not maintain a v4 compatibility or
+security-fix line.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 4.x     | :white_check_mark: |
-| < 4.0   | :x:                |
+| 5.x     | :white_check_mark: |
+| < 5.0   | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -22,11 +22,11 @@ Report privately through GitHub's coordinated disclosure flow:
 
 1. Go to the repository's **Security** tab → **Report a vulnerability**
    (GitHub Private Vulnerability Reporting), or open
-   <https://github.com/hbmartin/start-ui-web/security/advisories/new>.
+   <https://github.com/hbmartin/start-ui-tanstack-drizzle-shadcn-hexagonal/security/advisories/new>.
 2. Include affected version/commit, reproduction steps, impact, and any PoC.
 
-If you cannot use GitHub advisories, contact the maintainer listed in
-[`CODEOWNERS`](./CODEOWNERS).
+If you cannot use GitHub advisories, contact the repository author through the
+address published in the tracked `package.json` metadata.
 
 ### What to expect
 
@@ -43,10 +43,10 @@ In scope: code in this repository and its build/release pipeline
 (`.github/workflows`, dependency manifests, CI configuration).
 
 Out of scope: vulnerabilities in third-party dependencies that are already
-public — these are tracked via Dependabot, OSV Scanner, `pnpm audit`, and
-[`docs/security-risk-register.md`](../docs/security-risk-register.md). Report
-those upstream; if this repo needs to pin or override around one, note it in
-the risk register.
+public — these are tracked via Dependabot, OSV Scanner, the locked security
+snapshot, and [`docs/security-risk-register.md`](../docs/security-risk-register.md).
+Report those upstream; if this repo needs to pin or override around one, record
+the mitigation and review date in the risk register.
 
 ## Supply-chain controls
 
@@ -56,22 +56,35 @@ accepted/temporary risks are tracked in
 [`docs/security-risk-register.md`](../docs/security-risk-register.md). Key
 controls:
 
-- All GitHub Actions are pinned by commit SHA; CI installs with
-  `--frozen-lockfile --ignore-scripts`.
+- All GitHub Actions are pinned by commit SHA. The shared pnpm setup action uses
+  the frozen lockfile with dependency lifecycle scripts disabled, then generates
+  trusted local build metadata explicitly.
 - `pnpm-workspace.yaml` enforces `minimumReleaseAge` and an explicit
   build-script allowlist.
-- Continuous scanning: OSV Scanner, `dependency-review`, CodeQL, Semgrep,
-  detect-secrets, `pnpm audit` (high+ blocking), a license-compliance gate
-  (`pnpm security:licenses`), and a TanStack incident blocklist
-  (`pnpm security:tanstack`).
-- An SPDX SBOM and `pnpm audit` report are generated and signed with build
+- Continuous scanning: OSV Scanner, Dependency Review, CodeQL, Semgrep, and
+  detect-secrets. `pnpm security:audit` deterministically checks the locked
+  TanStack incident policy, license evidence, and time-bounded risk register;
+  `pnpm security:refresh` is the separate network evidence refresh.
+- SPDX and CycloneDX SBOMs plus the normalized
+  `docs/security-audit.snapshot.json` are generated and signed with build
   provenance on every push to `main`.
+
+## Browser request defenses
+
+Production HTTPS auth uses a host-bound `__Host-` session cookie with Secure,
+HttpOnly, `Path=/`, and `SameSite=Lax` attributes. Better Auth accepts only the
+validated canonical origins configured by the selected runtime profile.
+
+`src/start.ts` explicitly registers TanStack's server-function CSRF middleware
+and the app-owned browser-mutation guard. Together they validate Origin/Referer
+and Fetch Metadata signals for their declared mutation surfaces. The template
+does not claim a separate synchronizer-token protocol.
 
 ### Verifying release artifacts
 
-The SBOM and audit report published from `main` carry signed build
-provenance. Verify them with the GitHub CLI:
+The SBOMs and normalized security evidence published from `main` carry signed
+build provenance. Verify an artifact with the GitHub CLI:
 
 ```bash
-gh attestation verify sbom.spdx.json --repo hbmartin/start-ui-web
+gh attestation verify sbom.spdx.json --repo hbmartin/start-ui-tanstack-drizzle-shadcn-hexagonal
 ```

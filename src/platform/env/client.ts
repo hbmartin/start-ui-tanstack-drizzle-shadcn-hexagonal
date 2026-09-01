@@ -1,1 +1,1 @@
-export { envClient } from './config';
+export { envClient, getEnvClient } from './config';

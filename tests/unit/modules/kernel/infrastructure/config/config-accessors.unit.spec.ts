@@ -6,12 +6,63 @@ import {
 } from '@tests/support/test-secrets';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ACTIVE_CAPABILITY_PRESET } from '@/modules/kernel';
+
+const otherCapabilityPreset = {
+  core: 'demo',
+  demo: 'core',
+} as const;
+
 describe('server config accessors', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.unstubAllEnvs();
     vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
+    vi.stubEnv('APP_NAME', 'Start UI Test');
+    vi.stubEnv('APP_SLUG', 'start-ui-test');
+    vi.stubEnv('CAPABILITY_PRESET', ACTIVE_CAPABILITY_PRESET);
+    vi.stubEnv(
+      'AUTH_RATE_LIMIT_HMAC_SECRET',
+      makeStrongTestSecret('rate-limit')
+    );
   });
+
+  it.each([
+    ['node', 'node-pg'],
+    ['vercel', 'neon-http'],
+  ] as const)(
+    'accepts the %s profile runtime database driver %s',
+    async (runtimeProfile, driver) => {
+      const { assertDatabaseDriverForRuntimeProfile } =
+        await import('@/modules/kernel/infrastructure/config/database');
+
+      expect(() =>
+        assertDatabaseDriverForRuntimeProfile(runtimeProfile, { driver })
+      ).not.toThrow();
+    }
+  );
+
+  it.each([
+    ['node', 'neon-http'],
+    ['node', 'neon-websocket'],
+    ['vercel', 'node-pg'],
+    ['vercel', 'neon-websocket'],
+  ] as const)(
+    'rejects %s runtime database driver %s',
+    async (runtimeProfile, driver) => {
+      const { assertDatabaseDriverForRuntimeProfile } =
+        await import('@/modules/kernel/infrastructure/config/database');
+      const { ConfigurationError } =
+        await import('@/modules/kernel/domain/errors/configuration-error');
+
+      expect(() =>
+        assertDatabaseDriverForRuntimeProfile(runtimeProfile, { driver })
+      ).toThrow(ConfigurationError);
+      expect(() =>
+        assertDatabaseDriverForRuntimeProfile(runtimeProfile, { driver })
+      ).toThrow(`requires the`);
+    }
+  );
 
   it('caches parsed database config', async () => {
     const firstDatabaseUrl = makeTestDatabaseUrl({
@@ -33,6 +84,7 @@ describe('server config accessors', () => {
     expect(getDatabaseConfig()).toBe(first);
     expect(getDatabaseConfig().databaseUrl).toBe(firstDatabaseUrl);
     expect(getDatabaseConfig().driver).toBe('node-pg');
+    expect(getDatabaseConfig().tlsPolicy).toBe('off');
   });
 
   it('parses explicit database driver config', async () => {
@@ -46,7 +98,37 @@ describe('server config accessors', () => {
     expect(getDatabaseConfig()).toEqual({
       databaseUrl,
       driver: 'neon-http',
+      tlsPolicy: 'off',
     });
+  });
+
+  it('parses an explicit encryption-only database policy', async () => {
+    const databaseUrl = makeTestDatabaseUrl({ host: 'db.example.com' });
+
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', databaseUrl);
+    vi.stubEnv('DATABASE_TLS_POLICY', 'encrypt');
+    const { getDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(getDatabaseConfig()).toEqual({
+      databaseUrl,
+      driver: 'node-pg',
+      tlsPolicy: 'encrypt',
+    });
+  });
+
+  it('rejects a remote database with TLS disabled in every environment', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    const { getDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
+
+    expect(() => getDatabaseConfig()).toThrow(ConfigurationError);
+    expect(() => getDatabaseConfig()).toThrow('loopback');
   });
 
   it('defaults migration config to node-pg for node-pg runtime drivers', async () => {
@@ -60,6 +142,7 @@ describe('server config accessors', () => {
     expect(getMigrationDatabaseConfig()).toEqual({
       databaseUrl,
       driver: 'node-pg',
+      tlsPolicy: 'off',
     });
   });
 
@@ -76,6 +159,7 @@ describe('server config accessors', () => {
       expect(getMigrationDatabaseConfig()).toEqual({
         databaseUrl,
         driver: 'neon-websocket',
+        tlsPolicy: 'off',
       });
     }
   );
@@ -98,7 +182,159 @@ describe('server config accessors', () => {
     expect(getMigrationDatabaseConfig()).toEqual({
       databaseUrl: migrationDatabaseUrl,
       driver: 'node-pg',
+      tlsPolicy: 'off',
     });
+  });
+
+  it('derives verify from a remote migration URL when neither policy is configured', async () => {
+    const migrationDatabaseUrl = makeTestDatabaseUrl({
+      host: 'db.example.com',
+    });
+
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_MIGRATION_URL', migrationDatabaseUrl);
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(getMigrationDatabaseConfig()).toEqual({
+      databaseUrl: migrationDatabaseUrl,
+      driver: 'node-pg',
+      tlsPolicy: 'verify',
+    });
+  });
+
+  it('allows migrations to use a stricter TLS policy than runtime queries', async () => {
+    const databaseUrl = makeTestDatabaseUrl();
+
+    vi.stubEnv('DATABASE_URL', databaseUrl);
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'verify');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(getMigrationDatabaseConfig()).toEqual({
+      databaseUrl,
+      driver: 'node-pg',
+      tlsPolicy: 'verify',
+    });
+  });
+
+  it('requires a remote migration URL to override an inherited off policy', async () => {
+    const migrationDatabaseUrl = makeTestDatabaseUrl({
+      host: 'db.example.com',
+    });
+
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    vi.stubEnv('DATABASE_MIGRATION_URL', migrationDatabaseUrl);
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_URL uses DATABASE_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_MIGRATION_TLS_POLICY=verify for this remote database.'
+    );
+
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'verify');
+    expect(getMigrationDatabaseConfig()).toEqual({
+      databaseUrl: migrationDatabaseUrl,
+      driver: 'node-pg',
+      tlsPolicy: 'verify',
+    });
+  });
+
+  it('corrects the shared runtime policy when migrations reuse a remote DATABASE_URL', async () => {
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL uses DATABASE_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_TLS_POLICY=verify for this remote database.'
+    );
+  });
+
+  it('attributes an explicit remote migration opt-out to the migration policy', async () => {
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv(
+      'DATABASE_MIGRATION_URL',
+      makeTestDatabaseUrl({ host: 'db.example.com' })
+    );
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'off');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_URL uses DATABASE_MIGRATION_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_MIGRATION_TLS_POLICY=verify for this remote database.'
+    );
+  });
+
+  it('keeps an explicit migration policy scoped when reusing DATABASE_URL', async () => {
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'off');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL uses DATABASE_MIGRATION_TLS_POLICY=off, which is allowed only for a loopback endpoint; set DATABASE_MIGRATION_TLS_POLICY=verify for this remote database.'
+    );
+  });
+
+  it('corrects the shared runtime policy for Neon migrations using DATABASE_URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    vi.stubEnv('DATABASE_DRIVER', 'neon-http');
+    vi.stubEnv('DATABASE_TLS_POLICY', 'encrypt');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL uses a Neon adapter that owns secure transport; production requires DATABASE_TLS_POLICY=verify.'
+    );
+  });
+
+  it('scopes the Neon policy remedy to a distinct migration URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_DRIVER', 'neon-http');
+    vi.stubEnv('DATABASE_TLS_POLICY', 'encrypt');
+    vi.stubEnv(
+      'DATABASE_MIGRATION_URL',
+      makeTestDatabaseUrl({ host: 'db.example.com' })
+    );
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_URL uses a Neon adapter that owns secure transport; production requires DATABASE_MIGRATION_TLS_POLICY=verify.'
+    );
+  });
+
+  it('names the runtime policy for a derived Neon policy on shared DATABASE_URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_DRIVER', 'neon-http');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL uses a Neon adapter that owns secure transport; production requires DATABASE_TLS_POLICY=verify.'
+    );
+  });
+
+  it('names the migration policy for a derived Neon policy on a distinct URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('DATABASE_DRIVER', 'neon-http');
+    vi.stubEnv(
+      'DATABASE_MIGRATION_URL',
+      makeTestDatabaseUrl({ credentialLabel: 'migration' })
+    );
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_URL uses a Neon adapter that owns secure transport; production requires DATABASE_MIGRATION_TLS_POLICY=verify.'
+    );
   });
 
   it('rejects Neon HTTP as a migration driver', async () => {
@@ -127,6 +363,25 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/domain/errors/configuration-error');
 
     expect(() => getMigrationDatabaseConfig()).toThrow(ConfigurationError);
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_MIGRATION_URL must use'
+    );
+  });
+
+  it('attributes a transaction-pooled runtime fallback to DATABASE_URL', async () => {
+    vi.stubEnv(
+      'DATABASE_URL',
+      makeTestDatabaseUrl({
+        host: 'ep-example-pooler.us-east-1.aws.neon.tech',
+        port: null,
+      })
+    );
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'set DATABASE_MIGRATION_URL'
+    );
   });
 
   it('detects likely transaction-pooled database URLs', async () => {
@@ -137,7 +392,7 @@ describe('server config accessors', () => {
       isLikelyTransactionPooledDatabaseUrl(
         makeTestDatabaseUrl({
           databaseName: 'db',
-          host: 'ep-example-pooler.us-east-1.aws.neon.tech',
+          host: 'ep-example-POOLER.us-east-1.aws.neon.tech',
           port: null,
         })
       )
@@ -146,9 +401,79 @@ describe('server config accessors', () => {
       isLikelyTransactionPooledDatabaseUrl(
         makeTestDatabaseUrl({
           databaseName: 'db',
-          searchParams: { pool_mode: 'transaction' },
+          host: 'aws-0-us-east-1.pooler.supabase.com',
+          port: 5432,
         })
       )
+    ).toBe(false);
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(
+        makeTestDatabaseUrl({
+          databaseName: 'db',
+          host: 'aws-0-us-east-1.pooler.supabase.com',
+          port: 6543,
+        })
+      )
+    ).toBe(true);
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(
+        makeTestDatabaseUrl({
+          databaseName: 'db',
+          host: 'aws-0-us-east-1.pooler.supabase.com',
+          port: null,
+        })
+      )
+    ).toBe(true);
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(
+        makeTestDatabaseUrl({
+          databaseName: 'db',
+          host: 'aws-0-us-east-1.pooler.supabase.com',
+          port: 7000,
+        })
+      )
+    ).toBe(true);
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(
+        makeTestDatabaseUrl({
+          databaseName: 'db',
+          host: 'db.abc.supabase.co',
+          port: 6543,
+        })
+      )
+    ).toBe(true);
+    const transactionPoolerSearchParams: ReadonlyArray<Record<string, string>> =
+      [
+        { pgbouncer: 'true' },
+        { PGBOUNCER: 'TRUE' },
+        { ' PGBOUNCER ': ' TRUE ' },
+        { pool_mode: 'transaction' },
+        { POOL_MODE: 'TRANSACTION' },
+        { ' POOL_MODE ': ' TRANSACTION ' },
+      ];
+    for (const searchParams of transactionPoolerSearchParams) {
+      expect(
+        isLikelyTransactionPooledDatabaseUrl(
+          makeTestDatabaseUrl({ databaseName: 'db', searchParams })
+        )
+      ).toBe(true);
+    }
+    const duplicateParameterUrl = new URL(
+      makeTestDatabaseUrl({ databaseName: 'db' })
+    );
+    duplicateParameterUrl.searchParams.append('pgbouncer', 'false');
+    duplicateParameterUrl.searchParams.append('pgbouncer', 'true');
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(duplicateParameterUrl.toString())
+    ).toBe(true);
+
+    const duplicatePoolModeUrl = new URL(
+      makeTestDatabaseUrl({ databaseName: 'db' })
+    );
+    duplicatePoolModeUrl.searchParams.append('pool_mode', 'session');
+    duplicatePoolModeUrl.searchParams.append('pool_mode', 'transaction');
+    expect(
+      isLikelyTransactionPooledDatabaseUrl(duplicatePoolModeUrl.toString())
     ).toBe(true);
     expect(
       isLikelyTransactionPooledDatabaseUrl(
@@ -163,6 +488,43 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/infrastructure/config/auth');
 
     expect(getAuthProviderConfig()).toEqual({ provider: 'better-auth' });
+  });
+
+  it('parses canonical application identity and the explicit preset', async () => {
+    vi.stubEnv('APP_NAME', 'Acme Cloud');
+    vi.stubEnv('APP_SLUG', 'acme-cloud');
+    vi.stubEnv('CAPABILITY_PRESET', ACTIVE_CAPABILITY_PRESET);
+    const { getApplicationConfig } =
+      await import('@/modules/kernel/infrastructure/config/application');
+
+    expect(getApplicationConfig()).toEqual({
+      identity: { name: 'Acme Cloud', slug: 'acme-cloud' },
+      preset: ACTIVE_CAPABILITY_PRESET,
+    });
+  });
+
+  it('rejects a preset that differs from the generated composition', async () => {
+    vi.stubEnv(
+      'CAPABILITY_PRESET',
+      otherCapabilityPreset[ACTIVE_CAPABILITY_PRESET]
+    );
+    const { getApplicationConfig } =
+      await import('@/modules/kernel/infrastructure/config/application');
+
+    expect(() => getApplicationConfig()).toThrow(
+      'Invalid environment configuration: CAPABILITY_PRESET'
+    );
+  });
+
+  it('rejects an unstable application slug through ConfigurationError', async () => {
+    vi.stubEnv('APP_SLUG', 'Acme Cloud');
+    const { getApplicationConfig } =
+      await import('@/modules/kernel/infrastructure/config/application');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
+
+    expect(() => getApplicationConfig()).toThrow(ConfigurationError);
+    expect(() => getApplicationConfig()).toThrow('APP_SLUG');
   });
 
   it('parses WorkOS as a reserved auth provider without Better Auth secrets', async () => {
@@ -220,12 +582,29 @@ describe('server config accessors', () => {
 
   it('accepts strong AUTH_SECRET values', async () => {
     const authValue = makeStrongTestSecret('auth');
+    const rateLimitValue = makeStrongTestSecret('rate-limit');
     vi.stubEnv('AUTH_PROVIDER', 'better-auth');
     vi.stubEnv('AUTH_SECRET', authValue);
+    vi.stubEnv('AUTH_RATE_LIMIT_HMAC_SECRET', rateLimitValue);
     const { getBetterAuthConfig } =
       await import('@/modules/kernel/infrastructure/config/auth');
 
     expect(getBetterAuthConfig().secret).toBe(authValue);
+    expect(getBetterAuthConfig().rateLimitHmacSecret).toBe(rateLimitValue);
+  });
+
+  it('requires the rate-limit HMAC secret to be distinct from AUTH_SECRET', async () => {
+    const sharedValue = makeStrongTestSecret('shared');
+    vi.stubEnv('AUTH_PROVIDER', 'better-auth');
+    vi.stubEnv('AUTH_SECRET', sharedValue);
+    vi.stubEnv('AUTH_RATE_LIMIT_HMAC_SECRET', sharedValue);
+    const { getBetterAuthConfig } =
+      await import('@/modules/kernel/infrastructure/config/auth');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
+
+    expect(() => getBetterAuthConfig()).toThrow(ConfigurationError);
+    expect(() => getBetterAuthConfig()).toThrow('AUTH_RATE_LIMIT_HMAC_SECRET');
   });
 
   it('allows weak AUTH_SECRET values only when non-production env validation is skipped', async () => {
@@ -276,11 +655,12 @@ describe('server config accessors', () => {
     const { validateServerConfig } =
       await import('@/modules/kernel/infrastructure/config/server');
 
-    expect(() => validateServerConfig()).not.toThrow();
+    expect(() => validateServerConfig('node')).not.toThrow();
   });
 
   it('runs server config validation in production even when SKIP_ENV_VALIDATION is true', async () => {
     vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_DOMAIN', 'https://app.example.test');
     vi.stubEnv('SKIP_ENV_VALIDATION', 'true');
     vi.stubEnv('AUTH_SECRET', undefined);
     vi.stubEnv('DATABASE_URL', undefined);
@@ -290,7 +670,7 @@ describe('server config accessors', () => {
     const { validateServerConfig } =
       await import('@/modules/kernel/infrastructure/config/server');
 
-    expect(() => validateServerConfig()).toThrow(ConfigurationError);
+    expect(() => validateServerConfig('node')).toThrow(ConfigurationError);
   });
 
   it('returns null for absent optional Redis config', async () => {
@@ -300,6 +680,30 @@ describe('server config accessors', () => {
       await import('@/modules/kernel/infrastructure/config/redis');
 
     expect(getRedisConfig()).toBeNull();
+  });
+
+  it('requires distributed Redis rate limiting at production startup', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', undefined);
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
+
+    expect(() => getRedisConfig()).toThrow(ConfigurationError);
+    expect(() => getRedisConfig()).toThrow('Production startup requires');
+  });
+
+  it('allows production build validation to omit runtime Redis credentials without weakening startup', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', undefined);
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+
+    expect(getRedisConfig({ requiredInProduction: false })).toBeNull();
+    expect(() => getRedisConfig()).toThrow('Production startup requires');
   });
 
   it('throws ConfigurationError for partial optional Redis config', async () => {
@@ -312,6 +716,25 @@ describe('server config accessors', () => {
 
     expect(() => getRedisConfig()).toThrow(ConfigurationError);
     expect(() => getRedisConfig()).toThrow('UPSTASH_REDIS_REST_TOKEN');
+  });
+
+  it('rejects Redis URL credentials without exposing them', async () => {
+    vi.stubEnv(
+      'UPSTASH_REDIS_REST_URL',
+      'https://embedded-user:embedded-secret@redis.example.com'
+    );
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', makeTestSecret('redis'));
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+
+    let caught: unknown;
+    try {
+      getRedisConfig();
+    } catch (error) {
+      caught = error;
+    }
+    expect(String(caught)).toContain('must not contain URL credentials');
+    expect(String(caught)).not.toContain('embedded-secret');
   });
 
   it('throws ConfigurationError when Redis token is present without URL', async () => {
@@ -399,17 +822,38 @@ describe('server config accessors', () => {
     expect(getLoggerConfig().consoleMirror).toBe(true);
   });
 
-  it('requires an OpenTelemetry Collector URL in production', async () => {
+  it('uses safe no-export telemetry defaults in production without a Collector', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('OTEL_COLLECTOR_URL', undefined);
     const { getTelemetryConfig } =
       await import('@/modules/kernel/infrastructure/config/telemetry');
-    const { ConfigurationError } =
-      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(() => getTelemetryConfig()).toThrow(ConfigurationError);
-    expect(() => getTelemetryConfig()).toThrow('OTEL_COLLECTOR_URL');
+    expect(getTelemetryConfig()).toMatchObject({
+      collectorUrl: undefined,
+      localSqliteEnabled: false,
+      otelSdkDisabled: false,
+    });
   });
+
+  it('accepts the Vercel SDK disabled state with explicit off mode', async () => {
+    vi.stubEnv('OTEL_SDK_DISABLED', 'true');
+    vi.stubEnv('TELEMETRY_MODE', 'off');
+    const { getTelemetryConfig } =
+      await import('@/modules/kernel/infrastructure/config/telemetry');
+
+    expect(getTelemetryConfig().otelSdkDisabled).toBe(true);
+  });
+
+  it.each(['false', '0', 'TRUE-ish'])(
+    'keeps Vercel telemetry enabled for non-true OTEL_SDK_DISABLED=%s',
+    async (value) => {
+      vi.stubEnv('OTEL_SDK_DISABLED', value);
+      const { getTelemetryConfig } =
+        await import('@/modules/kernel/infrastructure/config/telemetry');
+
+      expect(getTelemetryConfig().otelSdkDisabled).toBe(false);
+    }
+  );
 
   it('accepts production telemetry config when the Collector URL is present', async () => {
     vi.stubEnv('NODE_ENV', 'production');
@@ -584,6 +1028,21 @@ describe('server config accessors', () => {
     expect(() => getEmailConfig()).toThrow('RESEND_API_KEY');
   });
 
+  it('allows email adapters to remain unconfigured when delivery is disabled', async () => {
+    vi.stubEnv('RESEND_API_KEY', '');
+    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_SERVER', '');
+    vi.stubEnv('EMAIL_DELIVERY_DISABLED', 'true');
+    const { getEmailConfig } =
+      await import('@/modules/kernel/infrastructure/config/email');
+
+    expect(getEmailConfig()).toMatchObject({
+      deliveryDisabled: true,
+      resendApiKey: undefined,
+      server: undefined,
+    });
+  });
+
   it('rejects unsupported email server protocols', async () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
     vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
@@ -625,19 +1084,16 @@ describe('server config accessors', () => {
     expect(() => getEmailConfig()).toThrow('RESEND_WEBHOOK_SECRET');
   });
 
-  it('rejects cleartext production node-pg database URLs', async () => {
+  it('defaults production node-pg database transport to verification', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
     const { getDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
-    const { ConfigurationError } =
-      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(() => getDatabaseConfig()).toThrow(ConfigurationError);
-    expect(() => getDatabaseConfig()).toThrow('DATABASE_URL');
+    expect(getDatabaseConfig().tlsPolicy).toBe('verify');
   });
 
-  it('accepts production node-pg database URLs with a secure sslmode', async () => {
+  it('rejects URL TLS parameters even when they request verification', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const databaseUrl = makeTestDatabaseUrl({
       host: 'db.example.com',
@@ -646,21 +1102,30 @@ describe('server config accessors', () => {
     vi.stubEnv('DATABASE_URL', databaseUrl);
     const { getDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
+    const { ConfigurationError } =
+      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(getDatabaseConfig().databaseUrl).toBe(databaseUrl);
+    expect(() => getDatabaseConfig()).toThrow(ConfigurationError);
+    expect(() => getDatabaseConfig()).toThrow(
+      'DATABASE_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_TLS_POLICY.'
+    );
   });
 
-  it('accepts cleartext production database URLs that target localhost', async () => {
+  it('allows an explicit loopback-only off policy for production verification', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const databaseUrl = makeTestDatabaseUrl();
     vi.stubEnv('DATABASE_URL', databaseUrl);
+    vi.stubEnv('DATABASE_TLS_POLICY', 'off');
     const { getDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
 
-    expect(getDatabaseConfig().databaseUrl).toBe(databaseUrl);
+    expect(getDatabaseConfig()).toMatchObject({
+      databaseUrl,
+      tlsPolicy: 'off',
+    });
   });
 
-  it('exempts Neon drivers from the production database TLS requirement', async () => {
+  it('requires the adapter-owned verify policy for Neon in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const databaseUrl = makeTestDatabaseUrl({ host: 'db.example.com' });
     vi.stubEnv('DATABASE_URL', databaseUrl);
@@ -668,15 +1133,21 @@ describe('server config accessors', () => {
     const { getDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
 
-    expect(getDatabaseConfig().databaseUrl).toBe(databaseUrl);
+    expect(getDatabaseConfig()).toMatchObject({
+      databaseUrl,
+      tlsPolicy: 'verify',
+    });
   });
 
-  it('rejects cleartext production migration database URLs', async () => {
+  it('rejects URL-owned TLS parameters for production migration URLs', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
     vi.stubEnv(
       'DATABASE_MIGRATION_URL',
-      makeTestDatabaseUrl({ host: 'db.example.com' })
+      makeTestDatabaseUrl({
+        host: 'db.example.com',
+        searchParams: { sslmode: 'verify-full' },
+      })
     );
     const { getMigrationDatabaseConfig } =
       await import('@/modules/kernel/infrastructure/config/database');
@@ -685,7 +1156,25 @@ describe('server config accessors', () => {
 
     expect(() => getMigrationDatabaseConfig()).toThrow(ConfigurationError);
     expect(() => getMigrationDatabaseConfig()).toThrow(
-      'DATABASE_MIGRATION_URL'
+      'DATABASE_MIGRATION_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with DATABASE_MIGRATION_TLS_POLICY.'
+    );
+  });
+
+  it('uses runtime URL ownership for shared migration URL parameters', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv(
+      'DATABASE_URL',
+      makeTestDatabaseUrl({
+        host: 'db.example.com',
+        searchParams: { sslmode: 'verify-full' },
+      })
+    );
+    vi.stubEnv('DATABASE_MIGRATION_TLS_POLICY', 'verify');
+    const { getMigrationDatabaseConfig } =
+      await import('@/modules/kernel/infrastructure/config/database');
+
+    expect(() => getMigrationDatabaseConfig()).toThrow(
+      'DATABASE_URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure runtime TLS with DATABASE_TLS_POLICY and migration TLS with DATABASE_MIGRATION_TLS_POLICY.'
     );
   });
 
@@ -726,14 +1215,21 @@ describe('server config accessors', () => {
     expect(getHttpConfig().trustedProxyDepth).toBe(1);
   });
 
-  it('rejects zero as a trusted proxy depth', async () => {
+  it('does not implicitly trust caller XFF in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TRUSTED_PROXY_DEPTH', undefined);
+    const { getHttpConfig } =
+      await import('@/modules/kernel/infrastructure/config/http');
+
+    expect(getHttpConfig().trustedProxyDepth).toBeUndefined();
+  });
+
+  it('accepts zero to disable proxy-header trust at a direct origin', async () => {
     vi.stubEnv('TRUSTED_PROXY_DEPTH', '0');
     const { getHttpConfig } =
       await import('@/modules/kernel/infrastructure/config/http');
-    const { ConfigurationError } =
-      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(() => getHttpConfig()).toThrow(ConfigurationError);
+    expect(getHttpConfig().trustedProxyDepth).toBe(0);
   });
 
   it('rejects a negative trusted proxy depth', async () => {

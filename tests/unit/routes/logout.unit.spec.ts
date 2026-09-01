@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   handleLogoutRequest: vi.fn(),
 }));
 
-vi.mock('@/modules/auth/backend', () => ({
+vi.mock('@/modules/user/backend', () => ({
   handleLogoutRequest: mocks.handleLogoutRequest,
 }));
 

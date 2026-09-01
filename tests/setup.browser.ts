@@ -3,8 +3,8 @@ import { cleanup } from 'vitest-browser-react';
 
 import '@/platform/styles/app.css';
 
-vi.mock('@/platform/env/client', () => ({
-  envClient: {
+vi.mock('@/platform/env/client', () => {
+  const envClient = {
     VITE_BASE_URL: 'http://localhost:3000',
     VITE_ENV_COLOR: 'gold',
     VITE_ENV_EMOJI: undefined,
@@ -12,7 +12,8 @@ vi.mock('@/platform/env/client', () => ({
     VITE_AUTH_SIGNUP_ENABLED: true,
     VITE_VISUAL_TEST: false,
     VITE_S3_BUCKET_PUBLIC_URL: 'http://127.0.0.1:9000/default',
-  },
-}));
+  };
+  return { envClient, getEnvClient: () => envClient };
+});
 
 afterEach(cleanup);

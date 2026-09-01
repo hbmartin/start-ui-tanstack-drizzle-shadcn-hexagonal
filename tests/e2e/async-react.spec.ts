@@ -9,7 +9,7 @@ import locales from '@/app/i18n';
 
 const t = locales[DEFAULT_LANGUAGE_KEY];
 
-test.describe('Async React search', () => {
+test.describe('Async React search', { tag: '@demo' }, () => {
   test.use({ storageState: ADMIN_FILE });
 
   test('manager search typing remains urgent while navigation commits', async ({
@@ -30,7 +30,7 @@ test.describe('Async React search', () => {
   });
 });
 
-test.describe('Async React navigation', () => {
+test.describe('Async React navigation', { tag: '@demo' }, () => {
   test.use({ storageState: USER_FILE });
 
   test('book grid navigation invokes the typed native view transition', async ({

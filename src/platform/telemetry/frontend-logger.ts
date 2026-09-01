@@ -1,13 +1,13 @@
 import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields';
 
-import { getTelemetry } from './runtime';
+import { telemetryProxy } from './runtime';
 import type { TelemetryLogLevel } from './types';
 
 const TELEMETRY_LOG_ENDPOINT = '/api/telemetry/logs';
 const MAX_BATCH_SIZE = 20;
 const FLUSH_DELAY_MS = 2_000;
 
-export type FrontendLogPayload = {
+type FrontendLogPayload = {
   level: TelemetryLogLevel;
   event: string;
   message?: string;
@@ -41,7 +41,7 @@ const serializeLogInput = (
   event: string,
   input: FrontendLoggerInput = {}
 ): FrontendLogPayload => {
-  const correlation = getTelemetry().currentCorrelation();
+  const correlation = telemetryProxy.currentCorrelation();
   const sanitized = sanitizeLogFields({
     details: input.details ?? {},
     error: errorMessage(input.error),

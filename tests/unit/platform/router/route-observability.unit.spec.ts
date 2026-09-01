@@ -30,7 +30,7 @@ describe('route observability helpers', () => {
 
     expect(telemetry.startSpan).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'route.loader /manager/books/$id',
+        name: 'route.loader',
         op: 'router.loader',
       }),
       expect.any(Function)

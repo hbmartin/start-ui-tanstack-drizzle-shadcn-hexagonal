@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { index, pgTable, text, uniqueIndex } from 'drizzle-orm/pg-core';
 
-import { genre } from '@/modules/genre/infrastructure/drizzle/schema';
+import { genre } from '@/modules/genre/persistence';
 import {
   createdAtColumn,
   idColumn,

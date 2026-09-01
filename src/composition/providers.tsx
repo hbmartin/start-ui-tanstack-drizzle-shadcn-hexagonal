@@ -2,14 +2,15 @@ import type { QueryClient } from '@tanstack/react-query';
 import { ThemeProvider } from 'next-themes';
 import { type ReactNode, useEffect } from 'react';
 import '@/platform/lib/temporal/polyfill';
-import '@/platform/lib/i18n';
+import '@/app/i18n/setup';
 import '@fontsource-variable/inter';
 
 import { QueryClientProvider } from '@/platform/lib/tanstack-query/provider';
 
 import { Sonner } from '@/platform/components/ui/sonner';
+import { CspProvider } from '@/platform/components/ui/csp-provider';
 
-import { getTelemetry } from '@/composition/telemetry';
+import { telemetryProxy } from '@/composition/telemetry';
 import { useCurrentSessionQuery } from '@/modules/auth/client';
 import { readCspNonceFromMeta } from '@/platform/http/csp-nonce';
 
@@ -22,17 +23,19 @@ export const Providers = (props: {
   const cspNonce = props.cspNonce ?? readCspNonceFromMeta();
 
   return (
-    <ThemeProvider
-      attribute="class"
-      storageKey="theme"
-      disableTransitionOnChange
-      nonce={cspNonce}
-      forcedTheme={props.forcedTheme}
-    >
-      <QueryClientProvider client={props.client}>
-        <ProviderContent>{props.children}</ProviderContent>
-      </QueryClientProvider>
-    </ThemeProvider>
+    <CspProvider nonce={cspNonce}>
+      <ThemeProvider
+        attribute="class"
+        storageKey="theme"
+        disableTransitionOnChange
+        nonce={cspNonce}
+        forcedTheme={props.forcedTheme}
+      >
+        <QueryClientProvider client={props.client}>
+          <ProviderContent>{props.children}</ProviderContent>
+        </QueryClientProvider>
+      </ThemeProvider>
+    </CspProvider>
   );
 };
 
@@ -51,11 +54,11 @@ function TelemetryUserSync() {
 
   useEffect(() => {
     if (!data?.user) {
-      getTelemetry().setUser(null);
+      telemetryProxy.setUser(null);
       return;
     }
 
-    getTelemetry().setUser({
+    telemetryProxy.setUser({
       email: data.user.email,
       id: data.user.id,
       role: data.user.role,

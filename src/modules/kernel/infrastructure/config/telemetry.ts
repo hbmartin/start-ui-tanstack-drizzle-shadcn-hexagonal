@@ -1,14 +1,48 @@
 import { z } from 'zod';
 
 import {
+  telemetryModes,
+  telemetrySignals,
+  type TelemetryMode,
+  type TelemetrySignal,
+} from '@/platform/telemetry';
+
+import {
   baseEnvSchema,
   isProdRuntimeEnvironment,
   parseEnv,
 } from './env-schema';
+import type { RuntimeEnv } from '@/platform/env/runtime';
 import { assertSecureUrlInProduction } from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
 const LOCAL_TELEMETRY_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+const telemetrySignalSet = new Set<string>(telemetrySignals);
+
+const requiredTelemetrySignalsSchema = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value, context): ReadonlyArray<TelemetrySignal> => {
+    if (value === undefined) return [];
+
+    const requestedSignals = value.split(',').map((signal) => signal.trim());
+    const invalidSignals = requestedSignals.filter(
+      (signal) => signal.length === 0 || !telemetrySignalSet.has(signal)
+    );
+    if (invalidSignals.length > 0) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'Expected a comma-separated subset of traces, metrics, logs, exceptions.',
+      });
+      return z.NEVER;
+    }
+
+    const requestedSignalSet = new Set(requestedSignals);
+    return telemetrySignals.filter((signal) => requestedSignalSet.has(signal));
+  });
 
 const stripIpv6Brackets = (value: string) =>
   value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
@@ -27,7 +61,6 @@ const telemetryEnvSchema = baseEnvSchema.extend({
   SENTRY_DSN: z.string().url().optional(),
   VITE_SENTRY_DSN: z.string().url().optional(),
   SENTRY_ENVIRONMENT: z.string().optional(),
-  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
   SENTRY_ORG: z.string().optional(),
   SENTRY_PROJECT: z.string().optional(),
   SENTRY_AUTH_TOKEN: z.string().optional(),
@@ -36,6 +69,12 @@ const telemetryEnvSchema = baseEnvSchema.extend({
   OTEL_SERVICE_NAME: z.string().optional(),
   OTEL_SERVICE_VERSION: z.string().optional(),
   OTEL_ENVIRONMENT: z.string().optional(),
+  TELEMETRY_MODE: z.enum(telemetryModes).optional(),
+  TELEMETRY_REQUIRED_SIGNALS: requiredTelemetrySignalsSchema,
+  OTEL_SDK_DISABLED: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim().toLowerCase() === 'true'),
   OTEL_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
   OTEL_LOCAL_SQLITE_ENABLED: z
     .enum(['true', 'false'])
@@ -53,10 +92,11 @@ const telemetryEnvSchema = baseEnvSchema.extend({
 });
 
 export type TelemetryConfig = {
+  mode: TelemetryMode;
+  requiredSignals: ReadonlyArray<TelemetrySignal>;
   dsn?: string;
   browserDsn?: string;
   environment?: string;
-  tracesSampleRate: number;
   org?: string;
   project?: string;
   authToken?: string;
@@ -65,6 +105,7 @@ export type TelemetryConfig = {
   serviceName: string;
   serviceVersion?: string;
   otelEnvironment?: string;
+  otelSdkDisabled: boolean;
   otelTracesSampleRate: number;
   localSqliteEnabled: boolean;
   localSqlitePath: string;
@@ -76,14 +117,23 @@ export type TelemetryConfig = {
 
 let cachedTelemetryConfig: TelemetryConfig | undefined;
 
-export function getTelemetryConfig(): TelemetryConfig {
-  if (cachedTelemetryConfig) return cachedTelemetryConfig;
-
-  const env = parseEnv(telemetryEnvSchema);
+export function parseTelemetryConfig(source?: RuntimeEnv): TelemetryConfig {
+  const env = parseEnv(telemetryEnvSchema, source);
   const isProduction = isProdRuntimeEnvironment(env);
-  if (isProduction && !env.OTEL_COLLECTOR_URL) {
+  const mode = env.TELEMETRY_MODE ?? 'optional';
+  if (env.OTEL_SDK_DISABLED && mode !== 'off') {
     throw new ConfigurationError(
-      'OTEL_COLLECTOR_URL is required in production telemetry configuration.'
+      'OTEL_SDK_DISABLED=true conflicts with TELEMETRY_MODE. Set TELEMETRY_MODE=off explicitly.'
+    );
+  }
+  if (mode === 'required' && env.TELEMETRY_REQUIRED_SIGNALS.length === 0) {
+    throw new ConfigurationError(
+      'TELEMETRY_MODE=required requires at least one TELEMETRY_REQUIRED_SIGNALS value.'
+    );
+  }
+  if (mode !== 'required' && env.TELEMETRY_REQUIRED_SIGNALS.length > 0) {
+    throw new ConfigurationError(
+      'TELEMETRY_REQUIRED_SIGNALS may only be set when TELEMETRY_MODE=required.'
     );
   }
   if (
@@ -107,11 +157,12 @@ export function getTelemetryConfig(): TelemetryConfig {
     env,
   });
 
-  cachedTelemetryConfig = {
+  return {
+    mode,
+    requiredSignals: env.TELEMETRY_REQUIRED_SIGNALS,
     dsn: env.SENTRY_DSN,
     browserDsn: env.VITE_SENTRY_DSN ?? env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT,
-    tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE ?? (isProduction ? 0.1 : 1),
     org: env.SENTRY_ORG,
     project: env.SENTRY_PROJECT,
     authToken: env.SENTRY_AUTH_TOKEN,
@@ -123,6 +174,7 @@ export function getTelemetryConfig(): TelemetryConfig {
       env.OTEL_ENVIRONMENT ??
       env.SENTRY_ENVIRONMENT ??
       (isProduction ? 'production' : 'local'),
+    otelSdkDisabled: mode === 'off',
     otelTracesSampleRate: env.OTEL_TRACES_SAMPLE_RATE ?? 1,
     localSqliteEnabled: env.OTEL_LOCAL_SQLITE_ENABLED ?? !isProduction,
     localSqlitePath:
@@ -132,5 +184,9 @@ export function getTelemetryConfig(): TelemetryConfig {
     rateLimitPerMinute: env.TELEMETRY_RATE_LIMIT_PER_MINUTE ?? 600,
     requireAuth: env.TELEMETRY_REQUIRE_AUTH,
   };
+}
+
+export function getTelemetryConfig(): TelemetryConfig {
+  cachedTelemetryConfig ??= parseTelemetryConfig();
   return cachedTelemetryConfig;
 }

@@ -7,5 +7,3 @@ export const createSsrAppHandlers = () => {
 
   return { init };
 };
-
-export type SsrAppHandlers = ReturnType<typeof createSsrAppHandlers>;

@@ -57,5 +57,3 @@ export type CurrentSessionLike = {
   };
   scopeKey: string;
 };
-
-export type AuthSessionLike = CurrentSessionLike;

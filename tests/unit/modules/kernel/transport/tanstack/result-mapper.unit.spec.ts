@@ -45,7 +45,7 @@ describe('tanstack result mapper', () => {
         Promise.resolve(
           Result.Error(
             new AppError({
-              code: 'DUPLICATE',
+              code: 'USER_DUPLICATE',
               category: 'conflict',
               status: 409,
               message: 'Duplicate',
@@ -58,7 +58,63 @@ describe('tanstack result mapper', () => {
       )
     ).rejects.toMatchObject({
       code: 'CONFLICT',
-      data: { target: ['email'] },
+      reason: 'already_exists',
+      target: 'user.email',
+    });
+  });
+
+  it.each([
+    { expected: 17, retryAfterSeconds: 17 },
+    { expected: 60, retryAfterSeconds: 9_999 },
+    { expected: 60, retryAfterSeconds: -1 },
+    { expected: 60, retryAfterSeconds: Number.NaN },
+    { expected: 2, retryAfterSeconds: 1.1 },
+  ])(
+    'bounds $retryAfterSeconds to $expected while mapping rate-limit app errors',
+    async ({ expected, retryAfterSeconds }) => {
+      await expect(
+        unwrapApplicationResult(
+          Promise.resolve(
+            Result.Error(
+              new AppError({
+                code: 'RATE_LIMITED',
+                category: 'rate_limit',
+                status: 429,
+                retryAfterSeconds,
+              })
+            )
+          ),
+          handlers
+        )
+      ).rejects.toMatchObject({
+        code: 'TOO_MANY_REQUESTS',
+        reason: 'rate_limited',
+        retryAfterSeconds: expected,
+        status: 429,
+        target: 'request',
+      });
+    }
+  );
+
+  it('ignores code-specific public overrides when the category disagrees', async () => {
+    await expect(
+      unwrapApplicationResult(
+        Promise.resolve(
+          Result.Error(
+            new AppError({
+              code: 'USER_DUPLICATE',
+              category: 'bad_request',
+              status: 400,
+            })
+          )
+        ),
+        handlers
+      )
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      reason: 'invalid_input',
+      status: 400,
+      target: 'request',
     });
   });
 
@@ -81,8 +137,8 @@ describe('tanstack result mapper', () => {
       )
     ).rejects.toMatchObject({
       code: 'INTERNAL_SERVER_ERROR',
-      message: 'Internal server error',
-      data: undefined,
+      reason: 'internal_error',
+      target: 'system',
     });
   });
 
@@ -105,8 +161,8 @@ describe('tanstack result mapper', () => {
       )
     ).rejects.toMatchObject({
       code: 'INTERNAL_SERVER_ERROR',
-      message: 'Internal server error',
-      data: undefined,
+      reason: 'internal_error',
+      target: 'system',
     });
   });
 
@@ -125,6 +181,43 @@ describe('tanstack result mapper', () => {
       )
     ).rejects.toMatchObject({
       code: 'UNAUTHORIZED',
+      reason: 'authentication_required',
+      target: 'authentication',
+    });
+  });
+
+  it('never copies hostile exposed details into the public DTO', async () => {
+    const failure = unwrapApplicationResult(
+      Promise.resolve(
+        Result.Error(
+          new AppError({
+            code: 'USER_DUPLICATE',
+            category: 'conflict',
+            status: 409,
+            message: 'duplicate at db.internal?token=secret',
+            details: {
+              cause: { stack: 'provider stack' },
+              href: 'https://internal.example/path?token=secret',
+              provider: { apiKey: 'secret' },
+              target: ['email', 'arbitrary-provider-field'],
+            },
+            exposeDetails: true,
+          })
+        )
+      ),
+      handlers
+    );
+
+    const error = await failure.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ServerFnError);
+    expect(JSON.stringify(error)).not.toMatch(
+      /message|cause|stack|provider|href|internal\.example|db\.internal|secret/iu
+    );
+    expect(JSON.parse(JSON.stringify(error))).toEqual({
+      correlationId: expect.any(String),
+      reason: 'already_exists',
+      target: 'user.email',
+      version: 1,
     });
   });
 });

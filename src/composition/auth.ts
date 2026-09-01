@@ -5,16 +5,20 @@ import {
   createAuthUseCases,
   type SecondaryStore,
   type SessionGateway,
-  type UserAdminGateway,
 } from '@/modules/auth';
 import {
   type Auth,
   createAuth,
 } from '@/modules/auth/infrastructure/better-auth/auth';
-import { isBlockedBetterAuthHttpPath } from '@/modules/auth/infrastructure/better-auth/auth-http-exposure';
+import {
+  isBlockedBetterAuthHttpRequest,
+  TRUSTED_AUTH_CLIENT_IP_HEADER,
+  withTrustedAuthClientIp,
+} from '@/modules/auth/infrastructure/better-auth/auth-http-exposure';
 import { AuthorizationGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/authorization-gateway-better-auth';
+import { createAuthHttpRateLimiter } from '@/modules/auth/infrastructure/better-auth/http-rate-limiter';
+import { createBetterAuthRateLimitStorage } from '@/modules/auth/infrastructure/better-auth/rate-limit-storage-adapter';
 import { SessionGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/session-gateway-better-auth';
-import { UserAdminGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/user-admin-gateway-better-auth';
 import { InMemorySecondaryStore } from '@/modules/auth/infrastructure/secondary-store/in-memory-secondary-store';
 import { UpstashSecondaryStore } from '@/modules/auth/infrastructure/secondary-store/upstash-secondary-store';
 import { ConfigurationError } from '@/modules/kernel';
@@ -22,8 +26,11 @@ import {
   createTelemetryLogger,
   getAuthProviderConfig,
   getBetterAuthConfig,
+  getHttpConfig,
   getRedisConfig,
+  isProdRuntimeEnvironment,
 } from '@/modules/kernel/backend';
+import { createTrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 
 import { AuthEmailPortEmailGateway } from './auth-email-port';
 import { getEmailGateway } from './email';
@@ -37,16 +44,15 @@ export type AuthOverrides = {
   sessionGateway?: SessionGateway;
   authorizationGateway?: AuthorizationGateway;
   authEmailPort?: AuthEmailPort;
-  userAdminGateway?: UserAdminGateway;
 };
 
 type AuthInstanceOverrides = {
   authEmailPort?: AuthEmailPort;
-  secondaryStore?: SecondaryStore;
 };
 
 type AuthHttpOverrides = AuthInstanceOverrides & {
   authHttpGateway?: AuthHttpGateway;
+  secondaryStore?: SecondaryStore;
 };
 
 const buildAuthEmailPort = (overrides?: AuthInstanceOverrides) =>
@@ -63,12 +69,18 @@ const buildAuthEmailPort = (overrides?: AuthInstanceOverrides) =>
  */
 const buildSecondaryStore = (): SecondaryStore => {
   const redisConfig = getRedisConfig();
-  return redisConfig
-    ? new UpstashSecondaryStore({
-        config: redisConfig,
-        telemetry: telemetryProxy,
-      })
-    : new InMemorySecondaryStore();
+  if (redisConfig) {
+    return new UpstashSecondaryStore({
+      config: redisConfig,
+      telemetry: telemetryProxy,
+    });
+  }
+  if (isProdRuntimeEnvironment()) {
+    throw new ConfigurationError(
+      'Production auth requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for distributed fail-closed rate limiting.'
+    );
+  }
+  return new InMemorySecondaryStore();
 };
 
 const secondaryStoreFactory = createCachedFactory<SecondaryStore, never>(
@@ -90,42 +102,84 @@ const buildAuth = (overrides?: AuthInstanceOverrides) => {
   assertBetterAuthProvider();
   return createAuth({
     authEmailPort: buildAuthEmailPort(overrides),
-    secondaryStore: overrides?.secondaryStore ?? getSecondaryStore(),
   });
 };
 
 const authFactory = createCachedFactory<Auth, AuthInstanceOverrides>(buildAuth);
 
-export const getAuth = (overrides?: AuthInstanceOverrides) =>
+const getAuth = (overrides?: AuthInstanceOverrides) =>
   authFactory.get(overrides);
 
-export const auth = new Proxy({} as Auth, {
-  get(_target, prop) {
-    const instance = getAuth();
-    const value = Reflect.get(instance, prop, instance);
-    return typeof value === 'function' ? value.bind(instance) : value;
-  },
-});
+export const clearProviderAuthSession = (request: Request) =>
+  getAuth().api.signOut({
+    asResponse: true,
+    headers: request.headers,
+  });
+
+const withStandardRetryAfter = (response: Response) => {
+  if (response.status !== 429 || response.headers.has('Retry-After')) {
+    return response;
+  }
+  const { otpSendWindowSeconds, rateLimitWindowSeconds } =
+    getBetterAuthConfig();
+  const maximum = Math.max(otpSendWindowSeconds, rateLimitWindowSeconds);
+  const providerValue = response.headers.get('X-Retry-After');
+  const parsed =
+    providerValue && /^\d+$/u.test(providerValue)
+      ? Number(providerValue)
+      : maximum;
+  const retryAfter = Math.min(maximum, Math.max(1, parsed));
+  const headers = new Headers(response.headers);
+  headers.set('Retry-After', String(retryAfter));
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+};
 
 const buildAuthHttpGateway = (
   overrides?: AuthHttpOverrides
 ): AuthHttpGateway => {
   if (overrides?.authHttpGateway) return overrides.authHttpGateway;
-  const authInstance = getAuth(overrides);
-  const { adminEndpointsEnabled, openApiEnabled } = getBetterAuthConfig();
+  const secondaryStore = overrides?.secondaryStore ?? getSecondaryStore();
+  const authConfig = getBetterAuthConfig();
+  const authInstance = getAuth({
+    authEmailPort: overrides?.authEmailPort,
+  });
+  const rateLimiter = createAuthHttpRateLimiter({
+    config: authConfig,
+    storage: createBetterAuthRateLimitStorage({
+      defaultWindowSeconds: authConfig.rateLimitWindowSeconds,
+      hmacSecret: authConfig.rateLimitHmacSecret,
+      store: secondaryStore,
+    }),
+  });
 
   return {
-    handle: (request) => {
-      const { pathname } = new URL(request.url, 'http://localhost');
-      if (
-        isBlockedBetterAuthHttpPath(pathname, {
-          adminEndpointsEnabled,
-          openApiEnabled,
-        })
-      ) {
+    handle: async (request, runtimeProfile) => {
+      if (await isBlockedBetterAuthHttpRequest(request)) {
         return new Response('Not Found', { status: 404 });
       }
-      return authInstance.handler(request);
+      const trustedRequest = withTrustedAuthClientIp(
+        request,
+        createTrustedClientIpAdapter({
+          runtimeProfile,
+          trustedProxyDepth: getHttpConfig().trustedProxyDepth,
+        })
+      );
+      if (
+        isProdRuntimeEnvironment() &&
+        !trustedRequest.headers.has(TRUSTED_AUTH_CLIENT_IP_HEADER)
+      ) {
+        return Response.json(
+          { error: 'rate_limiter_unavailable' },
+          { headers: { 'Retry-After': '60' }, status: 503 }
+        );
+      }
+      const rateLimited = await rateLimiter.check(trustedRequest);
+      if (rateLimited) return rateLimited;
+      return withStandardRetryAfter(await authInstance.handler(trustedRequest));
     },
   };
 };
@@ -153,11 +207,8 @@ const buildAuthUseCases = (overrides?: AuthOverrides) => {
       ),
     authorizationGateway:
       overrides?.authorizationGateway ??
-      new AuthorizationGatewayBetterAuth(authInstance, telemetry),
+      new AuthorizationGatewayBetterAuth(undefined, telemetry),
     authEmailPort,
-    userAdminGateway:
-      overrides?.userAdminGateway ??
-      new UserAdminGatewayBetterAuth(authInstance, undefined, telemetry),
   });
 };
 
@@ -173,6 +224,3 @@ export const __resetAuthComposition = () => {
   authHttpFactory.reset();
   secondaryStoreFactory.reset();
 };
-
-export { createAuth };
-export type { Auth };

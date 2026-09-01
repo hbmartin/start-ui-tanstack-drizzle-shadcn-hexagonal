@@ -2,6 +2,7 @@ import { makeTestDatabaseUrl } from '@tests/server/test-database-url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
+import type { MigrationDatabaseConfig } from '@/modules/kernel/infrastructure/config/database';
 import type {
   MigrationDatabase,
   MigrationDatabaseClient,
@@ -11,10 +12,13 @@ const mocks = vi.hoisted(() => ({
   migrationClient: {
     connect: vi.fn(),
     end: vi.fn(),
+    on: vi.fn(),
     query: vi.fn(),
   },
   neonClientConfig: undefined as string | undefined,
-  nodePgClientConfig: undefined as { connectionString: string } | undefined,
+  nodePgClientConfig: undefined as
+    | { connectionString: string; ssl: boolean | object }
+    | undefined,
   drizzleNeonWebsocket: vi.fn(),
   drizzleNodePg: vi.fn(),
   migrateNeonWebsocket: vi.fn(),
@@ -24,7 +28,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('pg', () => ({
   Client: class {
-    constructor(config: { connectionString: string }) {
+    constructor(config: { connectionString: string; ssl: boolean | object }) {
       mocks.nodePgClientConfig = config;
       return mocks.migrationClient;
     }
@@ -61,6 +65,10 @@ vi.mock('drizzle-orm/node-postgres/migrator', () => ({
   migrate: mocks.migrateNodePg,
 }));
 
+vi.mock('@/modules/kernel/infrastructure/config/application', () => ({
+  getApplicationIdentity: () => ({ name: 'Acme Test', slug: 'acme-test' }),
+}));
+
 const dbWithDriver = (driver: MigrationDatabase['$migrationDriver']) =>
   ({
     $migrationDriver: driver,
@@ -70,6 +78,7 @@ const dbWithDriver = (driver: MigrationDatabase['$migrationDriver']) =>
 describe('migrateDatabase', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.webSocketConstructor = undefined;
     mocks.migrationClient.query.mockResolvedValue({ rows: [] });
     mocks.migrationClient.query.mockResolvedValueOnce({
       rows: [{ acquired: true }],
@@ -86,14 +95,14 @@ describe('migrateDatabase', () => {
     expect(mocks.migrationClient.query).toHaveBeenNthCalledWith(
       1,
       'SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired',
-      ['start-ui-web', 'drizzle-migrations']
+      ['acme-test', 'drizzle-migrations']
     );
     expect(mocks.migrateNodePg).toHaveBeenCalledWith(db, {
       migrationsFolder: 'drizzle/migrations',
     });
     expect(mocks.migrationClient.query).toHaveBeenLastCalledWith(
       'SELECT pg_advisory_unlock(hashtext($1), hashtext($2))',
-      ['start-ui-web', 'drizzle-migrations']
+      ['acme-test', 'drizzle-migrations']
     );
   });
 
@@ -138,7 +147,7 @@ describe('migrateDatabase', () => {
 
     expect(mocks.migrationClient.query).toHaveBeenLastCalledWith(
       'SELECT pg_advisory_unlock(hashtext($1), hashtext($2))',
-      ['start-ui-web', 'drizzle-migrations']
+      ['acme-test', 'drizzle-migrations']
     );
   });
 });
@@ -146,6 +155,9 @@ describe('migrateDatabase', () => {
 describe('createMigrationDbClient', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.neonClientConfig = undefined;
+    mocks.nodePgClientConfig = undefined;
+    mocks.webSocketConstructor = undefined;
     mocks.migrationClient.connect.mockResolvedValue(undefined);
     mocks.migrationClient.end.mockResolvedValue(undefined);
     mocks.drizzleNodePg.mockImplementation((client) => ({ $client: client }));
@@ -162,14 +174,22 @@ describe('createMigrationDbClient', () => {
     const db = await createMigrationDbClient({
       databaseUrl,
       driver: 'node-pg',
+      tlsPolicy: 'verify',
     });
 
-    expect(mocks.nodePgClientConfig).toEqual({ connectionString: databaseUrl });
+    expect(mocks.nodePgClientConfig).toEqual({
+      connectionString: databaseUrl,
+      ssl: true,
+    });
     expect(mocks.drizzleNodePg).toHaveBeenCalledWith(mocks.migrationClient, {
       schema: expect.any(Object),
       casing: 'camelCase',
     });
     expect(mocks.migrationClient.connect).toHaveBeenCalledOnce();
+    expect(mocks.migrationClient.on).toHaveBeenCalledWith(
+      'error',
+      expect.any(Function)
+    );
     expect(db.$migrationDriver).toBe('node-pg');
   });
 
@@ -181,6 +201,7 @@ describe('createMigrationDbClient', () => {
     const db = await createMigrationDbClient({
       databaseUrl,
       driver: 'neon-websocket',
+      tlsPolicy: 'verify',
     });
 
     expect(mocks.neonClientConfig).toBe(databaseUrl);
@@ -192,6 +213,126 @@ describe('createMigrationDbClient', () => {
       casing: 'camelCase',
     });
     expect(mocks.migrationClient.connect).toHaveBeenCalledOnce();
+    expect(mocks.migrationClient.on).toHaveBeenCalledWith(
+      'error',
+      expect.any(Function)
+    );
     expect(db.$migrationDriver).toBe('neon-websocket');
+  });
+
+  it('rejects migration URL overrides before constructing a client', async () => {
+    const databaseUrl = `${makeTestDatabaseUrl()}?sslmode=disable`;
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl,
+        driver: 'node-pg',
+        tlsPolicy: 'verify',
+      })
+    ).rejects.toThrow(
+      'Migration database client URL must not configure endpoint or TLS parameters in the URL (sslmode); remove those parameters, keep the endpoint in the URL authority, and configure TLS with the caller-provided policy.'
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+  });
+
+  it('rejects unsupported programmatic migration drivers before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl(),
+        driver: 'neon-http',
+        tlsPolicy: 'verify',
+      } as unknown as MigrationDatabaseConfig)
+    ).rejects.toThrow(
+      "Migration database client driver 'neon-http' is not supported because Neon HTTP migrations are not transactional."
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+    expect(mocks.neonClientConfig).toBeUndefined();
+  });
+
+  it('rejects arbitrary programmatic migration drivers before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl(),
+        driver: 'mysql',
+        tlsPolicy: 'verify',
+      } as unknown as MigrationDatabaseConfig)
+    ).rejects.toThrow(
+      'Migration database client driver must be node-pg or neon-websocket.'
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+    expect(mocks.neonClientConfig).toBeUndefined();
+  });
+
+  it('rejects transaction-pooled programmatic config before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl({
+          host: 'ep-example-pooler.us-east-1.aws.neon.tech',
+        }),
+        driver: 'node-pg',
+        tlsPolicy: 'verify',
+      })
+    ).rejects.toThrow(
+      'Migration database client URL must use a direct or session-sticky PostgreSQL connection. Transaction-pooler URLs are not safe for migrations.'
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+  });
+
+  it('rejects unknown programmatic TLS policies before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl(),
+        driver: 'node-pg',
+        tlsPolicy: 'OFF',
+      } as unknown as MigrationDatabaseConfig)
+    ).rejects.toThrow(
+      "Database TLS policy must be 'off', 'encrypt', or 'verify'."
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+    expect(mocks.neonClientConfig).toBeUndefined();
+  });
+
+  it('uses natural policy remediation for programmatic migration config', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: makeTestDatabaseUrl({ host: 'db.example.com' }),
+        driver: 'node-pg',
+        tlsPolicy: 'off',
+      })
+    ).rejects.toThrow(
+      "Migration database client URL must not use TLS policy 'off' for a remote database; select a 'verify' policy or target a loopback endpoint."
+    );
+    expect(mocks.nodePgClientConfig).toBeUndefined();
+  });
+
+  it('rejects malformed migration URLs before constructing a client', async () => {
+    const { createMigrationDbClient } =
+      await import('@/modules/kernel/infrastructure/db/migrate');
+
+    await expect(
+      createMigrationDbClient({
+        databaseUrl: 'app',
+        driver: 'node-pg',
+        tlsPolicy: 'verify',
+      })
+    ).rejects.toThrow(ConfigurationError);
+    expect(mocks.nodePgClientConfig).toBeUndefined();
   });
 });

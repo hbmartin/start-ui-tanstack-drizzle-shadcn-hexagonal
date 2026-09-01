@@ -8,13 +8,52 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  scan-pr:
-    name: Scan PR Diff
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+  dependency-paths:
+    name: Detect dependency changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect dependency inputs
+        id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          changed_files="$(mktemp)"
+          trap 'rm -f "${changed_files}"' EXIT
+          git diff --name-only -z "${BASE_SHA}...${HEAD_SHA}" > "${changed_files}"
+
+          relevant=false
+          while IFS= read -r -d '' file; do
+            case "${file}" in
+              .github/workflows/osv-scanner.yml|package.json|pnpm-lock.yaml|pnpm-workspace.yaml|tools/*/package.json)
+                relevant=true
+                break
+                ;;
+            esac
+          done < "${changed_files}"
+
+          echo "relevant=${relevant}" >> "${GITHUB_OUTPUT}"
+
+  scan-pr-run:
+    name: Run OSV scan
+    needs: dependency-paths
+    if: github.event.pull_request.draft == false && needs.dependency-paths.outputs.relevant == 'true'
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
     permissions:
       contents: read
@@ -25,3 +64,38 @@ jobs:
     with:
       scan-args: |-
         --lockfile=pnpm-lock.yaml
+
+  scan-pr:
+    name: Scan PR Diff
+    needs: [dependency-paths, scan-pr-run]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful OSV result
+        env:
+          DETECTION_RESULT: ${{ needs.dependency-paths.result }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          RELEVANT: ${{ needs.dependency-paths.outputs.relevant }}
+          SCAN_RESULT: ${{ needs.scan-pr-run.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "${DETECTION_RESULT}" != 'success' ]; then
+            echo "Dependency input detection failed (${DETECTION_RESULT})." >&2
+            exit 1
+          fi
+
+          case "${RELEVANT}" in
+            true)
+              if [ "${IS_DRAFT}" != 'true' ] && [ "${SCAN_RESULT}" != 'success' ]; then
+                echo "OSV scanning failed (${SCAN_RESULT})." >&2
+                exit 1
+              fi
+              ;;
+            false) ;;
+            *)
+              echo "Dependency input detection returned an invalid result." >&2
+              exit 1
+              ;;
+          esac

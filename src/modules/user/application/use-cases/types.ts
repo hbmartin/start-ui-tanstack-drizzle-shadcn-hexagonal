@@ -1,21 +1,31 @@
 import type { Logger } from '@/modules/kernel/application/ports/logger';
 import type { PermissionChecker } from '@/modules/kernel/application/ports/permission-checker';
+import type { ResultTransactionRunner } from '@/modules/kernel/application/ports/result-transaction-runner';
 import type { ApplicationResult } from '@/modules/kernel/application/result';
+import type { AuditPort } from '@/modules/audit';
 
-import type { UserAuthGateway } from '../ports/user-auth-gateway';
 import type {
   UserCreateRepositoryOutcome,
   UserGetRepositoryOutcome,
   UserListRepositoryOutcome,
   UserRepository,
-  UserSessionRevocationTargetRepositoryOutcome,
   UserSessionsListRepositoryOutcome,
   UserUpdateRepositoryOutcome,
 } from '../ports/user-repository';
+import type {
+  UserSecurityRepository,
+  UserSessionRevokedRepositoryOutcome,
+} from '../ports/user-security-repository';
+
+export type UserTransactionContext = {
+  audit: AuditPort;
+  securityRepository: UserSecurityRepository;
+  userRepository: UserRepository;
+};
 
 export type UserUseCaseDeps = {
   userRepository: UserRepository;
-  userAuthGateway: UserAuthGateway;
+  transactionRunner: ResultTransactionRunner<UserTransactionContext>;
   permissionChecker: PermissionChecker;
   logger: Logger;
 };
@@ -37,6 +47,7 @@ export type UserUpdateOutcome =
 
 export type UserDeleteOutcome =
   | { type: 'user_deleted' }
+  | { type: 'user_not_found' }
   | UserForbiddenOutcome
   | UserSelfOutcome;
 
@@ -46,16 +57,24 @@ export type UserSessionsListOutcome =
 
 export type UserRevokeSessionsOutcome =
   | { type: 'user_sessions_revoked' }
+  | { type: 'user_sessions_unchanged' }
   | UserForbiddenOutcome
   | UserSelfOutcome;
 
 export type UserRevokeSessionOutcome =
   | { type: 'user_session_revoked' }
   | Extract<
-      UserSessionRevocationTargetRepositoryOutcome,
+      UserSessionRevokedRepositoryOutcome,
       { type: 'user_session_not_found' }
     >
   | UserForbiddenOutcome
   | UserSelfOutcome;
+
+export type UserSignOutOutcome =
+  | { type: 'user_signed_out' }
+  | Extract<
+      UserSessionRevokedRepositoryOutcome,
+      { type: 'user_session_not_found' }
+    >;
 
 export type UserResult<TOutcome> = ApplicationResult<TOutcome>;

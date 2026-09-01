@@ -10,31 +10,45 @@ type InternalBrand<TValue, TBrand extends string> = TValue & {
 const zBrandedNonEmptyString = <TBrand extends string>() =>
   z.string().trim().min(1).brand<TBrand>();
 
-export const zUserIdSchema = zBrandedNonEmptyString<'UserId'>();
-export const zBookIdSchema = zBrandedNonEmptyString<'BookId'>();
-export const zGenreIdSchema = zBrandedNonEmptyString<'GenreId'>();
-export const zSessionIdSchema = zBrandedNonEmptyString<'SessionId'>();
-export const zScopeKeySchema = zBrandedNonEmptyString<'ScopeKey'>();
-export const zAuthorIdSchema = zBrandedNonEmptyString<'AuthorId'>();
-export const zPublisherIdSchema = zBrandedNonEmptyString<'PublisherId'>();
-export const zBookCoverObjectKeySchema =
-  zBrandedNonEmptyString<'BookCoverObjectKey'>();
-export const zEmailStatusIdSchema = zBrandedNonEmptyString<'EmailStatusId'>();
-export const zEmailProviderMessageIdSchema =
-  zBrandedNonEmptyString<'EmailProviderMessageId'>();
-export const zEmailIdempotencyKeySchema =
-  zBrandedNonEmptyString<'EmailIdempotencyKey'>();
-export const zEmailWebhookEventIdSchema =
-  zBrandedNonEmptyString<'EmailWebhookEventId'>();
-export const zEmailRecipientListSchema =
-  zBrandedNonEmptyString<'EmailRecipientList'>();
-export const zOtpCodeSchema = z.string().trim().length(6).brand<'OtpCode'>();
-export const zLanguageCodeSchema = zBrandedNonEmptyString<'LanguageCode'>();
-export const zEmailAddressSchema = z
-  .string()
-  .trim()
-  .pipe(z.email())
-  .brand<'EmailAddress'>();
+// TypeScript instantiation aliases keep one direct, statically provable
+// constructor while every call still returns a fresh mutable Zod instance.
+export const zUserId = zBrandedNonEmptyString<'UserId'>;
+export const zBookId = zBrandedNonEmptyString<'BookId'>;
+export const zGenreId = zBrandedNonEmptyString<'GenreId'>;
+export const zSessionId = zBrandedNonEmptyString<'SessionId'>;
+export const zScopeKey = zBrandedNonEmptyString<'ScopeKey'>;
+export const zAuthorId = zBrandedNonEmptyString<'AuthorId'>;
+export const zPublisherId = zBrandedNonEmptyString<'PublisherId'>;
+export const zBookCoverObjectKey = zBrandedNonEmptyString<'BookCoverObjectKey'>;
+export const zEmailStatusId = zBrandedNonEmptyString<'EmailStatusId'>;
+export const zEmailProviderMessageId =
+  zBrandedNonEmptyString<'EmailProviderMessageId'>;
+export const zEmailIdempotencyKey =
+  zBrandedNonEmptyString<'EmailIdempotencyKey'>;
+export const zEmailWebhookEventId =
+  zBrandedNonEmptyString<'EmailWebhookEventId'>;
+export const zEmailRecipientList = zBrandedNonEmptyString<'EmailRecipientList'>;
+export const zOtpCode = () => z.string().trim().length(6).brand<'OtpCode'>();
+export const zLanguageCode = zBrandedNonEmptyString<'LanguageCode'>;
+export const zEmailAddress = () =>
+  z.string().trim().pipe(z.email()).brand<'EmailAddress'>();
+
+const zUserIdSchema = zUserId();
+const zBookIdSchema = zBookId();
+const zGenreIdSchema = zGenreId();
+const zSessionIdSchema = zSessionId();
+const zScopeKeySchema = zScopeKey();
+const zAuthorIdSchema = zAuthorId();
+const zPublisherIdSchema = zPublisherId();
+const zBookCoverObjectKeySchema = zBookCoverObjectKey();
+const zEmailStatusIdSchema = zEmailStatusId();
+const zEmailProviderMessageIdSchema = zEmailProviderMessageId();
+const zEmailIdempotencyKeySchema = zEmailIdempotencyKey();
+const zEmailWebhookEventIdSchema = zEmailWebhookEventId();
+const zEmailRecipientListSchema = zEmailRecipientList();
+const zOtpCodeSchema = zOtpCode();
+const zLanguageCodeSchema = zLanguageCode();
+const zEmailAddressSchema = zEmailAddress();
 
 export type UserId = z.infer<typeof zUserIdSchema>;
 export type BookId = z.infer<typeof zBookIdSchema>;
@@ -163,20 +177,3 @@ export const toCacheKey = (value: string): ParseResult<CacheKey> => {
     ? Result.Error(result.getError())
     : Result.Ok(result.get() as CacheKey);
 };
-
-export const zUserId = () => zUserIdSchema;
-export const zBookId = () => zBookIdSchema;
-export const zGenreId = () => zGenreIdSchema;
-export const zSessionId = () => zSessionIdSchema;
-export const zScopeKey = () => zScopeKeySchema;
-export const zAuthorId = () => zAuthorIdSchema;
-export const zPublisherId = () => zPublisherIdSchema;
-export const zBookCoverObjectKey = () => zBookCoverObjectKeySchema;
-export const zEmailStatusId = () => zEmailStatusIdSchema;
-export const zEmailProviderMessageId = () => zEmailProviderMessageIdSchema;
-export const zEmailIdempotencyKey = () => zEmailIdempotencyKeySchema;
-export const zEmailWebhookEventId = () => zEmailWebhookEventIdSchema;
-export const zEmailRecipientList = () => zEmailRecipientListSchema;
-export const zOtpCode = () => zOtpCodeSchema;
-export const zLanguageCode = () => zLanguageCodeSchema;
-export const zEmailAddress = () => zEmailAddressSchema;

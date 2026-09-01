@@ -6,7 +6,6 @@ import { useTranslation } from 'react-i18next';
 import { match, P } from 'ts-pattern';
 
 import { cn } from '@/platform/lib/tailwind/utils';
-import { formatRelativeDate } from '@/platform/lib/temporal/date-time';
 
 import {
   ManagerPageLayout as PageLayout,
@@ -34,12 +33,14 @@ import {
 import { ResponsiveIconButtonLink } from '@/platform/components/ui/responsive-icon-button-link';
 import { SearchButton } from '@/platform/components/ui/search-button';
 import { SearchInput } from '@/platform/components/ui/search-input';
+import { useRelativeDateFormatter } from '@/platform/hooks/use-relative-date-formatter';
 
 import { useCurrentScopeKey } from '@/modules/auth/client';
 import { userQueries } from '@/modules/user/client';
 
 export const PageUsers = (props: { search: { searchTerm?: string } }) => {
   const { i18n, t } = useTranslation(['user']);
+  const formatRelativeDate = useRelativeDateFormatter(i18n.language);
   const router = useRouter();
   const scopeKey = useCurrentScopeKey();
 
@@ -183,9 +184,7 @@ export const PageUsers = (props: { search: { searchTerm?: string } }) => {
                         {item.onboardedAt ? (
                           <>
                             {t('user:common.onboardingStatus.onboardedAt', {
-                              time: formatRelativeDate(item.onboardedAt, {
-                                locale: i18n.language,
-                              }),
+                              time: formatRelativeDate(item.onboardedAt),
                             })}
                           </>
                         ) : (

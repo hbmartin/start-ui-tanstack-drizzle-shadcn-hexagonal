@@ -5,9 +5,9 @@ import {
   authIdentity,
   session,
   user,
-} from '@/modules/auth/infrastructure/drizzle/schema';
-import { book } from '@/modules/book/infrastructure/drizzle/schema';
-import { genre } from '@/modules/genre/infrastructure/drizzle/schema';
+} from '@/modules/auth/persistence';
+import { book } from '@/modules/book/persistence';
+import { genre } from '@/modules/genre/persistence';
 
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),

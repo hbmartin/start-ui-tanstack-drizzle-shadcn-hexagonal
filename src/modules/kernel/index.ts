@@ -5,6 +5,7 @@ export type * from './application/ports/id-generator';
 export * from './application/ports/logger';
 export type * from './application/ports/object-storage';
 export type * from './application/ports/permission-checker';
+export type * from './application/ports/result-transaction-runner';
 export type * from './application/ports/transaction-runner';
 export * from './application/result';
 export * from './domain/errors/app-error';
@@ -13,3 +14,8 @@ export * from './domain/errors/domain-error';
 export * from './domain/errors/id-validation-error';
 export * from './domain/errors/upload-rejected-error';
 export * from './domain/ids';
+export {
+  ACTIVE_CAPABILITY_PRESET,
+  ENABLED_CAPABILITY_IDS,
+  isCapabilityEnabled,
+} from './domain/capability-selection.generated';

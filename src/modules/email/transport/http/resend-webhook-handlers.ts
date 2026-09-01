@@ -14,7 +14,7 @@ import {
   toEmailRecipientList,
   toEmailWebhookEventId,
 } from '@/modules/kernel/domain/ids';
-import { getClientIp } from '@/platform/http/get-client-ip';
+import type { TrustedClientIpAdapter } from '@/platform/http/get-client-ip';
 import {
   defaultRateLimiter,
   type RateLimiter,
@@ -38,8 +38,10 @@ type ResendWebhookHandlerDeps = {
   logger?: Pick<Logger, 'warn'>;
   maxBodyBytes?: number;
   verifier: ResendWebhookVerifier;
-  /** Trusted reverse-proxy hops in front of the app (see `getClientIp`). */
-  trustedProxyDepth?: number;
+  /** Profile-owned, entrypoint-selected client-IP provenance. */
+  trustedClientIpAdapter: TrustedClientIpAdapter;
+  /** Fail closed when trusted client-IP provenance is absent. */
+  requireTrustedClientIp: boolean;
   /** Per-IP webhook hits allowed per minute before returning HTTP 429. */
   rateLimitPerMinute?: number;
   /** Injectable limiter; defaults to the shared process-wide limiter. */
@@ -49,11 +51,11 @@ type ResendWebhookHandlerDeps = {
 const DEFAULT_RESEND_WEBHOOK_MAX_BYTES = 1_000_000;
 
 /**
- * Best-effort per-IP cap on inbound Resend webhook requests, applied BEFORE the
- * (more expensive) Svix signature verification so unsigned floods are shed
- * cheaply. Fail-closed verification and replay dedupe still run afterwards. This
- * limiter is in-memory/per-process; durable cross-instance limits belong at the
- * edge/WAF (see `docs/security-rate-limiting.md`).
+ * Production-fail-closed per-IP cap on inbound Resend webhook requests, applied
+ * before the more expensive Svix signature verification so unsigned floods are
+ * shed cheaply. Fail-closed verification and replay dedupe still run afterwards.
+ * This limiter is in-memory/per-process; durable cross-instance limits belong at
+ * the edge/WAF (see `docs/security-rate-limiting.md`).
  */
 const DEFAULT_RESEND_WEBHOOK_RATE_LIMIT_PER_MINUTE = 120;
 const RESEND_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -252,7 +254,8 @@ export const createResendWebhookHandlers = ({
   logger,
   maxBodyBytes,
   verifier,
-  trustedProxyDepth,
+  trustedClientIpAdapter,
+  requireTrustedClientIp,
   rateLimitPerMinute,
   rateLimiter = defaultRateLimiter,
 }: ResendWebhookHandlerDeps) => {
@@ -265,8 +268,27 @@ export const createResendWebhookHandlers = ({
       : DEFAULT_RESEND_WEBHOOK_RATE_LIMIT_PER_MINUTE;
 
   const enforceRateLimit = (request: Request) => {
-    const ip = getClientIp(request, { trustedProxyDepth });
-    if (!ip) return undefined;
+    const trustedIp = trustedClientIpAdapter.resolve(request);
+    if (!trustedIp && requireTrustedClientIp) {
+      logger?.warn({
+        details: {
+          provider: EMAIL_PROVIDER_RESEND,
+          reason: 'client_ip_unavailable',
+        },
+        event: 'security.webhook_rate_limiter_unavailable',
+      });
+      return Response.json(
+        { ok: false, error: 'rate_limiter_unavailable' },
+        {
+          status: 503,
+          headers: { 'Retry-After': '60' },
+        }
+      );
+    }
+
+    // Direct local webhook replays do not traverse a reverse proxy. Keep them
+    // in one bounded development bucket without weakening production.
+    const ip = trustedIp ?? 'local-unattributed';
 
     const result = rateLimiter.check(
       `webhook:resend:${ip}`,

@@ -1,6 +1,7 @@
 import { Result } from '@bloodyowl/boxed';
+import { z } from 'zod';
 
-import { AppError } from '@/modules/kernel';
+import { AppError, type ApplicationResult } from '@/modules/kernel';
 
 import type { SecondaryStore } from '../../application/ports/secondary-store';
 
@@ -21,6 +22,28 @@ type Entry = {
   value: string;
   /** Epoch milliseconds after which the entry is expired, or undefined. */
   expiresAt?: number;
+};
+
+const rateLimitEntrySchema = z.object({ count: z.number().finite() });
+
+const invalidRateLimitState = (cause: unknown) =>
+  new AppError({
+    code: 'AUTH_SECONDARY_STORE_RATE_LIMIT_INVALID',
+    category: 'system',
+    status: 500,
+    message: 'Secondary store rate-limit state is invalid',
+    cause,
+  });
+
+const parseRateLimitCount = (value: string): ApplicationResult<number> => {
+  try {
+    const parsed = rateLimitEntrySchema.safeParse(JSON.parse(value));
+    return parsed.success
+      ? Result.Ok(parsed.data.count)
+      : Result.Error(invalidRateLimitState(parsed.error));
+  } catch (cause) {
+    return Result.Error(invalidRateLimitState(cause));
+  }
 };
 
 /** Above this many tracked keys, prune expired entries to bound memory. */
@@ -139,5 +162,51 @@ export class InMemorySecondaryStore implements SecondaryStore {
   async delete(key: string): ReturnType<SecondaryStore['delete']> {
     this.entries.delete(key);
     return Result.Ok({ type: 'secondary_store_deleted' });
+  }
+
+  async consumeRateLimit(
+    key: string,
+    rule: { max: number; window: number }
+  ): ReturnType<SecondaryStore['consumeRateLimit']> {
+    const currentTime = this.now();
+    const current = this.entries.get(key);
+    if (!current || this.isExpired(current, currentTime)) {
+      this.entries.set(key, {
+        value: JSON.stringify({ key, count: 1, lastRequest: currentTime }),
+        expiresAt: currentTime + rule.window * 1000,
+      });
+      return Result.Ok({
+        type: 'secondary_store_rate_limit_consumed',
+        allowed: true,
+        retryAfter: null,
+      });
+    }
+
+    const count = parseRateLimitCount(current.value);
+    if (count.isError()) return Result.Error(count.getError());
+    const retryAfter = Math.max(
+      1,
+      Math.ceil(((current.expiresAt ?? currentTime) - currentTime) / 1000)
+    );
+    if (count.get() >= rule.max) {
+      return Result.Ok({
+        type: 'secondary_store_rate_limit_consumed',
+        allowed: false,
+        retryAfter,
+      });
+    }
+    this.entries.set(key, {
+      ...current,
+      value: JSON.stringify({
+        key,
+        count: count.get() + 1,
+        lastRequest: currentTime,
+      }),
+    });
+    return Result.Ok({
+      type: 'secondary_store_rate_limit_consumed',
+      allowed: true,
+      retryAfter: null,
+    });
   }
 }

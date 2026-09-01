@@ -9,24 +9,25 @@ import {
 
 import { GENRE_COLOR_PATTERN, GENRE_NAME_MAX_LENGTH } from './genre-policy';
 
-export const zGenreNameSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(GENRE_NAME_MAX_LENGTH)
-  .brand<'GenreName'>();
-export const zGenreColorSchema = z
-  .string()
-  .trim()
-  .regex(GENRE_COLOR_PATTERN)
-  .transform((value) => value.toLowerCase())
-  .brand<'GenreColor'>();
+const createGenreNameSchema = () =>
+  z.string().trim().min(1).max(GENRE_NAME_MAX_LENGTH).brand<'GenreName'>();
+
+const createGenreColorSchema = () =>
+  z
+    .string()
+    .trim()
+    .regex(GENRE_COLOR_PATTERN)
+    .transform((value) => value.toLowerCase())
+    .brand<'GenreColor'>();
+
+const zGenreNameSchema = createGenreNameSchema();
+const zGenreColorSchema = createGenreColorSchema();
 
 export type GenreName = z.infer<typeof zGenreNameSchema>;
 export type GenreColor = z.infer<typeof zGenreColorSchema>;
 
-export const zGenreName = () => zGenreNameSchema;
-export const zGenreColor = () => zGenreColorSchema;
+export const zGenreName = createGenreNameSchema;
+export const zGenreColor = createGenreColorSchema;
 
 const parseGenreString = <TSchema extends z.ZodType>(
   schema: TSchema,
