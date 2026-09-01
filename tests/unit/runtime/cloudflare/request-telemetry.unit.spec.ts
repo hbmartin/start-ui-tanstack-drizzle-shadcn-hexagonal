@@ -122,8 +122,8 @@ describe('Cloudflare request telemetry configuration', () => {
     expect(consoleError).toHaveBeenCalledTimes(2);
     expect(
       consoleError.mock.calls
-        .map(([, detail]) => (detail as { source?: unknown }).source)
-        .sort()
+        .map(([, detail]) => String((detail as { source?: unknown }).source))
+        .toSorted((left, right) => left.localeCompare(right, 'en'))
     ).toEqual([
       'otel.cloudflare.metrics.unavailable',
       'otel.cloudflare.traces.unavailable',
