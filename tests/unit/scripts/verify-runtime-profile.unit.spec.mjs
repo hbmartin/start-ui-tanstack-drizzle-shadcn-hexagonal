@@ -494,6 +494,37 @@ const cloudflareNativeTelemetrySetup =
 const cloudflareRequestFlush =
   'scheduleCloudflareRequestFlush(request,(completion)=>context.waitUntil(completion));';
 
+const universalNitroApplicationEntryFixtureSource =
+  'import{reportTelemetryFailure}from"./telemetry-proxy-fixture.mjs";import{claimRequestException,createRequestExceptionCaptureState,bindRequestExceptionState}from"./request-exception-state-fixture.mjs";import{isUnexpectedRequestFailure}from"./request-failure-fixture.mjs";const captureSynchronousInvocation=(operation)=>{try{return{type:"returned",value:operation()}}catch(failure){return{type:"threw",failure}}};const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-proxy-fixture.mjs");const tanstack=await import("./entry-server-fixture.mjs");return tanstack.createServerEntry({async fetch(request){const handleRequest=async()=>{const telemetryCaptureState=createRequestExceptionCaptureState();bindRequestExceptionState(request,telemetryCaptureState);const context={requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState};try{return await tanstack.default.fetch(request,{context})}catch(error){if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{level:"error",tags:{event:"framework.request.failed",requestId:context.requestId}});throw error}finally{try{lifecycle?.onRequestSettled(request)}catch{}}};if(!requestScope)return handleRequest();let applicationResult;const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult};const scopeInvocation=captureSynchronousInvocation(()=>requestScope(runApplicationOnce));if(scopeInvocation.type==="returned")return scopeInvocation.value;reportTelemetryFailure("sentry.request_scope",scopeInvocation.failure);return applicationResult??runApplicationOnce()}})};export{createApplicationServerEntry};';
+
+const writeUniversalNitroApplicationEntryFixture = (root, directory) => {
+  write(
+    root,
+    path.join(directory, 'create-application-server-entry-fixture.mjs'),
+    universalNitroApplicationEntryFixtureSource
+  );
+  write(
+    root,
+    path.join(directory, 'telemetry-proxy-fixture.mjs'),
+    'export const telemetryProxy={captureException(){}};export const reportTelemetryFailure=()=>{};'
+  );
+  write(
+    root,
+    path.join(directory, 'request-exception-state-fixture.mjs'),
+    'export const claimRequestException=()=>true;export const createRequestExceptionCaptureState=()=>({});export const bindRequestExceptionState=()=>{};'
+  );
+  write(
+    root,
+    path.join(directory, 'request-failure-fixture.mjs'),
+    'export const isUnexpectedRequestFailure=()=>true;'
+  );
+  write(
+    root,
+    path.join(directory, 'entry-server-fixture.mjs'),
+    'const entry={fetch(){return new Response()}};export const createServerEntry=(value)=>value;export{entry as default};'
+  );
+};
+
 const createNodeArtifact = (root) => {
   writeJson(root, '.output/node/nitro.json', {
     preset: 'node-server',
@@ -518,18 +549,24 @@ const createNodeArtifact = (root) => {
   write(
     root,
     '.output/node/server/_ssr/ssr.mjs',
-    'const {initNodeTelemetry}=await import("../_libs/telemetry-bridge.mjs");await initNodeTelemetry();createApplicationServerEntry("node", undefined, runWithNodeSentryRequestIsolation);NodeTracerProvider'
+    'const {initNodeTelemetry,runWithNodeSentryRequestIsolation}=await import("../_libs/telemetry-bridge.mjs");await initNodeTelemetry();const {createApplicationServerEntry}=await import("./create-application-server-entry-fixture.mjs");NodeTracerProvider;const server_entry_default=await createApplicationServerEntry("node",void 0,runWithNodeSentryRequestIsolation);export{server_entry_default as default};'
   );
   write(
     root,
     '.output/node/server/_libs/telemetry-bridge.mjs',
-    'import {n as initializeNodeTelemetryOnce} from "../_ssr/telemetry-owner.mjs";export {initializeNodeTelemetryOnce as initNodeTelemetry};'
+    'import {n as initializeNodeTelemetryOnce,r as runWithNodeSentryRequestIsolation} from "../_ssr/telemetry-owner.mjs";export {initializeNodeTelemetryOnce as initNodeTelemetry,runWithNodeSentryRequestIsolation};'
   );
   write(
     root,
     '.output/node/server/_ssr/telemetry-owner.mjs',
-    'const initializeSentryNodeRequestContext=()=>{};const create=()=>new SentryContextManager();const initNodeTelemetry=async()=>{await initializeSentryNodeRequestContext();create()};export {initNodeTelemetry as n};'
+    'import{withIsolationScope}from"../_libs/sentry__core.mjs";const initializeSentryNodeRequestContext=()=>{};const create=()=>new SentryContextManager();const runWithNodeSentryRequestIsolation=(operation)=>withIsolationScope(operation);const initNodeTelemetry=async()=>{await initializeSentryNodeRequestContext();create()};export {initNodeTelemetry as n,runWithNodeSentryRequestIsolation as r};'
   );
+  write(
+    root,
+    '.output/node/server/_libs/sentry__core.mjs',
+    'export const withIsolationScope=(operation)=>operation();"@sentry/core";'
+  );
+  writeUniversalNitroApplicationEntryFixture(root, '.output/node/server/_ssr');
   fs.mkdirSync(path.join(root, '.output/node/public'));
 };
 
@@ -604,30 +641,9 @@ const createVercelArtifact = (root) => {
     '.vercel/output/functions/__server.func/_libs/vercel__functions.mjs',
     'export const require_functions=()=>({waitUntil(){}});"@vercel/functions";'
   );
-  write(
+  writeUniversalNitroApplicationEntryFixture(
     root,
-    '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
-    'import{reportTelemetryFailure}from"./telemetry-proxy-fixture.mjs";import{claimRequestException,createRequestExceptionCaptureState,bindRequestExceptionState}from"./request-exception-state-fixture.mjs";import{isUnexpectedRequestFailure}from"./request-failure-fixture.mjs";const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-proxy-fixture.mjs");const tanstack=await import("./entry-server-fixture.mjs");return tanstack.createServerEntry({async fetch(request){const handleRequest=async()=>{const telemetryCaptureState=createRequestExceptionCaptureState();bindRequestExceptionState(request,telemetryCaptureState);const context={requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState};try{return await tanstack.default.fetch(request,{context})}catch(error){if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{level:"error",tags:{event:"framework.request.failed",requestId:context.requestId}});throw error}finally{try{lifecycle?.onRequestSettled(request)}catch{}}};if(!requestScope)return handleRequest();let applicationResult;const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult};try{return requestScope(runApplicationOnce)}catch(failure){reportTelemetryFailure("sentry.request_scope",failure);return applicationResult??runApplicationOnce()}}})};export{createApplicationServerEntry};'
-  );
-  write(
-    root,
-    '.vercel/output/functions/__server.func/_ssr/telemetry-proxy-fixture.mjs',
-    'export const telemetryProxy={captureException(){}};export const reportTelemetryFailure=()=>{};'
-  );
-  write(
-    root,
-    '.vercel/output/functions/__server.func/_ssr/request-exception-state-fixture.mjs',
-    'export const claimRequestException=()=>true;export const createRequestExceptionCaptureState=()=>({});export const bindRequestExceptionState=()=>{};'
-  );
-  write(
-    root,
-    '.vercel/output/functions/__server.func/_ssr/request-failure-fixture.mjs',
-    'export const isUnexpectedRequestFailure=()=>true;'
-  );
-  write(
-    root,
-    '.vercel/output/functions/__server.func/_ssr/entry-server-fixture.mjs',
-    'const entry={fetch(){return new Response()}};export const createServerEntry=(value)=>value;export{entry as default};'
+    '.vercel/output/functions/__server.func/_ssr'
   );
   fs.mkdirSync(path.join(root, '.vercel/output/static'));
 };
@@ -961,7 +977,7 @@ const createCloudflareArtifact = (root) => {
   write(
     root,
     'dist/server/assets/create-application-server-entry-fixture.js',
-    'import{reportTelemetryFailure}from"./telemetry-fixture.js";import{n as claimRequestException,r as createRequestExceptionCaptureState,t as bindRequestExceptionState}from"./request-exception-state-fixture.js";import{t as isUnexpectedRequestFailure}from"./request-failure-fixture.js";const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-entry-fixture.js");const tanstack=await import("./entry-server-fixture.js");return tanstack.createServerEntry({async fetch(request){const handleRequest=async()=>{const telemetryCaptureState=createRequestExceptionCaptureState();bindRequestExceptionState(request,telemetryCaptureState);const context={requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState};try{return await tanstack.default.fetch(request,{context})}catch(error){if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{level:"error",tags:{event:"framework.request.failed",requestId:context.requestId}});throw error}finally{try{lifecycle?.onRequestSettled(request)}catch{}}};if(!requestScope)return handleRequest();let applicationResult;const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult};try{return requestScope(runApplicationOnce)}catch(failure){reportTelemetryFailure("sentry.request_scope",failure);return applicationResult??runApplicationOnce()}}})};export{createApplicationServerEntry};'
+    'import{reportTelemetryFailure}from"./telemetry-fixture.js";import{n as claimRequestException,r as createRequestExceptionCaptureState,t as bindRequestExceptionState}from"./request-exception-state-fixture.js";import{t as isUnexpectedRequestFailure}from"./request-failure-fixture.js";const captureSynchronousInvocation=(operation)=>{try{return{type:"returned",value:operation()}}catch(failure){return{type:"threw",failure}}};const createApplicationServerEntry=async(runtimeProfile,lifecycle,requestScope)=>{const{telemetryProxy}=await import("./telemetry-entry-fixture.js");const tanstack=await import("./entry-server-fixture.js");return tanstack.createServerEntry({async fetch(request){const handleRequest=async()=>{const telemetryCaptureState=createRequestExceptionCaptureState();bindRequestExceptionState(request,telemetryCaptureState);const context={requestId:crypto.randomUUID(),runtimeProfile,telemetryCaptureState};try{return await tanstack.default.fetch(request,{context})}catch(error){if(isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error))telemetryProxy.captureException(error,{level:"error",tags:{event:"framework.request.failed",requestId:context.requestId}});throw error}finally{try{lifecycle?.onRequestSettled(request)}catch{}}};if(!requestScope)return handleRequest();let applicationResult;const runApplicationOnce=()=>{applicationResult??=handleRequest();return applicationResult};const scopeInvocation=captureSynchronousInvocation(()=>requestScope(runApplicationOnce));if(scopeInvocation.type==="returned")return scopeInvocation.value;reportTelemetryFailure("sentry.request_scope",scopeInvocation.failure);return applicationResult??runApplicationOnce()}})};export{createApplicationServerEntry};'
   );
   write(
     root,
@@ -13245,7 +13261,7 @@ try {
       createNodeArtifact,
       '.output/node/server/_ssr/ssr.mjs',
       'runWithNodeSentryRequestIsolation',
-      'node server entry owner runWithNodeSentryRequestIsolation',
+      'must import Node owners initNodeTelemetry, runWithNodeSentryRequestIsolation together exactly once',
     ],
     [
       'vercel',
@@ -13421,6 +13437,270 @@ try {
     expect(() => verifyRuntimeProfile('vercel', root)).toThrow(error);
   });
 
+  it.each([
+    [
+      'Node',
+      createNodeArtifact,
+      '.output/node/server/_ssr/create-application-server-entry-fixture.mjs',
+      'node',
+      'captureSynchronousInvocation(()=>requestScope(runApplicationOnce))',
+      'requestScope(runApplicationOnce)',
+    ],
+    [
+      'Node',
+      createNodeArtifact,
+      '.output/node/server/_ssr/create-application-server-entry-fixture.mjs',
+      'node',
+      'const captureSynchronousInvocation=(operation)=>',
+      'const captureSynchronousInvocation=async(operation)=>',
+    ],
+    [
+      'Vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'vercel',
+      'captureSynchronousInvocation(()=>requestScope(runApplicationOnce))',
+      'requestScope(runApplicationOnce)',
+    ],
+    [
+      'Vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/create-application-server-entry-fixture.mjs',
+      'vercel',
+      'const captureSynchronousInvocation=(operation)=>',
+      'const captureSynchronousInvocation=async(operation)=>',
+    ],
+  ])(
+    'rejects a %s application that bypasses exact synchronous capture',
+    (_label, createArtifact, file, profile, search, replacement) => {
+      const root = fixture();
+      createArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(
+        'universal request owner must preserve exact synchronous failure capture'
+      );
+    }
+  );
+
+  it.each([
+    [
+      'Node',
+      createNodeArtifact,
+      '.output/node/server/_ssr/ssr.mjs',
+      'node',
+      'const {initNodeTelemetry,runWithNodeSentryRequestIsolation}=await import("../_libs/telemetry-bridge.mjs");',
+      'const {initNodeTelemetry,runWithNodeSentryRequestIsolation}=await import("../_libs/telemetry-bridge.mjs"),sabotage=installHostileHook();',
+      'must isolate its Node owner import initNodeTelemetry, runWithNodeSentryRequestIsolation',
+    ],
+    [
+      'Vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
+      'vercel',
+      'var {initVercelTelemetry,runWithVercelSentryRequestIsolation}=await import("../_libs/telemetry-owner.mjs");',
+      'var {initVercelTelemetry,runWithVercelSentryRequestIsolation}=await import("../_libs/telemetry-owner.mjs"),sabotage=installHostileHook();',
+      'must isolate its Vercel owner import initVercelTelemetry, runWithVercelSentryRequestIsolation',
+    ],
+  ])(
+    'rejects a side-effecting sibling in the %s owner import',
+    (_label, createArtifact, file, profile, search, replacement, error) => {
+      const root = fixture();
+      createArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(error);
+    }
+  );
+
+  it.each([
+    [
+      'Node',
+      createNodeArtifact,
+      '.output/node/server/_ssr/ssr.mjs',
+      'node',
+      'const server_entry_default=await createApplicationServerEntry("node",void 0,runWithNodeSentryRequestIsolation);',
+      'const server_entry_default=await createApplicationServerEntry("node",void 0,runWithNodeSentryRequestIsolation),sabotage=installHostileHook();',
+      'must isolate its awaited Node application result',
+    ],
+    [
+      'Vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/ssr.mjs',
+      'vercel',
+      'var server_entry_default=await createApplicationServerEntry("vercel",vercelRequestLifecycle,runWithVercelSentryRequestIsolation);',
+      'var server_entry_default=await createApplicationServerEntry("vercel",vercelRequestLifecycle,runWithVercelSentryRequestIsolation),sabotage=installHostileHook();',
+      'must isolate its awaited Vercel application result',
+    ],
+  ])(
+    'rejects a side-effecting sibling beside the awaited %s application result',
+    (_label, createArtifact, file, profile, search, replacement, error) => {
+      const root = fixture();
+      createArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(error);
+    }
+  );
+
+  it.each([
+    [
+      'Node',
+      createNodeArtifact,
+      '.output/node/server/_ssr/telemetry-owner.mjs',
+      'node',
+      'const runWithNodeSentryRequestIsolation=(operation)=>withIsolationScope(operation)',
+      'const runWithNodeSentryRequestIsolation=(operation)=>{withIsolationScope(()=>{});return operation()}',
+    ],
+    [
+      'Vercel',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs',
+      'vercel',
+      'const runWithSentryNodeRequestIsolation=(operation)=>withIsolationScope(operation)',
+      'const runWithSentryNodeRequestIsolation=(operation)=>{withIsolationScope(()=>{});return operation()}',
+    ],
+  ])(
+    'rejects a %s isolation owner that returns outside the Sentry scope',
+    (_label, createArtifact, file, profile, search, replacement) => {
+      const root = fixture();
+      createArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(
+        `must implement Sentry request isolation for ${_label}`
+      );
+    }
+  );
+
+  it.each([
+    [
+      'Node async',
+      createNodeArtifact,
+      '.output/node/server/_ssr/telemetry-owner.mjs',
+      'node',
+      'const runWithNodeSentryRequestIsolation=(operation)=>',
+      'const runWithNodeSentryRequestIsolation=async(operation)=>',
+      'Node',
+    ],
+    [
+      'Node generator',
+      createNodeArtifact,
+      '.output/node/server/_ssr/telemetry-owner.mjs',
+      'node',
+      'const runWithNodeSentryRequestIsolation=(operation)=>withIsolationScope(operation)',
+      'function* runWithNodeSentryRequestIsolation(operation){return withIsolationScope(operation)}',
+      'Node',
+    ],
+    [
+      'Vercel async',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs',
+      'vercel',
+      'const runWithSentryNodeRequestIsolation=(operation)=>',
+      'const runWithSentryNodeRequestIsolation=async(operation)=>',
+      'Vercel',
+    ],
+    [
+      'Vercel generator',
+      createVercelArtifact,
+      '.vercel/output/functions/__server.func/_ssr/telemetry-implementation.mjs',
+      'vercel',
+      'const runWithSentryNodeRequestIsolation=(operation)=>withIsolationScope(operation)',
+      'function* runWithSentryNodeRequestIsolation(operation){return withIsolationScope(operation)}',
+      'Vercel',
+    ],
+  ])(
+    'rejects a %s request-isolation owner',
+    (
+      _label,
+      createArtifact,
+      file,
+      profile,
+      search,
+      replacement,
+      profileLabel
+    ) => {
+      const root = fixture();
+      createArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() => verifyRuntimeProfile(profile, root)).toThrow(
+        `must implement Sentry request isolation for ${profileLabel}`
+      );
+    }
+  );
+
+  it.each([
+    [
+      'a configured lifecycle',
+      '.output/node/server/_ssr/ssr.mjs',
+      'void 0',
+      'undefined',
+      'must bind the Node profile and request-isolation owner with lifecycle disabled',
+    ],
+    [
+      'application import before telemetry initialization',
+      '.output/node/server/_ssr/ssr.mjs',
+      'await initNodeTelemetry();const {createApplicationServerEntry}=await import("./create-application-server-entry-fixture.mjs");',
+      'const {createApplicationServerEntry}=await import("./create-application-server-entry-fixture.mjs");await initNodeTelemetry();',
+      'must initialize Node telemetry before the application import',
+    ],
+    [
+      'a mutable application result',
+      '.output/node/server/_ssr/ssr.mjs',
+      'export{server_entry_default as default}',
+      'server_entry_default.fetch=()=>new Response("decoy");export{server_entry_default as default}',
+      'must immediately export one immutable Node application result',
+    ],
+    [
+      'a bypassed request-isolation owner',
+      '.output/node/server/_ssr/telemetry-owner.mjs',
+      '(operation)=>withIsolationScope(operation)',
+      '(operation)=>operation()',
+      'must implement Sentry request isolation for Node',
+    ],
+  ])(
+    'rejects a Node bootstrap with %s',
+    (_label, file, search, replacement, error) => {
+      const root = fixture();
+      createNodeArtifact(root);
+      const filePath = path.join(root, file);
+      write(
+        root,
+        file,
+        fs.readFileSync(filePath, 'utf8').replace(search, replacement)
+      );
+
+      expect(() => verifyRuntimeProfile('node', root)).toThrow(error);
+    }
+  );
+
   it('rejects a Vercel lifecycle waitUntil decoy receiver', () => {
     const root = fixture();
     createVercelArtifact(root);
@@ -13571,8 +13851,8 @@ try {
     ],
     [
       'disconnected request scope',
-      'try{return requestScope(runApplicationOnce)}',
-      'requestScope(()=>{});try{return runApplicationOnce()}',
+      '()=>requestScope(runApplicationOnce)',
+      '()=>runApplicationOnce()',
     ],
     [
       'discarded TanStack response',
@@ -13772,8 +14052,8 @@ try {
   it.each([
     [
       'an unrelated request-scope result',
-      'return applicationResult};try{return requestScope',
-      'return new Response("decoy")};try{return requestScope',
+      'return applicationResult};const scopeInvocation=',
+      'return new Response("decoy")};const scopeInvocation=',
     ],
     [
       'a different lifecycle request',
@@ -14753,6 +15033,36 @@ try {
 
   it.each([
     [
+      'a duplicated synchronous operation',
+      'value:operation()',
+      'value:(operation(),operation())',
+      'universal request owner must preserve exact synchronous failure capture',
+    ],
+    [
+      'an asynchronous failure-capture helper',
+      'const captureSynchronousInvocation=(operation)=>',
+      'const captureSynchronousInvocation=async(operation)=>',
+      'capture must be synchronous',
+    ],
+    [
+      'a substituted returned discriminator',
+      'type:"returned",value:operation()',
+      'type:"threw",value:operation()',
+      'universal request owner must preserve exact synchronous failure capture',
+    ],
+    [
+      'a substituted captured failure',
+      'type:"threw",failure',
+      'type:"threw",failure:new Error("decoy")',
+      'universal request owner must preserve exact synchronous failure capture',
+    ],
+    [
+      'a bypassed failure-capture helper',
+      'captureSynchronousInvocation(()=>requestScope(runApplicationOnce))',
+      'requestScope(runApplicationOnce)',
+      'universal request owner must preserve exact synchronous failure capture',
+    ],
+    [
       'a disabled exception-capture guard',
       'isUnexpectedRequestFailure(error)&&claimRequestException(telemetryCaptureState,error)',
       'false&&false',
@@ -14772,14 +15082,14 @@ try {
     ],
     [
       'a substituted request-scope diagnostic key',
-      'reportTelemetryFailure("sentry.request_scope",failure)',
-      'reportTelemetryFailure("wrong",failure)',
+      'reportTelemetryFailure("sentry.request_scope",scopeInvocation.failure)',
+      'reportTelemetryFailure("wrong",scopeInvocation.failure)',
       'universal request owner must preserve scoped execution',
     ],
     [
       'a side-effecting request-scope argument',
-      'return requestScope(runApplicationOnce)',
-      'return requestScope(runApplicationOnce,request.arrayBuffer())',
+      '()=>requestScope(runApplicationOnce)',
+      '()=>requestScope(runApplicationOnce,request.arrayBuffer())',
       'universal request owner must preserve scoped execution',
     ],
     [
@@ -14808,8 +15118,8 @@ try {
     ],
     [
       'a request scope without a failure handler',
-      'try{return requestScope(runApplicationOnce)}catch(failure){reportTelemetryFailure("sentry.request_scope",failure);return applicationResult??runApplicationOnce()}',
-      'try{return requestScope(runApplicationOnce)}finally{}',
+      'reportTelemetryFailure("sentry.request_scope",scopeInvocation.failure)',
+      'void scopeInvocation.failure',
       'universal request owner must preserve scoped execution',
     ],
     [

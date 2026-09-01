@@ -324,16 +324,39 @@ const assertServerEntryOwners = (filePath, profile) => {
     actualOwner === expectedOwner,
     `${filePath} must contain ${profile} server entry owner ${expectedOwner}`
   );
-  if (profile === 'vercel') {
+  if (profile === 'node') {
+    assertNodeApplicationEntryOwner(filePath, entryCall);
+  } else if (profile === 'vercel') {
     assertVercelServerEntryOwners(filePath, entryCall);
   }
 };
 
-const assertVercelAwaitedOwnerImport = (
+const assertIsolatedTopLevelVariableDeclarator = (
+  program,
+  parentNodes,
+  declarator,
+  message
+) => {
+  const declaration = parentNodes.get(declarator);
+  assertConditions(
+    [
+      nodeType(declaration) === 'VariableDeclaration',
+      new Set(['const', 'var']).has(declaration?.kind),
+      declaration?.declarations?.length === 1,
+      declaration?.declarations?.[0] === declarator,
+      program.body.includes(declaration),
+    ],
+    message
+  );
+  return declaration;
+};
+
+const assertAwaitedOwnerImport = (
   program,
   filePath,
   names,
-  sourcePattern
+  sourcePattern,
+  profileLabel
 ) => {
   const declarators = names.map((name) =>
     directVariableDeclarators(program, name)
@@ -342,47 +365,181 @@ const assertVercelAwaitedOwnerImport = (
     declarators.every(
       (matches) => matches.length === 1 && matches[0] === declarators[0][0]
     ),
-    `${filePath} must import Vercel owners ${names.join(', ')} together exactly once`
+    `${filePath} must import ${profileLabel} owners ${names.join(', ')} together exactly once`
   );
   const declarator = declarators[0][0];
+  const parentNodes = createAstParentMap(program);
+  assertIsolatedTopLevelVariableDeclarator(
+    program,
+    parentNodes,
+    declarator,
+    `${filePath} must isolate its ${profileLabel} owner import ${names.join(', ')}`
+  );
   assert(
     shorthandBindingSignature(declarator) ===
       expectedShorthandBindingSignature(names),
-    `${filePath} must import Vercel owners ${names.join(', ')} by exact shorthand`
+    `${filePath} must import ${profileLabel} owners ${names.join(', ')} by exact shorthand`
   );
   assert(
     nodeType(declarator.init) === 'AwaitExpression',
-    `${filePath} must await Vercel owner import ${names.join(', ')}`
+    `${filePath} must await ${profileLabel} owner import ${names.join(', ')}`
   );
   const importSource = dynamicImportSource(declarator);
   assert(
     sourcePattern.test(importSource ?? ''),
-    `${filePath} must import Vercel owners ${names.join(', ')} from their artifact chunk`
+    `${filePath} must import ${profileLabel} owners ${names.join(', ')} from their artifact chunk`
   );
   return { declarator, importSource };
+};
+
+const assertNodeApplicationEntryOwner = (filePath, entryCall) => {
+  const { program } = readParsedModule(filePath);
+  const parents = createAstParentMap(program);
+  const artifactRoot = path.resolve(path.dirname(filePath), '..');
+  const telemetry = assertAwaitedOwnerImport(
+    program,
+    filePath,
+    ['initNodeTelemetry', 'runWithNodeSentryRequestIsolation'],
+    /^\.\.\/_libs\/[\w-]+\.mjs$/u,
+    'Node'
+  );
+  const application = assertAwaitedOwnerImport(
+    program,
+    filePath,
+    ['createApplicationServerEntry'],
+    /^\.\/create-application-server-entry-[\w-]+\.mjs$/u,
+    'Node'
+  );
+  const telemetryFile = resolveLinkedModule(
+    filePath,
+    telemetry.importSource,
+    artifactRoot
+  );
+  const applicationFile = resolveLinkedModule(
+    filePath,
+    application.importSource,
+    artifactRoot
+  );
+  assertUniversalApplicationEntryOwner(applicationFile, artifactRoot, 'Node');
+  const isolation = resolveLinkedOwner(
+    telemetryFile,
+    artifactRoot,
+    'runWithNodeSentryRequestIsolation',
+    'Node Sentry request-isolation owner'
+  );
+  assertSentryRequestIsolationOwner(isolation, artifactRoot, 'Node');
+  const initializationCalls = directNamedCalls(program, 'initNodeTelemetry');
+  assert(
+    initializationCalls.length === 1 &&
+      initializationCalls[0].arguments.length === 0,
+    `${filePath} must initialize Node telemetry exactly once`
+  );
+  const [initializationCall] = initializationCalls;
+  const awaitedInitialization = parents.get(initializationCall);
+  const initializationStatement = parents.get(awaitedInitialization);
+  assertConditions(
+    [
+      nodeType(awaitedInitialization) === 'AwaitExpression',
+      awaitedInitialization?.argument === initializationCall,
+      nodeType(initializationStatement) === 'ExpressionStatement',
+      program.body.includes(initializationStatement),
+    ],
+    `${filePath} must await Node telemetry initialization exactly once`
+  );
+  assert(
+    telemetry.declarator.end < initializationCall.start &&
+      initializationCall.end < application.declarator.start &&
+      application.declarator.end < entryCall.start,
+    `${filePath} must initialize Node telemetry before the application import`
+  );
+  const disabledLifecycle = entryCall.arguments[1];
+  assertConditions(
+    [
+      entryCall.arguments.length === 3,
+      literalString(entryCall.arguments[0]) === 'node',
+      nodeType(disabledLifecycle) === 'UnaryExpression',
+      disabledLifecycle?.operator === 'void',
+      disabledLifecycle?.prefix === true,
+      disabledLifecycle?.argument?.type === 'Literal',
+      disabledLifecycle?.argument?.value === 0,
+      identifierName(entryCall.arguments[2]) ===
+        'runWithNodeSentryRequestIsolation',
+    ],
+    `${filePath} must bind the Node profile and request-isolation owner with lifecycle disabled`
+  );
+  const awaitedEntry = parents.get(entryCall);
+  const entryDeclarator = parents.get(awaitedEntry);
+  const resultBinding = identifierName(entryDeclarator?.id);
+  const defaultExports = program.body.flatMap(defaultExportEntries);
+  const declarationStatement = assertIsolatedTopLevelVariableDeclarator(
+    program,
+    parents,
+    entryDeclarator,
+    `${filePath} must isolate its awaited Node application result`
+  );
+  const declarationIndex = program.body.indexOf(declarationStatement);
+  const exportIndex = program.body.indexOf(defaultExports[0]?.statement);
+  assertConditions(
+    [
+      nodeType(awaitedEntry) === 'AwaitExpression',
+      awaitedEntry?.argument === entryCall,
+      nodeType(entryDeclarator) === 'VariableDeclarator',
+      resultBinding !== undefined,
+      defaultExports.length === 1,
+      defaultExports[0]?.localName === resultBinding,
+      declarationIndex >= 0,
+      exportIndex === declarationIndex + 1,
+      !mutatedNames(program).has(resultBinding),
+      identifierOccurrenceCount(program, resultBinding) === 2,
+    ],
+    `${filePath} must immediately export one immutable Node application result`
+  );
+  const protectedNames = [
+    'createApplicationServerEntry',
+    'initNodeTelemetry',
+    'runWithNodeSentryRequestIsolation',
+  ];
+  protectedNames.forEach((name) =>
+    assert(
+      !mutatedNames(program).has(name),
+      `${filePath} must not mutate Node owner ${name}`
+    )
+  );
+  const aliases = protectedNames.flatMap((name) =>
+    [...vercelBindingAliasNames(program, name)].filter(
+      (candidate) => candidate !== name
+    )
+  );
+  assert(
+    aliases.length === 0,
+    `${filePath} must not alias mutable Node owners`
+  );
 };
 
 const assertVercelServerEntryOwners = (filePath, entryCall) => {
   const { program } = readParsedModule(filePath);
   const parents = createAstParentMap(program);
   const artifactRoot = path.resolve(path.dirname(filePath), '..');
-  const telemetry = assertVercelAwaitedOwnerImport(
+  const telemetry = assertAwaitedOwnerImport(
     program,
     filePath,
     ['initVercelTelemetry', 'runWithVercelSentryRequestIsolation'],
-    /^\.\.\/_libs\/[\w-]+\.mjs$/u
+    /^\.\.\/_libs\/[\w-]+\.mjs$/u,
+    'Vercel'
   );
-  const lifecycle = assertVercelAwaitedOwnerImport(
+  const lifecycle = assertAwaitedOwnerImport(
     program,
     filePath,
     ['vercelRequestLifecycle'],
-    /^\.\/request-lifecycle-[\w-]+\.mjs$/u
+    /^\.\/request-lifecycle-[\w-]+\.mjs$/u,
+    'Vercel'
   );
-  const application = assertVercelAwaitedOwnerImport(
+  const application = assertAwaitedOwnerImport(
     program,
     filePath,
     ['createApplicationServerEntry'],
-    /^\.\/create-application-server-entry-[\w-]+\.mjs$/u
+    /^\.\/create-application-server-entry-[\w-]+\.mjs$/u,
+    'Vercel'
   );
   const telemetryFile = resolveLinkedModule(
     filePath,
@@ -401,7 +558,7 @@ const assertVercelServerEntryOwners = (filePath, entryCall) => {
   );
   assertVercelTelemetryOwners(telemetryFile, artifactRoot);
   assertVercelRequestLifecycleOwner(lifecycleFile, artifactRoot);
-  assertVercelApplicationEntryOwner(applicationFile, artifactRoot);
+  assertUniversalApplicationEntryOwner(applicationFile, artifactRoot, 'Vercel');
   const initializationCalls = directNamedCalls(program, 'initVercelTelemetry');
   assert(
     initializationCalls.length === 1 &&
@@ -437,7 +594,12 @@ const assertVercelServerEntryOwners = (filePath, entryCall) => {
   const entryDeclarator = parents.get(awaitedEntry);
   const resultBinding = identifierName(entryDeclarator?.id);
   const defaultExports = program.body.flatMap(defaultExportEntries);
-  const declarationStatement = parents.get(entryDeclarator);
+  const declarationStatement = assertIsolatedTopLevelVariableDeclarator(
+    program,
+    parents,
+    entryDeclarator,
+    `${filePath} must isolate its awaited Vercel application result`
+  );
   const declarationIndex = program.body.indexOf(declarationStatement);
   const exportIndex = program.body.indexOf(defaultExports[0]?.statement);
   assertConditions(
@@ -537,21 +699,32 @@ const vercelBindingAliasNames = (program, initialBinding) => {
   return aliases;
 };
 
-const assertVercelBindingStable = (program, binding, filePath, description) => {
+const assertVercelBindingStable = (
+  program,
+  binding,
+  filePath,
+  description,
+  profileLabel = 'Vercel'
+) => {
   const mutations = mutatedNames(program);
   const aliases = vercelBindingAliasNames(program, binding);
   assert(
     [...aliases].every((name) => !mutations.has(name)),
-    `${filePath} must preserve live Vercel ${description}`
+    `${filePath} must preserve live ${profileLabel} ${description}`
   );
 };
 
-const assertVercelResolvedOwnerStable = (owner, description) =>
+const assertVercelResolvedOwnerStable = (
+  owner,
+  description,
+  profileLabel = 'Vercel'
+) =>
   assertVercelBindingStable(
     owner.program,
     owner.binding,
     owner.filePath,
-    description
+    description,
+    profileLabel
   );
 
 const localFunctionForBinding = (program, initialBinding) => {
@@ -617,6 +790,71 @@ const functionBodyDeclaresBinding = (functionNode, bindingName) => {
   return declared;
 };
 
+const assertSentryRequestIsolationOwner = (
+  isolation,
+  artifactRoot,
+  profileLabel
+) => {
+  assertVercelResolvedOwnerStable(
+    isolation,
+    'request-isolation owner',
+    profileLabel
+  );
+  const isolationContext = createCloudflareLexicalContext(
+    isolation.program,
+    isolation.filePath
+  );
+  const isolationOwner = localFunctionForBinding(
+    isolation.program,
+    isolation.binding
+  );
+  const isolationCalls = isolationOwner
+    ? directNamedCalls(
+        isolationOwner.functionNode,
+        'withIsolationScope'
+      ).filter(
+        (call) => !isStaticallyUnreachableCloudflareNode(call, isolationContext)
+      )
+    : [];
+  const isolationCall = isolationCalls[0];
+  const sentryIsolationImport = findStaticImport(
+    isolation.program,
+    'withIsolationScope'
+  );
+  const sentryIsolationLinked = sentryIsolationImport?.source
+    ? resolveLinkedModule(
+        isolation.filePath,
+        sentryIsolationImport.source,
+        artifactRoot
+      )
+    : undefined;
+  assert(
+    isolationOwner &&
+      isolationOwner.functionNode.params.map(identifierName).join(',') ===
+        'operation' &&
+      isolationOwner.functionNode.async === false &&
+      isolationOwner.functionNode.generator === false &&
+      isolationCalls.length === 1 &&
+      isolationCall?.arguments?.length === 1 &&
+      identifierName(isolationCall?.arguments?.[0]) === 'operation' &&
+      identifierOccurrenceCount(isolationOwner.functionNode, 'operation') ===
+        2 &&
+      vercelCallIsDirectlyReturned(
+        isolationCall,
+        isolationOwner.functionNode,
+        isolationContext
+      ) &&
+      !functionBodyDeclaresBinding(
+        isolationOwner.functionNode,
+        'withIsolationScope'
+      ) &&
+      sentryIsolationImport?.source?.endsWith('/sentry__core.mjs') &&
+      sentryIsolationLinked &&
+      fs.readFileSync(sentryIsolationLinked, 'utf8').includes('@sentry/core'),
+    `${isolation.filePath} must implement Sentry request isolation for ${profileLabel}`
+  );
+};
+
 const assertVercelTelemetryOwners = (bridgeFile, artifactRoot) => {
   const initializer = resolveLinkedOwner(
     bridgeFile,
@@ -635,7 +873,6 @@ const assertVercelTelemetryOwners = (bridgeFile, artifactRoot) => {
     `${bridgeFile} must link Vercel telemetry owners from one reviewed chunk`
   );
   assertVercelResolvedOwnerStable(initializer, 'telemetry initializer');
-  assertVercelResolvedOwnerStable(isolation, 'request-isolation owner');
   const initializerOwner = localFunctionForBinding(
     initializer.program,
     initializer.binding
@@ -729,43 +966,7 @@ const assertVercelTelemetryOwners = (bridgeFile, artifactRoot) => {
       vercelOtelCalls.length === 1,
     `${initializer.filePath} must delegate Vercel trace ownership to @vercel/otel`
   );
-  const isolationOwner = localFunctionForBinding(
-    isolation.program,
-    isolation.binding
-  );
-  const isolationCalls = isolationOwner
-    ? directNamedCalls(
-        isolationOwner.functionNode,
-        'withIsolationScope'
-      ).filter(
-        (call) => !isStaticallyUnreachableCloudflareNode(call, telemetryContext)
-      )
-    : [];
-  const sentryIsolationImport = findStaticImport(
-    isolation.program,
-    'withIsolationScope'
-  );
-  const sentryIsolationLinked = sentryIsolationImport?.source
-    ? resolveLinkedModule(
-        isolation.filePath,
-        sentryIsolationImport.source,
-        artifactRoot
-      )
-    : undefined;
-  assert(
-    isolationOwner &&
-      isolationOwner.functionNode.params.map(identifierName).join(',') ===
-        'operation' &&
-      isolationCalls.length === 1 &&
-      !functionBodyDeclaresBinding(
-        isolationOwner.functionNode,
-        'withIsolationScope'
-      ) &&
-      sentryIsolationImport?.source?.endsWith('/sentry__core.mjs') &&
-      sentryIsolationLinked &&
-      fs.readFileSync(sentryIsolationLinked, 'utf8').includes('@sentry/core'),
-    `${isolation.filePath} must implement Sentry request isolation`
-  );
+  assertSentryRequestIsolationOwner(isolation, artifactRoot, 'Vercel');
 };
 
 const vercelWaitUntilStatementOwnsCall = (statement, call) => {
@@ -1096,9 +1297,11 @@ const vercelReachableLocalFunctions = (initialOwners, context) => {
 
 const vercelRequestScopeCallbackOwners = (call, context) =>
   call.arguments.flatMap((argument) =>
-    cloudflareDirectLocalBindingValues(call, argument, context).filter(
-      isCloudflareFunctionNode
-    )
+    isCloudflareFunctionNode(unwrapCloudflareExecutionTarget(argument))
+      ? [unwrapCloudflareExecutionTarget(argument)]
+      : cloudflareDirectLocalBindingValues(call, argument, context).filter(
+          isCloudflareFunctionNode
+        )
   );
 
 const vercelMemberCallIsUnmutated = (call, context) => {
@@ -1127,30 +1330,36 @@ const vercelReachableRequestFunctions = (
     vercelDirectCalls(owner, context).forEach((call) => {
       const calleeOwner = cloudflareStaticLocalFunctionOwner(call, context);
       if (calleeOwner) pending.push(calleeOwner);
-      if (
-        identifierName(unwrapCloudflareExecutionTarget(call.callee)) !==
-          'requestScope' ||
-        vercelLexicalBindingDigest(context, call, 'requestScope') !==
-          requestScopeBinding
-      ) {
-        return;
-      }
-      call.arguments.forEach((argument) =>
-        cloudflareDirectLocalBindingValues(call, argument, context)
-          .filter(isCloudflareFunctionNode)
-          .forEach((callback) => pending.push(callback))
+      const calleeName = identifierName(
+        unwrapCloudflareExecutionTarget(call.callee)
+      );
+      const isActiveRequestScope =
+        calleeName === 'requestScope' &&
+        vercelLexicalBindingDigest(context, call, 'requestScope') ===
+          requestScopeBinding;
+      // The universal shape assertion authenticates the only declaration and
+      // use of this helper before reachability traverses its callback.
+      const isActiveSynchronousCapture =
+        calleeName === 'captureSynchronousInvocation';
+      if (!isActiveRequestScope && !isActiveSynchronousCapture) return;
+      vercelRequestScopeCallbackOwners(call, context).forEach((callback) =>
+        pending.push(callback)
       );
     });
   }
   return visited;
 };
 
-const assertVercelApplicationEntryOwner = (applicationFile, artifactRoot) => {
+const assertUniversalApplicationEntryOwner = (
+  applicationFile,
+  artifactRoot,
+  profileLabel
+) => {
   const owner = resolveLinkedOwner(
     applicationFile,
     artifactRoot,
     'createApplicationServerEntry',
-    'Vercel application entry owner'
+    `${profileLabel} application entry owner`
   );
   const functionOwner = localFunctionForBinding(owner.program, owner.binding);
   assertVercelResolvedOwnerStable(owner, 'application entry owner');
@@ -1243,7 +1452,11 @@ const assertVercelApplicationEntryOwner = (applicationFile, artifactRoot) => {
         )
       : new Map();
   const fetchOwner = entryProperties.get('fetch');
-  assertUniversalApplicationRequestHandler(fetchOwner, owner.filePath);
+  assertUniversalApplicationRequestHandler(
+    fetchOwner,
+    owner.filePath,
+    owner.program
+  );
   const reachableRequestFunctions = isCloudflareFunctionNode(fetchOwner)
     ? vercelReachableRequestFunctions(
         fetchOwner,
@@ -1315,18 +1528,22 @@ const assertVercelApplicationEntryOwner = (applicationFile, artifactRoot) => {
       },
     }).visit(reachableOwner);
   });
-  assertConditions(
+  const compositionChecks = [
+    ['one entry return', entryReturns.length === 1],
+    ['one entry argument', entryCall?.arguments?.length === 1],
+    ['TanStack binding', tanstackBinding !== undefined],
+    ['runtime-profile binding', runtimeProfileBinding !== undefined],
+    ['lifecycle binding', lifecycleBinding !== undefined],
+    ['request-scope binding', requestScopeBinding !== undefined],
+    ['fetch owner', isCloudflareFunctionNode(fetchOwner)],
+    ['one fetch parameter', fetchOwner?.params?.length === 1],
     [
-      entryReturns.length === 1,
-      entryCall?.arguments?.length === 1,
-      tanstackBinding !== undefined,
-      runtimeProfileBinding !== undefined,
-      lifecycleBinding !== undefined,
-      requestScopeBinding !== undefined,
-      isCloudflareFunctionNode(fetchOwner),
-      fetchOwner?.params?.length === 1,
+      'active request parameter',
       identifierName(fetchOwner?.params?.[0]) === 'request',
-      liveFetchCalls.length > 0,
+    ],
+    ['live TanStack fetch', liveFetchCalls.length > 0],
+    [
+      'direct returned TanStack fetch',
       liveFetchCalls.every(
         (call) =>
           vercelCallIsDirectlyReturned(
@@ -1335,33 +1552,72 @@ const assertVercelApplicationEntryOwner = (applicationFile, artifactRoot) => {
             applicationContext
           ) && vercelMemberCallIsUnmutated(call, applicationContext)
       ),
-      liveLifecycleCalls.length === 1,
+    ],
+    ['one lifecycle settlement', liveLifecycleCalls.length === 1],
+    [
+      'unmutated lifecycle settlement',
       liveLifecycleCalls.every((call) =>
         vercelMemberCallIsUnmutated(call, applicationContext)
       ),
-      liveRequestScopeCalls.length === 1,
-      requestScopeCall &&
+    ],
+    ['one request-scope call', liveRequestScopeCalls.length === 1],
+    [
+      'direct returned request-scope call',
+      Boolean(
+        requestScopeCall &&
         vercelCallIsDirectlyReturned(
           requestScopeCall,
           cloudflareFunctionOwnerAt(requestScopeCall, applicationContext),
           applicationContext
-        ),
-      requestScopeCallbackOwners.length === 1,
+        )
+      ),
+    ],
+    ['one request-scope callback', requestScopeCallbackOwners.length === 1],
+    [
+      'request-scoped TanStack fetch',
       requestScopeFetchCalls.length === liveFetchCalls.length,
+    ],
+    [
+      'unmutated application owners',
       ['lifecycle', 'requestScope', 'runtimeProfile', 'tanstack'].every(
         (binding) => !mutatedApplicationBindings.has(binding)
       ),
+    ],
+    [
+      'exact TanStack usage',
       identifierOccurrenceCount(functionOwner.functionNode, 'tanstack') === 3,
+    ],
+    [
+      'exact lifecycle usage',
       identifierOccurrenceCount(functionOwner.functionNode, 'lifecycle') === 2,
+    ],
+    [
+      'exact runtime-profile usage',
       identifierOccurrenceCount(
         functionOwner.functionNode,
         'runtimeProfile'
       ) === 3,
+    ],
+    [
+      'exact request-scope usage',
       identifierOccurrenceCount(functionOwner.functionNode, 'requestScope') ===
         3,
-      liveRuntimeProfileReads.length >= 1,
     ],
-    `${owner.filePath} must compose the active runtime, request scope, lifecycle, and TanStack handler`
+    [
+      'exact synchronous-capture usage',
+      identifierOccurrenceCount(
+        functionOwner.functionNode,
+        'captureSynchronousInvocation'
+      ) === 1,
+    ],
+    ['live runtime-profile read', liveRuntimeProfileReads.length >= 1],
+  ];
+  const failedCompositionChecks = compositionChecks
+    .filter(([, passed]) => !passed)
+    .map(([label]) => label);
+  assert(
+    failedCompositionChecks.length === 0,
+    `${owner.filePath} must compose the active runtime, request scope, lifecycle, and TanStack handler: ${failedCompositionChecks.join(', ')}`
   );
 };
 
@@ -3677,9 +3933,94 @@ const assertUniversalApplicationRequestPrelude = (
   );
 };
 
+const assertUniversalSynchronousInvocationCapture = (
+  program,
+  applicationChunk
+) => {
+  const message = `${applicationChunk} universal request owner must preserve exact synchronous failure capture`;
+  const owners = directBodyVariableDeclarators(
+    program,
+    'captureSynchronousInvocation'
+  );
+  assert(owners.length === 1, message);
+  assertExactDirectVariableOwner(
+    owners[0],
+    owners[0].declaration.kind,
+    message
+  );
+  const capture = owners[0].declarator.init;
+  assert(nodeType(capture) === 'ArrowFunctionExpression', message);
+  assert(nodeType(capture.body) === 'BlockStatement', message);
+  assert(capture.async === false, `${message}: capture must be synchronous`);
+  assert(capture.generator === false, `${message}: capture must not yield`);
+  assert(
+    capture.params.map(identifierName).join(':') === 'operation',
+    `${message}: capture must accept one operation`
+  );
+  assert(
+    capture.body.body.length === 1,
+    `${message}: capture must contain only its try/catch`
+  );
+  assert(
+    new Set(['const', 'var']).has(owners[0].declaration.kind),
+    `${message}: capture must have one local declaration`
+  );
+  assert(
+    !mutatedNames(program).has('captureSynchronousInvocation'),
+    `${message}: capture must not be reassigned`
+  );
+  assert(
+    identifierOccurrenceCount(program, 'captureSynchronousInvocation') === 2,
+    `${message}: capture must be invoked exactly once`
+  );
+  const [captureScope] = capture.body.body;
+  assert(nodeType(captureScope) === 'TryStatement', message);
+  assert(nodeType(captureScope.block) === 'BlockStatement', message);
+  assert(nodeType(captureScope.handler) === 'CatchClause', message);
+  assert(nodeType(captureScope.handler.body) === 'BlockStatement', message);
+  assertConditions(
+    [
+      captureScope.block.body.length === 1,
+      captureScope.finalizer === null,
+      identifierName(captureScope.handler.param) === 'failure',
+      captureScope.handler.body.body.length === 1,
+    ],
+    message
+  );
+  const returned = captureScope.block.body[0];
+  const threw = captureScope.handler.body.body[0];
+  assert(nodeType(returned) === 'ReturnStatement', message);
+  assert(nodeType(threw) === 'ReturnStatement', message);
+  const returnedProperties = ownerProperties(
+    returned.argument,
+    applicationChunk,
+    'the synchronous returned outcome'
+  );
+  const threwProperties = ownerProperties(
+    threw.argument,
+    applicationChunk,
+    'the synchronous thrown outcome'
+  );
+  const operationCall = returnedProperties.get('value');
+  assert(nodeType(operationCall) === 'CallExpression', message);
+  assertConditions(
+    [
+      returnedProperties.size === 2,
+      literalString(returnedProperties.get('type')) === 'returned',
+      identifierName(operationCall.callee) === 'operation',
+      operationCall.arguments.length === 0,
+      threwProperties.size === 2,
+      literalString(threwProperties.get('type')) === 'threw',
+      identifierName(threwProperties.get('failure')) === 'failure',
+    ],
+    message
+  );
+};
+
 const assertUniversalApplicationRequestHandler = (
   fetchOwner,
-  applicationChunk
+  applicationChunk,
+  program
 ) => {
   const message = `${applicationChunk} universal application server entry must own one live request handler`;
   assert(nodeType(fetchOwner) === 'FunctionExpression', message);
@@ -3689,10 +4030,11 @@ const assertUniversalApplicationRequestHandler = (
       fetchOwner.async,
       fetchOwner.generator === false,
       fetchOwner.params.map(identifierName).join(':') === 'request',
-      fetchOwner.body.body.length === 5,
+      fetchOwner.body.body.length === 8,
     ],
     message
   );
+  assertUniversalSynchronousInvocationCapture(program, applicationChunk);
   const handleOwners = directBodyVariableDeclarators(
     fetchOwner,
     'handleRequest'
@@ -3722,8 +4064,16 @@ const assertUniversalApplicationRequestHandler = (
 
 const assertUniversalApplicationScope = (statements, applicationChunk) => {
   const message = `${applicationChunk} universal request owner must execute its application exactly once`;
-  const [requestOwner, disabledScope, resultOwner, runnerOwner, scope] =
-    statements;
+  const [
+    requestOwner,
+    disabledScope,
+    resultOwner,
+    runnerOwner,
+    invocationOwner,
+    returnedScope,
+    reportScope,
+    fallbackScope,
+  ] = statements;
   assert(nodeType(requestOwner) === 'VariableDeclaration', message);
   assert(nodeType(disabledScope) === 'IfStatement', message);
   assert(nodeType(disabledScope.test) === 'UnaryExpression', message);
@@ -3751,7 +4101,13 @@ const assertUniversalApplicationScope = (statements, applicationChunk) => {
     message
   );
   assertUniversalApplicationRunner(runnerOwner, applicationChunk);
-  assertUniversalApplicationScopeFallback(scope, applicationChunk);
+  assertUniversalApplicationScopeFallback(
+    invocationOwner,
+    returnedScope,
+    reportScope,
+    fallbackScope,
+    applicationChunk
+  );
 };
 
 const assertUniversalApplicationRunner = (statement, applicationChunk) => {
@@ -3787,51 +4143,82 @@ const assertUniversalApplicationRunner = (statement, applicationChunk) => {
   );
 };
 
-const assertUniversalApplicationScopeFallback = (scope, applicationChunk) => {
+const assertUniversalApplicationScopeFallback = (
+  invocationOwner,
+  returnedScope,
+  reportScope,
+  fallbackScope,
+  applicationChunk
+) => {
   const message = `${applicationChunk} universal request owner must preserve scoped execution`;
-  assert(nodeType(scope) === 'TryStatement', message);
-  assert(nodeType(scope.block) === 'BlockStatement', message);
-  assert(nodeType(scope.handler) === 'CatchClause', message);
-  assert(nodeType(scope.handler.body) === 'BlockStatement', message);
+  assert(nodeType(invocationOwner) === 'VariableDeclaration', message);
   assertConditions(
     [
-      scope.block.body.length === 1,
-      scope.finalizer === null,
-      identifierName(scope.handler.param) === 'failure',
-      scope.handler.body.body.length === 2,
+      invocationOwner.kind === 'const',
+      invocationOwner.declarations.length === 1,
+      identifierName(invocationOwner.declarations[0]?.id) === 'scopeInvocation',
     ],
     message
   );
-  const scopedReturn = scope.block.body[0];
-  assert(nodeType(scopedReturn) === 'ReturnStatement', message);
-  const scopedCall = scopedReturn.argument;
-  assert(nodeType(scopedCall) === 'CallExpression', message);
+  const invocation = invocationOwner.declarations[0]?.init;
+  assert(nodeType(invocation) === 'CallExpression', message);
+  const requestScopeOwner = invocation?.arguments?.[0];
+  assert(nodeType(requestScopeOwner) === 'ArrowFunctionExpression', message);
+  assert(nodeType(requestScopeOwner.body) === 'CallExpression', message);
+  const scopedCall = requestScopeOwner.body;
   assertConditions(
     [
-      identifierName(scopedCall.callee) === 'requestScope',
+      identifierName(invocation.callee) === 'captureSynchronousInvocation',
+      invocation.arguments.length === 1,
+      requestScopeOwner.async === false,
+      requestScopeOwner.generator === false,
+      requestScopeOwner.params.length === 0,
+      identifierName(scopedCall?.callee) === 'requestScope',
       scopedCall.arguments.length === 1,
       identifierName(scopedCall.arguments[0]) === 'runApplicationOnce',
     ],
     message
   );
-  const [reportStatement, fallbackReturn] = scope.handler.body.body;
-  const reportCall = reportStatement?.expression;
-  assert(nodeType(reportStatement) === 'ExpressionStatement', message);
+  assert(nodeType(returnedScope) === 'IfStatement', message);
+  assert(nodeType(returnedScope.test) === 'BinaryExpression', message);
+  assert(nodeType(returnedScope.consequent) === 'ReturnStatement', message);
+  const returnedType = returnedScope.test.left;
+  const returnedValue = returnedScope.consequent.argument;
+  assertConditions(
+    [
+      returnedScope.alternate === null,
+      returnedScope.test.operator === '===',
+      identifierMemberSignature(returnedType) ===
+        'MemberExpression:false:scopeInvocation:type',
+      literalString(returnedScope.test.right) === 'returned',
+      identifierMemberSignature(returnedValue) ===
+        'MemberExpression:false:scopeInvocation:value',
+    ],
+    message
+  );
+  const reportCall = reportScope?.expression;
+  assert(nodeType(reportScope) === 'ExpressionStatement', message);
   assert(nodeType(reportCall) === 'CallExpression', message);
-  assert(nodeType(fallbackReturn) === 'ReturnStatement', message);
-  assert(nodeType(fallbackReturn.argument) === 'LogicalExpression', message);
-  const fallbackCall = fallbackReturn.argument.right;
+  assert(nodeType(fallbackScope) === 'ReturnStatement', message);
+  assert(nodeType(fallbackScope.argument) === 'LogicalExpression', message);
+  const fallbackCall = fallbackScope.argument.right;
   assert(nodeType(fallbackCall) === 'CallExpression', message);
   assertConditions(
     [
       identifierName(reportCall.callee) === 'reportTelemetryFailure',
       reportCall.arguments.length === 2,
       literalString(reportCall.arguments[0]) === 'sentry.request_scope',
-      identifierName(reportCall.arguments[1]) === 'failure',
-      fallbackReturn.argument.operator === '??',
-      identifierName(fallbackReturn.argument.left) === 'applicationResult',
+      identifierMemberSignature(reportCall.arguments[1]) ===
+        'MemberExpression:false:scopeInvocation:failure',
+      fallbackScope.argument.operator === '??',
+      identifierName(fallbackScope.argument.left) === 'applicationResult',
       identifierName(fallbackCall.callee) === 'runApplicationOnce',
       fallbackCall.arguments.length === 0,
+      [invocationOwner, returnedScope, reportScope, fallbackScope].reduce(
+        (count, statement) =>
+          count + identifierOccurrenceCount(statement, 'scopeInvocation'),
+        0
+      ) === 4,
     ],
     message
   );
@@ -4045,7 +4432,8 @@ const assertCloudflareApplicationChunkBehavior = (
   );
   assertUniversalApplicationRequestHandler(
     entryOptions.get('fetch'),
-    applicationChunk
+    applicationChunk,
+    program
   );
   assertTrustedChunkBuiltIns(program, applicationChunk, { crypto: 1 });
   assertExactCloudflareStaticImportSources(program, applicationChunk, [
@@ -44428,20 +44816,20 @@ const cloudflareTanStackOwnerDigests = Object.freeze({
     'e1e88ab713c682ecc3c074e3db0d0f06be6d13329e037d328f343d1f32ea6463',
   observedStreamHandler:
     '12c050807148475cb72b05be210798a6ed598629567cc254ce9e53e0fcb93b4f',
-  // Reviewed v5 graph: 236 canonical owners, 743 edges, and the same exact
-  // 59-module provenance set as the preceding router closure. The only
-  // semantic owner delta is RootDocument's typed language-presentation lookup.
+  // Reviewed v5 router graph after the deterministic hydration boundary was
+  // added to LocalSwitcher. The signed app-chunk provenance remains the
+  // authoritative module-membership boundary for this closure.
   routerLocalClosure:
-    'aeb2821b43d491e8d5c1a1f8f1c82ef895c8ca14c2d97f48a155d4d62ac2f81f',
+    '0ece344e344a8efbf03fb14208f0ac6dc35c78397a74ea49657ad10d66a03fb0',
   serverClosure:
     '9ae59e0b6fed6b31842a1cc68e867041025ff20022f3356eaf5157b5c8b113ef',
   serverEdgeClosure:
     '50d491e50e67b143096bc0abec5efabefb6013cd9341143fd998fd20a3764a48',
-  // Reviewed v5 graph: 56 canonical owners, 74 edges, and the same exact
-  // 13-module logical provenance set as the preceding start closure. Its
-  // emitted-identity substitutions add no owner, edge, or start.ts mutation.
+  // Reviewed v5 start graph after the router's deterministic hydration
+  // boundary changed the reachable owner closure. Signed provenance and the
+  // exact startInstance shape continue to authenticate the entry contract.
   startOwnerClosure:
-    '4d6fe17a1927ededcb2695098ca75ad48a179cae999b4c1999955f5fbedf95e2',
+    'a60ddb806420d52cb2c65855a24afcf92e49e8bf99ef9e926981266c03993a83',
 });
 const ignoredAstDigestKeys = new Set(['end', 'loc', 'raw', 'start']);
 const normalizeAstDigestValue = (key, value) => {
@@ -54050,8 +54438,8 @@ const verifyNode = (root) => {
     'node'
   );
   assertOnlyProfileMarker(applicationEntry, 'node');
-  assertServerEntryOwners(applicationEntry, 'node');
   assertNodeAsyncContextOwner(applicationEntry, path.join(output, 'server'));
+  assertServerEntryOwners(applicationEntry, 'node');
   assertRequiredRuntimeTokens(path.join(output, 'server'), 'node');
   assertNoForbiddenRuntimeTokens(path.join(output, 'server'), 'node');
 };
